@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var ErrClosed = errors.New("scheduler: closed")
+var (
+	ErrClosed           = errors.New("scheduler: closed")
+	ErrLeaseUnavailable = errors.New("scheduler: repository lease unavailable")
+)
 
 type LeaseStore interface {
 	AcquireLease(context.Context, string, string, time.Duration) (bool, error)
@@ -194,7 +197,7 @@ func (s *Scheduler) grant(request acquireRequest, activate func(string, *Permit)
 		return
 	}
 	if !ok {
-		request.reply <- acquireReply{err: errors.New("scheduler: repository lease unavailable")}
+		request.reply <- acquireReply{err: ErrLeaseUnavailable}
 		return
 	}
 	if err := request.ctx.Err(); err != nil {

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/go-telegram/bot/models"
 )
 
 func TestClientSendsEscapedMessagesEditsCallbacksAndDocuments(t *testing.T) {
@@ -46,6 +48,83 @@ func TestClientSendsEscapedMessagesEditsCallbacksAndDocuments(t *testing.T) {
 	api.mu.Unlock()
 	if sent != "&lt;unsafe &amp; text&gt;" {
 		t.Fatalf("sent text = %#v", sent)
+	}
+}
+
+func TestClientMapsBoundedInlineKeyboardsOnSendAndEdit(t *testing.T) {
+	api := newFakeBotAPI(t)
+	defer api.Close()
+	c, err := NewClient("123:test", ClientOptions{ServerURL: api.URL(), HTTPClient: api.server.Client(), RetryAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyboard := InlineKeyboard{{{Text: "Approve", CallbackData: "signed-approve"}, {Text: "Reject", CallbackData: "signed-reject"}}}
+	ref, err := c.Send(context.Background(), Message{ChatID: 100, Text: "Decision required", InlineKeyboard: keyboard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Edit(context.Background(), ref, Message{Text: "Decision recorded", InlineKeyboard: keyboard}); err != nil {
+		t.Fatal(err)
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	for _, request := range api.requests[:2] {
+		markup, ok := request.Values["reply_markup"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s reply_markup = %#v", request.Method, request.Values["reply_markup"])
+		}
+		rows, ok := markup["inline_keyboard"].([]any)
+		if !ok || len(rows) != 1 {
+			t.Fatalf("%s inline_keyboard = %#v", request.Method, markup["inline_keyboard"])
+		}
+	}
+}
+
+func TestClientRejectsUnboundedOrMalformedInlineKeyboards(t *testing.T) {
+	api := newFakeBotAPI(t)
+	defer api.Close()
+	c, err := NewClient("123:test", ClientOptions{ServerURL: api.URL(), HTTPClient: api.server.Client(), RetryAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []InlineKeyboard{
+		{{}},
+		{{{Text: "", CallbackData: "data"}}},
+		{{{Text: "Approve", CallbackData: strings.Repeat("x", 65)}}},
+		{{{Text: "Approve", CallbackData: "data"}, {Text: "Reject", CallbackData: "data"}, {Text: "One", CallbackData: "data"}, {Text: "Two", CallbackData: "data"}, {Text: "Three", CallbackData: "data"}}},
+	}
+	for index, keyboard := range tests {
+		if _, err := c.Send(context.Background(), Message{ChatID: 100, Text: "Decision", InlineKeyboard: keyboard}); err == nil {
+			t.Errorf("keyboard %d accepted: %#v", index, keyboard)
+		}
+	}
+	if methods := api.Methods(); len(methods) != 0 {
+		t.Fatalf("invalid keyboards reached Telegram: %v", methods)
+	}
+}
+
+func TestConvertMessageExposesLargestPhotoAndImageDocumentMetadata(t *testing.T) {
+	now := time.Unix(2_000, 0).UTC()
+	photo := convertMessage(&models.Message{
+		ID: 7, Date: int(now.Unix()), Chat: models.Chat{ID: 100, Type: models.ChatTypePrivate}, Caption: "inspect",
+		Photo: []models.PhotoSize{{FileID: "small", FileUniqueID: "u-small", Width: 100, Height: 100, FileSize: 2}, {FileID: "large", FileUniqueID: "u-large", Width: 800, Height: 600, FileSize: 20}},
+	})
+	if photo.ReceivedAt != now || photo.Attachment == nil {
+		t.Fatalf("photo message = %#v", photo)
+	}
+	if got := *photo.Attachment; got.FileID != "large" || got.UniqueID != "u-large" || got.MediaType != "image/jpeg" || got.SizeBytes != 20 || got.Width != 800 || got.Height != 600 {
+		t.Fatalf("photo metadata = %#v", got)
+	}
+
+	document := convertMessage(&models.Message{
+		ID: 8, Date: int(now.Unix()), Chat: models.Chat{ID: 100, Type: models.ChatTypePrivate},
+		Document: &models.Document{FileID: "doc", FileUniqueID: "u-doc", FileName: "screen.webp", MimeType: "image/webp", FileSize: 123},
+	})
+	if document.Attachment == nil {
+		t.Fatal("document metadata missing")
+	}
+	if got := *document.Attachment; got.FileID != "doc" || got.UniqueID != "u-doc" || got.Filename != "screen.webp" || got.MediaType != "image/webp" || got.SizeBytes != 123 {
+		t.Fatalf("document metadata = %#v", got)
 	}
 }
 

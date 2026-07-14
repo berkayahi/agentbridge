@@ -12,10 +12,11 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig                 `yaml:"server"`
-	Telegram     TelegramConfig               `yaml:"telegram"`
-	Providers    map[string]ProviderConfig    `yaml:"providers"`
-	Repositories map[string]RepositoryProfile `yaml:"repositories"`
+	DefaultRepository string                       `yaml:"default_repository,omitempty"`
+	Server            ServerConfig                 `yaml:"server"`
+	Telegram          TelegramConfig               `yaml:"telegram"`
+	Providers         map[string]ProviderConfig    `yaml:"providers"`
+	Repositories      map[string]RepositoryProfile `yaml:"repositories"`
 }
 
 type ServerConfig struct {
@@ -26,10 +27,12 @@ type ServerConfig struct {
 type TelegramConfig struct {
 	PrivateChatOnly bool    `yaml:"private_chat_only"`
 	AllowedUserIDs  []int64 `yaml:"allowed_user_ids"`
+	PairedChatID    int64   `yaml:"paired_chat_id"`
 }
 
 type ProviderConfig struct {
 	Executable string `yaml:"executable"`
+	Model      string `yaml:"model"`
 }
 
 type RepositoryProfile struct {
@@ -52,6 +55,8 @@ type DeliveryPolicy struct {
 }
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+var modelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
+var codexModelPattern = regexp.MustCompile(`^gpt-([0-9]+)\.([0-9]+)-(terra|sol)(?:[.-][a-zA-Z0-9._-]+)?$`)
 
 func Load(path string) (Config, error) {
 	f, err := os.Open(path)
@@ -67,6 +72,11 @@ func Load(path string) (Config, error) {
 	}
 	if err := rejectTrailingYAML(decoder); err != nil {
 		return Config{}, err
+	}
+	if cfg.DefaultRepository == "" && len(cfg.Repositories) == 1 {
+		for name := range cfg.Repositories {
+			cfg.DefaultRepository = name
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

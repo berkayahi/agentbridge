@@ -164,6 +164,13 @@ func New(config Config, dependencies Dependencies) (*Server, error) {
 func (s *Server) App() *fiber.App { return s.app }
 
 func (s *Server) routes() {
+	// The daemon binds to a validated loopback-only address. Keep this probe
+	// outside Tailscale identity middleware so systemd can distinguish a live
+	// process from a dashboard authentication failure.
+	s.app.Get("/healthz", func(c fiber.Ctx) error {
+		c.Set(fiber.HeaderContentType, fiber.MIMETextPlainCharsetUTF8)
+		return c.SendString("ok\n")
+	})
 	s.app.Use(s.securityMiddleware)
 	s.app.Get("/", s.overviewPage)
 	s.app.Get("/tasks/:id", s.taskPage)

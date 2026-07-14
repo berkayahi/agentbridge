@@ -21,6 +21,68 @@ func TestLoadAcceptsGenericSafeProfile(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresExplicitDefaultForMultipleRepositories(t *testing.T) {
+	second := `
+  second-app:
+    checkout_path: /srv/agentbridge/checkouts/second-app
+    remote: origin
+    base_ref: refs/heads/staging
+    verification:
+      - argv: ["go", "test", "./..."]
+    delivery:
+      enabled: true
+      allowed_ref: refs/heads/staging
+`
+	without := validYAML + second
+	assertLoadError(t, without, "default_repository")
+	unknown := "default_repository: missing\n" + without
+	assertLoadError(t, unknown, "default_repository")
+	withDefault := "default_repository: second-app\n" + without
+	cfg, err := Load(writeConfig(t, withDefault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DefaultRepository != "second-app" {
+		t.Fatalf("default_repository=%q", cfg.DefaultRepository)
+	}
+}
+
+func TestLoadRequiresSafeProviderModels(t *testing.T) {
+	for name, model := range map[string]string{
+		"empty":              "",
+		"whitespace":         "gpt 5.6 terra",
+		"leading whitespace": " opus",
+		"shell separator":    "opus;touch-pwned",
+		"substitution":       "$(whoami)",
+		"control":            "opus\nnext",
+	} {
+		t.Run(name, func(t *testing.T) {
+			yml := strings.Replace(validYAML, "model: gpt-5.6-terra", "model: \""+model+"\"", 1)
+			assertLoadError(t, yml, "model")
+		})
+	}
+}
+
+func TestLoadAcceptsCurrentAndFutureSafeProviderModels(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-terra"} {
+		t.Run(model, func(t *testing.T) {
+			yml := strings.Replace(validYAML, "gpt-5.6-terra", model, 1)
+			if _, err := Load(writeConfig(t, yml)); err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsCodexModelsBelowTerraFloor(t *testing.T) {
+	for _, model := range []string{"gpt-5.5-terra", "gpt-5.6-mini", "gpt-4.1", "opus"} {
+		t.Run(model, func(t *testing.T) {
+			yml := strings.Replace(validYAML, "gpt-5.6-terra", model, 1)
+			assertLoadError(t, yml, "GPT-5.6 Terra")
+		})
+	}
+}
+
 func TestLoadRejectsUnknownYAMLField(t *testing.T) {
 	yml := strings.Replace(validYAML, "listen: 127.0.0.1:8787", "listen: 127.0.0.1:8787\n  unexpected: true", 1)
 	assertLoadError(t, yml, "unknown")
@@ -75,6 +137,8 @@ func TestLoadRejectsInvalidTelegramPolicy(t *testing.T) {
 		"empty allowlist":            strings.Replace(validYAML, "allowed_user_ids: [123456789]", "allowed_user_ids: []", 1),
 		"zero ID":                    strings.Replace(validYAML, "allowed_user_ids: [123456789]", "allowed_user_ids: [0]", 1),
 		"duplicate ID":               strings.Replace(validYAML, "allowed_user_ids: [123456789]", "allowed_user_ids: [123456789, 123456789]", 1),
+		"multiple operators":         strings.Replace(validYAML, "allowed_user_ids: [123456789]", "allowed_user_ids: [123456789, 987654321]", 1),
+		"missing paired chat":        strings.Replace(validYAML, "paired_chat_id: 123456789", "paired_chat_id: 0", 1),
 	}
 
 	for name, yml := range tests {
@@ -218,9 +282,11 @@ const validYAML = `server:
 telegram:
   private_chat_only: true
   allowed_user_ids: [123456789]
+  paired_chat_id: 123456789
 providers:
   codex:
     executable: /usr/local/bin/codex
+    model: gpt-5.6-terra
 repositories:
   sample-app:
     checkout_path: /srv/agentbridge/checkouts/sample-app

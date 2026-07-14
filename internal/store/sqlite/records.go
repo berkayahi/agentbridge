@@ -47,7 +47,14 @@ func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachme
 }
 
 func (s *Store) UpsertSession(ctx context.Context, value task.Session) error {
-	_, err := s.db.ExecContext(ctx, `
+	if err := upsertSession(ctx, s.db, value); err != nil {
+		return fmt.Errorf("upsert session: %w", err)
+	}
+	return nil
+}
+
+func upsertSession(ctx context.Context, db execer, value task.Session) error {
+	_, err := db.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, task_id, provider, provider_session_id, provider_thread_id,
 			status, resumable, created_at, updated_at
@@ -61,10 +68,7 @@ func (s *Store) UpsertSession(ctx context.Context, value task.Session) error {
 		value.ID, value.TaskID, value.Provider, value.ProviderSessionID, value.ProviderThreadID,
 		value.Status, value.Resumable, timestamp(value.CreatedAt), timestamp(value.UpdatedAt),
 	)
-	if err != nil {
-		return fmt.Errorf("upsert session: %w", err)
-	}
-	return nil
+	return err
 }
 
 func (s *Store) ResumableSessions(ctx context.Context) ([]task.Session, error) {

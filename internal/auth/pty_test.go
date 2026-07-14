@@ -132,6 +132,33 @@ func TestExecCommandRunnerMapsMissingExecutable(t *testing.T) {
 	}
 }
 
+func TestAuthProcessesUseConfiguredExecutableAndSharedClaudeConfig(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "claude-state")
+	script := filepath.Join(dir, "claude-test")
+	contents := "#!/bin/sh\n" +
+		"test \"$CLAUDE_CONFIG_DIR\" = \"" + configDir + "\" || exit 23\n" +
+		"printf '%s\\n' '{\"loggedIn\":true}'\n"
+	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	environment := []string{"PATH=/usr/bin:/bin", "CLAUDE_CONFIG_DIR=" + configDir}
+	runner := ExecCommandRunner{Executables: map[string]string{"claude": script}, Environment: environment}
+	output, err := runner.Run(context.Background(), "claude", "auth", "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(output)); got != `{"loggedIn":true}` {
+		t.Fatalf("output=%q", got)
+	}
+
+	ptyRunner := ExecPTY{Executables: map[string]string{"claude": script}, Environment: environment}
+	var ptyOutput strings.Builder
+	if err := ptyRunner.Run(context.Background(), "claude", nil, nil, func(value []byte) { ptyOutput.Write(value) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPTYEndOfStreamTreatsEIOAsNormal(t *testing.T) {
 	t.Parallel()
 	if !ignorablePTYReadError(fmt.Errorf("read pty: %w", syscall.EIO)) {

@@ -1,5 +1,6 @@
 # Copy this file to an untracked, private location and replace every placeholder.
 # Never commit credentials. systemd credentials are loaded separately at runtime.
+default_repository: sample-app
 server:
   listen: 127.0.0.1:8787
   allowed_tailscale_identities:
@@ -9,12 +10,15 @@ telegram:
   private_chat_only: true
   allowed_user_ids:
     - 123456789
+  paired_chat_id: 123456789
 
 providers:
   codex:
     executable: /usr/local/bin/codex
+    model: gpt-5.6-terra
   claude:
     executable: /usr/local/bin/claude
+    model: opus
 
 repositories:
   sample-app:

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"testing"
+	"time"
 
 	"github.com/berkayahi/agentbridge/internal/task"
 )
@@ -29,6 +30,35 @@ func TestParseCommandProviderPrompts(t *testing.T) {
 	}
 }
 
+func TestParseUpdateTurnsSignedApprovalCallbackIntoBoundedCommand(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	signer := NewCallbackSigner([]byte("a sufficiently long signing secret"), func() time.Time { return now })
+	token, err := signer.Sign(CallbackAction{Action: "approve", TaskID: "task-1", ApprovalID: "approval-1"}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := ParseUpdate(Update{ID: 9, Callback: &CallbackQuery{ID: "callback-1", Data: token}}, "", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Kind != KindApprove || command.TaskID != "task-1" || command.ApprovalID != "approval-1" || command.CallbackID != "callback-1" {
+		t.Fatalf("command = %#v", command)
+	}
+}
+
+func TestParseUpdateRejectsUnsignedUnknownAndMalformedCallbacks(t *testing.T) {
+	signer := NewCallbackSigner([]byte("a sufficiently long signing secret"), time.Now)
+	for _, update := range []Update{
+		{},
+		{Callback: &CallbackQuery{ID: "callback", Data: "approve|task|approval"}},
+		{Message: &IncomingMessage{Text: "/status"}, Callback: &CallbackQuery{ID: "callback", Data: "ignored"}},
+	} {
+		if _, err := ParseUpdate(update, "", signer); err == nil {
+			t.Errorf("update accepted: %#v", update)
+		}
+	}
+}
+
 func TestParseCommandDirectControls(t *testing.T) {
 	tests := []struct {
 		input  string
@@ -50,6 +80,18 @@ func TestParseCommandDirectControls(t *testing.T) {
 				t.Fatalf("control command leaked into provider prompt: %#v", got)
 			}
 		})
+	}
+}
+
+func TestParseCommandProviderUsageDoesNotBecomePrompt(t *testing.T) {
+	for _, name := range []string{"codex", "claude"} {
+		got, err := ParseCommand("/"+name+" usage", "")
+		if err != nil {
+			t.Fatalf("ParseCommand(%q): %v", name, err)
+		}
+		if got.Kind != KindUsage || string(got.Provider) != name || got.Argument != "" {
+			t.Fatalf("ParseCommand(%q) = %#v", name, got)
+		}
 	}
 }
 

@@ -24,10 +24,17 @@ var (
 
 // ExecCommandRunner executes non-interactive provider health commands. The
 // caller supplies deadlines through ctx.
-type ExecCommandRunner struct{}
+type ExecCommandRunner struct {
+	Executables map[string]string
+	Environment []string
+}
 
-func (ExecCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	output, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+func (r ExecCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, configuredExecutable(r.Executables, name), args...)
+	if r.Environment != nil {
+		cmd.Env = append([]string(nil), r.Environment...)
+	}
+	output, err := cmd.CombinedOutput()
 	if err != nil && isExecutableMissing(err) {
 		return output, fmt.Errorf("%w: %v", ErrCommandMissing, err)
 	}
@@ -37,13 +44,19 @@ func (ExecCommandRunner) Run(ctx context.Context, name string, args ...string) (
 // ExecPTY runs one interactive login process synchronously. Closing the PTY on
 // cancellation unblocks reads; CommandContext terminates and Wait reaps the
 // provider child before Run returns.
-type ExecPTY struct{}
+type ExecPTY struct {
+	Executables map[string]string
+	Environment []string
+}
 
-func (ExecPTY) Run(ctx context.Context, name string, args []string, input <-chan []byte, output func([]byte)) error {
+func (r ExecPTY) Run(ctx context.Context, name string, args []string, input <-chan []byte, output func([]byte)) error {
 	if output == nil {
 		return errors.New("auth pty: output callback is required")
 	}
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, configuredExecutable(r.Executables, name), args...)
+	if r.Environment != nil {
+		cmd.Env = append([]string(nil), r.Environment...)
+	}
 	terminal, err := pty.Start(cmd)
 	if err != nil {
 		if isExecutableMissing(err) {
@@ -115,6 +128,13 @@ func (ExecPTY) Run(ctx context.Context, name string, args []string, input <-chan
 		return fmt.Errorf("authentication command: %w", waitErr)
 	}
 	return nil
+}
+
+func configuredExecutable(executables map[string]string, name string) string {
+	if executable := strings.TrimSpace(executables[name]); executable != "" {
+		return executable
+	}
+	return name
 }
 
 func terminateProcessGroup(pid int) {

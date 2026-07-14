@@ -53,6 +53,25 @@ func TestUnixSocketAuthenticatesEveryTaskScopedRequest(t *testing.T) {
 	}
 }
 
+func TestRevokedTaskCapabilityCannotAuthorizeNewRequests(t *testing.T) {
+	path := shortSocketPath(t)
+	server := NewServer(path, HandlerFunc(func(context.Context, Request) (any, error) { return nil, nil }))
+	capability := []byte("0123456789abcdef0123456789abcdef")
+	server.Grant("task-1", "claude", capability)
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	server.Revoke("task-1")
+	err := (Client{Path: path}).Call(context.Background(), Request{
+		TaskID: "task-1", Provider: "claude", Capability: capability, Tool: "get_task_context",
+	}, nil)
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("error = %v, want ErrUnauthorized", err)
+	}
+}
+
 func TestSocketRejectsOversizedRequestsAndUnavailableDaemon(t *testing.T) {
 	missing := Client{Path: filepath.Join(t.TempDir(), "missing.sock")}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

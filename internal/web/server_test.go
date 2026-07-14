@@ -60,6 +60,26 @@ func TestServerAppliesIdentityRequestIDAndSecurityHeaders(t *testing.T) {
 	}
 }
 
+func TestHealthzIsAvailableToTheLoopbackServiceManagerWithoutServeHeaders(t *testing.T) {
+	srv := newTestServer(t)
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response, err := srv.App().Test(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(body), "ok\n"; got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
 func TestReadAPIsRedactInternalEventsAndPaginate(t *testing.T) {
 	srv := newTestServer(t)
 	response := request(t, srv, http.MethodGet, "/api/v1/tasks?limit=1", nil, nil)

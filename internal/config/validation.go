@@ -40,6 +40,12 @@ func (c Config) Validate() error {
 		if !filepath.IsAbs(provider.Executable) {
 			return errors.New("provider executable must be absolute")
 		}
+		if !modelPattern.MatchString(provider.Model) {
+			return errors.New("provider model must be a safe nonempty model identifier")
+		}
+		if name == "codex" && !supportedCodexModel(provider.Model) {
+			return errors.New("Codex model must be GPT-5.6 Terra or a higher Terra/Sol model")
+		}
 	}
 	if len(c.Repositories) == 0 {
 		return errors.New("repositories must contain at least one profile")
@@ -52,7 +58,23 @@ func (c Config) Validate() error {
 			return fmt.Errorf("repository profile %q: %w", name, err)
 		}
 	}
+	if !namePattern.MatchString(c.DefaultRepository) {
+		return errors.New("default_repository must name a configured repository")
+	}
+	if _, ok := c.Repositories[c.DefaultRepository]; !ok {
+		return errors.New("default_repository must name a configured repository")
+	}
 	return nil
+}
+
+func supportedCodexModel(model string) bool {
+	parts := codexModelPattern.FindStringSubmatch(model)
+	if len(parts) != 4 {
+		return false
+	}
+	major, _ := strconv.Atoi(parts[1])
+	minor, _ := strconv.Atoi(parts[2])
+	return major > 5 || major == 5 && minor >= 6
 }
 
 func validateListen(address string) error {
@@ -77,8 +99,8 @@ func (t TelegramConfig) validate() error {
 	if !t.PrivateChatOnly {
 		return errors.New("telegram private_chat_only must be true")
 	}
-	if len(t.AllowedUserIDs) == 0 {
-		return errors.New("telegram allowed_user_ids must not be empty")
+	if len(t.AllowedUserIDs) != 1 {
+		return errors.New("telegram allowed_user_ids must contain exactly one paired operator")
 	}
 	seen := make(map[int64]struct{}, len(t.AllowedUserIDs))
 	for _, id := range t.AllowedUserIDs {
@@ -89,6 +111,9 @@ func (t TelegramConfig) validate() error {
 			return errors.New("telegram allowed_user_ids must not contain duplicates")
 		}
 		seen[id] = struct{}{}
+	}
+	if t.PairedChatID <= 0 {
+		return errors.New("telegram paired_chat_id must be positive")
 	}
 	return nil
 }

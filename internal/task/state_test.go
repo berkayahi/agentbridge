@@ -4,14 +4,14 @@ import "testing"
 
 func TestTransition(t *testing.T) {
 	valid := [][2]State{
-		{Queued, Preparing}, {Queued, Canceled},
+		{Queued, Preparing}, {Queued, Canceled}, {Queued, Paused},
 		{Preparing, Running}, {Preparing, Paused}, {Preparing, Failed}, {Preparing, Canceled},
 		{Running, AwaitingApproval}, {Running, AwaitingAuth}, {Running, Verifying}, {Running, Failed}, {Running, Canceled}, {Running, Paused},
-		{AwaitingApproval, Running}, {AwaitingApproval, Failed}, {AwaitingApproval, Canceled},
+		{AwaitingApproval, Running}, {AwaitingApproval, Failed}, {AwaitingApproval, Canceled}, {AwaitingApproval, Paused},
 		{AwaitingAuth, Running}, {AwaitingAuth, Paused}, {AwaitingAuth, Canceled},
-		{Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled},
-		{Committing, Pushing}, {Committing, Failed},
-		{Pushing, Completed}, {Pushing, Failed},
+		{Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled}, {Verifying, Paused},
+		{Committing, Pushing}, {Committing, Failed}, {Committing, Paused},
+		{Pushing, Completed}, {Pushing, Failed}, {Pushing, Paused},
 		{Failed, Queued}, {Paused, Queued},
 	}
 

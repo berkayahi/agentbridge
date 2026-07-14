@@ -13,6 +13,7 @@ const (
 	EventToolStarted      EventType = "tool_started"
 	EventToolEnded        EventType = "tool_ended"
 	EventApprovalRequired EventType = "approval_required"
+	EventApprovalExpired  EventType = "approval_expired"
 	EventAuthRequired     EventType = "auth_required"
 	EventRateLimited      EventType = "rate_limited"
 	EventUsage            EventType = "usage"

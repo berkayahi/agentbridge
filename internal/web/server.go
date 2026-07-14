@@ -133,6 +133,9 @@ func New(config Config, dependencies Dependencies) (*Server, error) {
 		if !ok {
 			return ""
 		}
+		if forwarded := strings.TrimSpace(ctx.Get("X-Forwarded-Proto")); forwarded != "" {
+			return strings.ToLower(strings.Split(forwarded, ",")[0])
+		}
 		return ctx.Protocol()
 	}
 	s.identity = func(value any) string {

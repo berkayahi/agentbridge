@@ -481,7 +481,7 @@ func (a *App) execute(job queuedTask) {
 		a.executionFailure(ctx, value, err)
 		return
 	}
-	input, err := a.providerInput(ctx, value)
+	input, err := a.providerInput(ctx, value, workspace.Path)
 	if err != nil {
 		a.executionFailure(ctx, value, err)
 		return
@@ -550,6 +550,7 @@ func (a *App) resume(ctx context.Context, value task.Task, cancel context.Cancel
 	if strings.TrimSpace(input) == "" {
 		input = "Continue the interrupted task from the durable session."
 	}
+	input = agentContext(value, value.WorktreePath, input)
 	session, stream, err := p.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: saved, Input: provider.Input{Text: input}})
 	if err != nil {
 		a.pause(value, "saved provider session could not be resumed safely")
@@ -642,7 +643,7 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 	}
 }
 
-func (a *App) providerInput(ctx context.Context, value task.Task) (provider.Input, error) {
+func (a *App) providerInput(ctx context.Context, value task.Task, workspacePath string) (provider.Input, error) {
 	records, err := a.deps.Store.Attachments(ctx, value.ID)
 	if err != nil {
 		return provider.Input{}, err
@@ -655,8 +656,22 @@ func (a *App) providerInput(ctx context.Context, value task.Task) (provider.Inpu
 		}
 		attachments = append(attachments, local)
 	}
-	input := provider.Input{Text: value.Prompt, Attachments: attachments}
+	contextBlock := agentContext(value, workspacePath, value.Prompt)
+	input := provider.Input{Text: contextBlock, Attachments: attachments}
 	return input, input.Validate()
+}
+
+func agentContext(value task.Task, workspacePath, prompt string) string {
+	return fmt.Sprintf(`AgentBridge operating context:
+- You are the %s coding agent operating inside repository profile %q.
+- Current isolated workspace: %s
+- The default repository is ceptemenu, but the operator may explicitly request another configured repository; follow the selected repository profile.
+- First inspect the repository's AGENTS.md, CLAUDE.md, README, and existing conventions before changing code.
+- Use the existing installed skills/workflows when they match the task. If no suitable skill exists, explicitly tell the operator before proceeding and then use the safest documented fallback.
+- Report what you are doing, keep changes scoped to the selected workspace, run relevant verification, and never invent successful results.
+
+Operator task:
+%s`, value.Provider, value.RepoProfileID, workspacePath, prompt)
 }
 
 func (a *App) requestApproval(ctx context.Context, value *task.Task, observed provider.Event) error {

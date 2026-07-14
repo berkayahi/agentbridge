@@ -1,0 +1,39 @@
+[Unit]
+Description=AgentBridge subscription CLI bridge
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/agentbridge
+UMask=0077
+Environment=AGENTBRIDGE_DATA_DIR=%h/.local/share/agentbridge
+Environment=AGENTBRIDGE_LISTEN=127.0.0.1:8787
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+LoadCredential=telegram_bot_token:%h/.config/agentbridge/credentials/telegram_bot_token
+LoadCredential=claude_oauth_token:%h/.config/agentbridge/credentials/claude_oauth_token
+ExecStartPre=%h/.local/bin/agentbridge doctor --config %h/.config/agentbridge/config.yaml
+ExecStart=%h/.local/bin/agentbridge serve --config %h/.config/agentbridge/config.yaml
+Restart=always
+RestartSec=5s
+TimeoutStopSec=45s
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RemoveIPC=true
+ReadWritePaths=%h/.local/share/agentbridge %h/.cache/agentbridge -%h/.codex -%h/.claude
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the AgentBridge backup and retention job daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=agentbridge-backup.service
+
+[Install]
+WantedBy=timers.target

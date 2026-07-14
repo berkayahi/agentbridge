@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a generic, secure improvement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What operator need is not met today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain trust boundaries, failure modes, and safe defaults.
+    validations:
+      required: true
+  - type: dropdown
+    id: delivery
+    attributes:
+      label: Does this affect repository delivery?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

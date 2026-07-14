@@ -1,0 +1,18 @@
+[Unit]
+Description=Back up and retain AgentBridge local data
+ConditionPathExists=%h/.local/share/agentbridge/agentbridge.db
+
+[Service]
+Type=oneshot
+UMask=0077
+Environment=AGENTBRIDGE_DATA_DIR=%h/.local/share/agentbridge
+EnvironmentFile=-%h/.config/agentbridge/backup.env
+ExecStart=%h/.local/lib/agentbridge/scripts/backup.sh
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+LockPersonality=true
+RestrictSUIDSGID=true
+ReadWritePaths=%h/.local/share/agentbridge %h/.cache/agentbridge

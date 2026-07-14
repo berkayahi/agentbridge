@@ -25,6 +25,15 @@ The repository is under active development and is not ready for production
 use. Issues and focused pull requests are welcome. Never commit tokens,
 credentials, deployment identities, or private repository details.
 
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Raspberry Pi operations](docs/operations.md)
+- [Subscription authentication recovery](docs/auth-recovery.md)
+- [Safe upgrade and rollback](docs/upgrade.md)
+- [Incident response](docs/incident-response.md)
+- [Contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md)
+
 ## License
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

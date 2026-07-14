@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.4
 
 require (
+	github.com/creack/pty v1.1.24
 	github.com/go-telegram/bot v1.22.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gofiber/fiber/v3 v3.4.0

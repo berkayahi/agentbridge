@@ -3,8 +3,10 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
+	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/task"
 )
 
@@ -176,4 +178,47 @@ func nullableBytes(value []byte) any {
 		return nil
 	}
 	return value
+}
+
+func (s *Store) UpsertAuthIncident(ctx context.Context, value task.AuthIncident) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO auth_incidents (id, task_id, provider, status, redacted_detail, detected_at, resolved_at)
+		VALUES (?, NULL, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			status = excluded.status,
+			redacted_detail = excluded.redacted_detail,
+			resolved_at = excluded.resolved_at`,
+		value.ID, value.Provider, value.Status, []byte(value.Detail), timestamp(value.DetectedAt), nullableTimestamp(value.ResolvedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("upsert auth incident: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) OpenAuthIncident(ctx context.Context, provider task.Provider) (task.AuthIncident, error) {
+	var value task.AuthIncident
+	var detail []byte
+	var detected string
+	var resolved sql.NullString
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, provider, status, redacted_detail, detected_at, resolved_at
+		FROM auth_incidents
+		WHERE provider = ? AND status = 'open'
+		ORDER BY detected_at DESC, id DESC
+		LIMIT 1`, provider).Scan(&value.ID, &value.Provider, &value.Status, &detail, &detected, &resolved)
+	if errors.Is(err, sql.ErrNoRows) {
+		return task.AuthIncident{}, store.ErrNotFound
+	}
+	if err != nil {
+		return task.AuthIncident{}, fmt.Errorf("load open auth incident: %w", err)
+	}
+	value.Detail = append([]byte(nil), detail...)
+	if value.DetectedAt, err = parseTimestamp(detected); err != nil {
+		return task.AuthIncident{}, err
+	}
+	if value.ResolvedAt, err = parseNullableTimestamp(resolved); err != nil {
+		return task.AuthIncident{}, err
+	}
+	return value, nil
 }

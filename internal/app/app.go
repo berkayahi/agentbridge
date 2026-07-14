@@ -857,6 +857,11 @@ func (a *App) appendProviderEvent(ctx context.Context, id string, observed provi
 	if err := a.deps.Store.AppendEvent(ctx, event); err == nil {
 		_ = a.publish(ctx, event)
 	}
+	if observed.Type == provider.EventAssistantMessage && strings.TrimSpace(observed.Message) != "" {
+		if value, err := a.deps.Store.Task(ctx, id); err == nil {
+			_, _ = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: value.TelegramChatID, Text: a.deps.Redactor.RedactString(observed.Message)})
+		}
+	}
 }
 
 func (a *App) transition(ctx context.Context, value *task.Task, state task.State, action string) bool {

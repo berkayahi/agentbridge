@@ -84,6 +84,27 @@ func TestCallbackSignerRoundTripExpiryTamperAndSize(t *testing.T) {
 	}
 }
 
+func TestApprovalKeyboardSignsApproveAndRejectCallbacks(t *testing.T) {
+	now := time.Unix(2_000, 0)
+	signer := NewCallbackSigner([]byte("a sufficiently long signing secret"), func() time.Time { return now })
+	keyboard, err := ApprovalKeyboard(signer, "t42", "a9", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keyboard) != 1 || len(keyboard[0]) != 2 {
+		t.Fatalf("keyboard = %#v", keyboard)
+	}
+	for index, want := range []string{"approve", "reject"} {
+		action, err := signer.Verify(keyboard[0][index].CallbackData)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if action.Action != want || action.TaskID != "t42" || action.ApprovalID != "a9" {
+			t.Fatalf("action = %#v", action)
+		}
+	}
+}
+
 func TestStatusProjectorDoesNotBlockOtherTasksOnSlowNetwork(t *testing.T) {
 	messenger := &blockingMessenger{started: make(chan struct{}), release: make(chan struct{})}
 	p := NewStatusProjector(messenger, time.Minute, time.Now)

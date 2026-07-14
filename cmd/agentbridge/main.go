@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/buildinfo"
@@ -35,6 +37,7 @@ type commandDeps struct {
 	readCapability func() ([]byte, error)
 	runMCP         func(context.Context, mcpserver.RunOptions) error
 	runStatusline  func(context.Context, io.Reader, claude.StatuslineCaller, claude.StatuslineScope, func() time.Time) error
+	runServe       func(context.Context, string) error
 }
 
 func defaultCommandDeps() commandDeps {
@@ -53,6 +56,7 @@ func defaultCommandDeps() commandDeps {
 		},
 		runMCP:        mcpserver.Run,
 		runStatusline: claude.CaptureStatusline,
+		runServe:      serveDaemon,
 	}
 }
 
@@ -93,8 +97,19 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	if len(args) == 1 && args[0] == "claude-statusline" {
 		return runClaudeStatusline(ctx, stdin, stderr, deps)
 	}
+	if len(args) == 3 && args[0] == "serve" && args[1] == "--config" && strings.TrimSpace(args[2]) != "" {
+		if deps.runServe == nil {
+			fmt.Fprintln(stderr, "agentbridge: daemon runtime is unavailable")
+			return 1
+		}
+		if err := deps.runServe(ctx, args[2]); err != nil {
+			fmt.Fprintln(stderr, "agentbridge: daemon stopped; inspect the service journal")
+			return 1
+		}
+		return 0
+	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 
@@ -183,5 +198,7 @@ func runDoctor(path string, stdout, stderr io.Writer) int {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(runWithDepsAndPairer(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr, defaultCommandDeps(), nil))
 }

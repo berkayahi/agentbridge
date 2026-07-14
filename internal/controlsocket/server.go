@@ -76,6 +76,12 @@ func (s *Server) Grant(taskID, provider string, capability []byte) {
 	s.grants[taskID] = grant{provider: provider, capability: append([]byte(nil), capability...)}
 }
 
+func (s *Server) Revoke(taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.grants, taskID)
+}
+
 func (s *Server) Start() error {
 	if s.path == "" || s.handler == nil {
 		return ErrInvalid

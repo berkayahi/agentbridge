@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,25 +18,55 @@ import (
 )
 
 func TestCommandArgumentsAndEnvironmentUseSubscriptionStreamJSON(t *testing.T) {
-	args := CommandArgs("/runtime/task-mcp.json", "session-1")
-	want := []string{"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval", "--mcp-config", "/runtime/task-mcp.json", "--resume", "session-1"}
+	args := CommandArgs("/runtime/task-mcp.json", "session-1", "opus")
+	want := []string{"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval", "--mcp-config", "/runtime/task-mcp.json", "--model", "opus", "--resume", "session-1"}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
-	env := ChildEnvironment([]string{"PATH=/bin", "OPENAI_API_KEY=bad", "ANTHROPIC_API_KEY=bad", "ANTHROPIC_AUTH_TOKEN=bad"}, "/runtime/claude", []byte("subscription-oauth"))
+	env := ChildEnvironment([]string{
+		"PATH=/bin",
+		"OPENAI_API_KEY=bad",
+		"ANTHROPIC_API_KEY=bad",
+		"ANTHROPIC_AUTH_TOKEN=bad",
+		"CLAUDE_CODE_OAUTH_TOKEN=bad",
+		"AGENTBRIDGE_CONTROL_SOCKET=/wrong",
+		"AGENTBRIDGE_TASK_ID=wrong",
+		"AGENTBRIDGE_PROVIDER=wrong",
+		"AGENTBRIDGE_CAPABILITY=must-not-survive",
+	}, "/runtime/claude", "task-1", "/run/agentbridge/control.sock")
 	joined := strings.Join(env, "\n")
-	for _, forbidden := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+	for _, forbidden := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "AGENTBRIDGE_CAPABILITY"} {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("environment retained %s", forbidden)
 		}
 	}
-	if !strings.Contains(joined, "CLAUDE_CONFIG_DIR=/runtime/claude") || !strings.Contains(joined, "CLAUDE_CODE_OAUTH_TOKEN=subscription-oauth") {
+	for _, required := range []string{
+		"CLAUDE_CONFIG_DIR=/runtime/claude",
+		"AGENTBRIDGE_CONTROL_SOCKET=/run/agentbridge/control.sock",
+		"AGENTBRIDGE_TASK_ID=task-1",
+		"AGENTBRIDGE_PROVIDER=claude",
+	} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("environment = %q, want %q", joined, required)
+		}
+	}
+	if strings.Contains(strings.Join(args, "\n"), "capability") {
 		t.Fatalf("environment = %q", joined)
 	}
 }
 
 func TestProcessHelperInitializesSessionAndStreamsEvents(t *testing.T) {
 	if os.Getenv("GO_WANT_CLAUDE_HELPER") == "1" {
+		capabilityFile := os.NewFile(3, "agentbridge-capability")
+		capability, err := io.ReadAll(capabilityFile)
+		if err != nil || string(capability) != "task-capability" {
+			fmt.Fprintln(os.Stderr, "capability fd unavailable")
+			os.Exit(2)
+		}
+		if os.Getenv("AGENTBRIDGE_CONTROL_SOCKET") != "/run/agentbridge/control.sock" || os.Getenv("AGENTBRIDGE_TASK_ID") != "task-1" || os.Getenv("AGENTBRIDGE_PROVIDER") != "claude" {
+			fmt.Fprintln(os.Stderr, "task scope unavailable")
+			os.Exit(2)
+		}
 		scanner := bufio.NewScanner(os.Stdin)
 		if scanner.Scan() {
 			var input any
@@ -55,7 +86,8 @@ func TestProcessHelperInitializesSessionAndStreamsEvents(t *testing.T) {
 		Executable:      os.Args[0],
 		testArgs:        []string{"-test.run=TestProcessHelperInitializesSessionAndStreamsEvents"},
 		Environment:     append(os.Environ(), "GO_WANT_CLAUDE_HELPER=1", "ANTHROPIC_API_KEY=must-be-scrubbed"),
-		ClaudeConfigDir: t.TempDir(), MCPConfigPath: "/tmp/test-mcp.json",
+		ClaudeConfigDir: t.TempDir(), MCPConfigPath: "/tmp/test-mcp.json", Model: "opus",
+		ControlSocket: "/run/agentbridge/control.sock", Capability: []byte("task-capability"),
 		InitialInput: provider.Input{Text: "hello"}, TaskID: provider.MustID("task-1"),
 	})
 	if err != nil {
@@ -89,6 +121,36 @@ func TestGeneratedMCPConfigIsOwnerOnlyAndContainsNoCapability(t *testing.T) {
 	data, _ := os.ReadFile(path)
 	if bytes.Contains(data, []byte("capability")) || !bytes.Contains(data, []byte(`"args":["mcp"]`)) {
 		t.Fatalf("config = %s", data)
+	}
+}
+
+func TestEnsureStatuslineSettingsMergesWithoutClobberingAuthConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"permissions":{"allow":["Read"]},"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureStatuslineSettings(dir, "/usr/local/bin/agentbridge"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(data, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["theme"] != "dark" || settings["permissions"] == nil {
+		t.Fatalf("existing settings were clobbered: %#v", settings)
+	}
+	status, _ := settings["statusLine"].(map[string]any)
+	if status["type"] != "command" || status["command"] != "/usr/local/bin/agentbridge claude-statusline" {
+		t.Fatalf("statusLine=%#v", status)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("settings mode=%v err=%v", info.Mode(), err)
 	}
 }
 
@@ -175,6 +237,45 @@ func TestAdapterPersistsSessionBeforeReturningAndReadsCachedUsage(t *testing.T) 
 	usage, err := adapter.Usage(context.Background())
 	if err != nil || len(usage.Windows) != 1 || usage.ObservedAt != time.Unix(10, 0).UTC() {
 		t.Fatalf("usage = %#v, err = %v", usage, err)
+	}
+}
+
+func TestAdapterUsesDistinctTaskScopesAndRevokesTerminalCapability(t *testing.T) {
+	var configs []ProcessConfig
+	revoked := make(chan string, 2)
+	spawner := spawnFunc(func(_ context.Context, cfg ProcessConfig) (Runner, error) {
+		cfg.Capability = append([]byte(nil), cfg.Capability...)
+		configs = append(configs, cfg)
+		events := make(chan provider.Event, 1)
+		events <- provider.Event{Type: provider.EventCompleted}
+		return &fakeRunner{sessionID: "session-" + cfg.TaskID.String(), events: events}, nil
+	})
+	adapter := NewAdapter(AdapterConfig{Spawn: spawner, Scope: func(id provider.ID) (TaskScope, error) {
+		return TaskScope{ControlSocket: "/run/agentbridge/control.sock", Capability: []byte("cap-" + id.String()), Revoke: func() { revoked <- id.String() }}, nil
+	}})
+	for _, taskID := range []string{"task-1", "task-2"} {
+		_, events, err := adapter.Start(context.Background(), provider.StartRequest{TaskID: provider.MustID(taskID), Input: provider.Input{Text: "work"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := <-events; got.Type != provider.EventCompleted {
+			t.Fatalf("event = %#v", got)
+		}
+	}
+	if string(configs[0].Capability) == string(configs[1].Capability) || string(configs[0].Capability) != "cap-task-1" || string(configs[1].Capability) != "cap-task-2" {
+		t.Fatalf("capabilities = %q %q", configs[0].Capability, configs[1].Capability)
+	}
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case id := <-revoked:
+			seen[id] = true
+		case <-time.After(time.Second):
+			t.Fatal("capability was not revoked")
+		}
+	}
+	if !seen["task-1"] || !seen["task-2"] {
+		t.Fatalf("revoked = %v", seen)
 	}
 }
 

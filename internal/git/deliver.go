@@ -56,30 +56,49 @@ type Delivery struct {
 }
 
 func (d Delivery) Deliver(ctx context.Context, request DeliveryRequest) (DeliveryResult, error) {
-	if !request.Profile.Enabled {
-		return DeliveryResult{}, ErrDeliveryDisabled
-	}
-	if err := request.Profile.Validate(); err != nil {
+	if err := d.Verify(ctx, request); err != nil {
 		return DeliveryResult{}, err
 	}
-	if d.Git == nil || d.Verifier == nil {
-		return DeliveryResult{}, ErrUnsafeDelivery
+	commit, err := d.Commit(ctx, request)
+	if err != nil || commit.NoChanges {
+		return commit, err
 	}
-	if !validCommitMessage(request.CommitMessage) {
-		return DeliveryResult{}, ErrInvalidCommitMessage
-	}
-	if err := validateWorkspace(request.Profile, request.Workspace); err != nil {
+	push, err := d.Push(ctx, request, commit.CommitSHA)
+	if err != nil {
 		return DeliveryResult{}, err
+	}
+	push.CommitSHA = commit.CommitSHA
+	return push, nil
+}
+
+func (d Delivery) Verify(ctx context.Context, request DeliveryRequest) error {
+	if err := d.validate(request, true); err != nil {
+		return err
 	}
 	if err := d.Verifier.Verify(ctx, request.Workspace.Path); err != nil {
-		return DeliveryResult{}, fmt.Errorf("%w: %v", ErrVerificationFailed, err)
+		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
+	}
+	return nil
+}
+
+func (d Delivery) Commit(ctx context.Context, request DeliveryRequest) (DeliveryResult, error) {
+	if err := d.validate(request, false); err != nil {
+		return DeliveryResult{}, err
 	}
 	status, err := d.Git.Run(ctx, request.Workspace.Path, "status", "--porcelain=v1", "-z")
 	if err != nil {
 		return DeliveryResult{}, err
 	}
 	if status.Stdout == "" {
-		return DeliveryResult{NoChanges: true}, nil
+		head, err := d.Git.Run(ctx, request.Workspace.Path, "rev-parse", "--verify", "HEAD^{commit}")
+		if err != nil {
+			return DeliveryResult{}, err
+		}
+		commitSHA := strings.TrimSpace(head.Stdout)
+		if commitSHA != request.Workspace.BaseSHA {
+			return DeliveryResult{}, ErrDeliveryConflict
+		}
+		return DeliveryResult{NoChanges: true, CommitSHA: commitSHA}, nil
 	}
 	if _, err := d.Git.Run(ctx, request.Workspace.Path, "add", "-A"); err != nil {
 		return DeliveryResult{}, err
@@ -89,6 +108,24 @@ func (d Delivery) Deliver(ctx context.Context, request DeliveryRequest) (Deliver
 	}
 	if _, err := d.Git.Run(ctx, request.Workspace.Path, "commit", "-m", request.CommitMessage); err != nil {
 		return DeliveryResult{}, err
+	}
+	commit, err := d.Git.Run(ctx, request.Workspace.Path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return DeliveryResult{}, err
+	}
+	return DeliveryResult{CommitSHA: strings.TrimSpace(commit.Stdout)}, nil
+}
+
+func (d Delivery) Push(ctx context.Context, request DeliveryRequest, commitSHA string) (DeliveryResult, error) {
+	if err := d.validate(request, false); err != nil {
+		return DeliveryResult{}, err
+	}
+	if !regexp.MustCompile(`^[0-9a-fA-F]{40,64}$`).MatchString(commitSHA) {
+		return DeliveryResult{}, ErrUnsafeDelivery
+	}
+	head, err := d.Git.Run(ctx, request.Workspace.Path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil || strings.TrimSpace(head.Stdout) != commitSHA {
+		return DeliveryResult{}, ErrDeliveryConflict
 	}
 
 	branch := strings.TrimPrefix(request.Profile.AllowedRef, "refs/heads/")
@@ -102,19 +139,39 @@ func (d Delivery) Deliver(ctx context.Context, request DeliveryRequest) (Deliver
 		return DeliveryResult{}, fmt.Errorf("%w: resolve allowed ref", ErrDeliveryConflict)
 	}
 	remoteSHA := strings.TrimSpace(remote.Stdout)
+	if commitSHA == request.Workspace.BaseSHA {
+		if remoteSHA != request.Workspace.BaseSHA {
+			return DeliveryResult{}, ErrDeliveryConflict
+		}
+		return DeliveryResult{NoChanges: true, CommitSHA: commitSHA, PushRef: request.Profile.AllowedRef}, nil
+	}
 	if _, err := d.Git.Run(ctx, request.Workspace.Path, "merge-base", "--is-ancestor", remoteSHA, request.Workspace.BaseSHA); err != nil {
 		return DeliveryResult{}, ErrDeliveryConflict
 	}
-	commit, err := d.Git.Run(ctx, request.Workspace.Path, "rev-parse", "--verify", "HEAD^{commit}")
-	if err != nil {
-		return DeliveryResult{}, err
-	}
-	commitSHA := strings.TrimSpace(commit.Stdout)
 	refspec = "HEAD:" + request.Profile.AllowedRef
 	if _, err := d.Git.Run(ctx, request.Workspace.Path, "push", request.Profile.Remote, refspec); err != nil {
 		return DeliveryResult{}, ErrDeliveryConflict
 	}
 	return DeliveryResult{CommitSHA: commitSHA, PushRef: request.Profile.AllowedRef}, nil
+}
+
+func (d Delivery) validate(request DeliveryRequest, requireVerifier bool) error {
+	if !request.Profile.Enabled {
+		return ErrDeliveryDisabled
+	}
+	if err := request.Profile.Validate(); err != nil {
+		return err
+	}
+	if d.Git == nil || requireVerifier && d.Verifier == nil {
+		return ErrUnsafeDelivery
+	}
+	if !validCommitMessage(request.CommitMessage) {
+		return ErrInvalidCommitMessage
+	}
+	if err := validateWorkspace(request.Profile, request.Workspace); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (d Delivery) scanChangedFiles(ctx context.Context, worktree string) error {

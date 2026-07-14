@@ -149,8 +149,9 @@ func ReadCapability(fd int, readFD func(int) ([]byte, error), getenv func(string
 			if file == nil {
 				return nil, errors.New("invalid capability fd")
 			}
-			defer file.Close()
-			return io.ReadAll(io.LimitReader(file, maxCapabilityBytes+1))
+			// Do not consume the shared open-file offset. Claude may spawn MCP and
+			// statusline children from the same inherited regular-file descriptor.
+			return io.ReadAll(io.NewSectionReader(file, 0, maxCapabilityBytes+1))
 		}
 	}
 	if getenv == nil {

@@ -53,6 +53,41 @@ func TestDeliverVerifiedChangesToConfiguredRef(t *testing.T) {
 	}
 }
 
+func TestDeliveryPhasesDoNotPushBeforeExplicitPush(t *testing.T) {
+	fixture, profile, workspace := preparedDeliveryFixture(t)
+	base := strings.TrimSpace(gitOutput(t, fixture.control, "rev-parse", "refs/remotes/origin/staging"))
+	if err := os.WriteFile(filepath.Join(workspace.Path, "phase.txt"), []byte("safe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delivery := Delivery{Git: &recordingGit{}, Verifier: verifierFunc(func(context.Context, string) error { return nil })}
+	request := DeliveryRequest{Profile: profile, Workspace: workspace, CommitMessage: "feat: phase delivery"}
+	if err := delivery.Verify(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := delivery.Commit(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.NoChanges || commit.CommitSHA == "" {
+		t.Fatalf("commit=%#v", commit)
+	}
+	remote := strings.Fields(strings.TrimSpace(gitOutput(t, fixture.control, "ls-remote", fixture.remote, "refs/heads/staging")))[0]
+	if remote != base {
+		t.Fatalf("remote moved during commit: got %s, want %s", remote, base)
+	}
+	push, err := delivery.Push(context.Background(), request, commit.CommitSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if push.PushRef != profile.AllowedRef {
+		t.Fatalf("push=%#v", push)
+	}
+	remote = strings.Fields(strings.TrimSpace(gitOutput(t, fixture.control, "ls-remote", fixture.remote, "refs/heads/staging")))[0]
+	if remote != commit.CommitSHA {
+		t.Fatalf("remote=%s commit=%s", remote, commit.CommitSHA)
+	}
+}
+
 func TestDeliverSkipsNoChangesAndVerificationFailure(t *testing.T) {
 	_, profile, workspace := preparedDeliveryFixture(t)
 	recording := &recordingGit{}
@@ -74,6 +109,27 @@ func TestDeliverSkipsNoChangesAndVerificationFailure(t *testing.T) {
 	}
 	if len(recording.calls) != 0 {
 		t.Fatalf("git ran after failed verification: %v", recording.calls)
+	}
+}
+
+func TestPhasedNoChangeDeliveryReturnsBaseAndConfirmsRefWithoutPush(t *testing.T) {
+	_, profile, workspace := preparedDeliveryFixture(t)
+	recording := &recordingGit{}
+	delivery := Delivery{Git: recording, Verifier: verifierFunc(func(context.Context, string) error { return nil })}
+	request := DeliveryRequest{Profile: profile, Workspace: workspace, CommitMessage: "chore: confirm unchanged task"}
+	if err := delivery.Verify(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := delivery.Commit(context.Background(), request)
+	if err != nil || !commit.NoChanges || commit.CommitSHA != workspace.BaseSHA {
+		t.Fatalf("commit=%#v err=%v", commit, err)
+	}
+	push, err := delivery.Push(context.Background(), request, commit.CommitSHA)
+	if err != nil || push.PushRef != profile.AllowedRef || !push.NoChanges {
+		t.Fatalf("push=%#v err=%v", push, err)
+	}
+	if containsGitCommand(recording.calls, "push") {
+		t.Fatalf("no-change delivery invoked push: %v", recording.calls)
 	}
 }
 

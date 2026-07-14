@@ -23,13 +23,46 @@ const (
 	KindCancel   Kind = "cancel"
 	KindRetry    Kind = "retry"
 	KindHealth   Kind = "health"
+	KindApprove  Kind = "approve"
+	KindReject   Kind = "reject"
 )
 
 type Command struct {
-	Kind     Kind
-	Provider task.Provider
-	Argument string
-	TaskID   string
+	Kind       Kind
+	Provider   task.Provider
+	Argument   string
+	TaskID     string
+	ApprovalID string
+	CallbackID string
+}
+
+// ParseUpdate converts either a slash command or a signed callback into one
+// bounded command representation for the application dispatcher.
+func ParseUpdate(update Update, botUsername string, signer *CallbackSigner) (Command, error) {
+	if update.Message != nil && update.Callback != nil {
+		return Command{}, errors.New("telegram: ambiguous update")
+	}
+	if update.Message != nil {
+		input := update.Message.Text
+		if strings.TrimSpace(input) == "" {
+			input = update.Message.Caption
+		}
+		return ParseCommand(input, botUsername)
+	}
+	if update.Callback == nil || signer == nil || strings.TrimSpace(update.Callback.ID) == "" {
+		return Command{}, errors.New("telegram: unsupported update")
+	}
+	action, err := signer.Verify(update.Callback.Data)
+	if err != nil {
+		return Command{}, err
+	}
+	kind := KindApprove
+	if action.Action == "reject" {
+		kind = KindReject
+	} else if action.Action != "approve" {
+		return Command{}, errors.New("telegram: unsupported callback action")
+	}
+	return Command{Kind: kind, TaskID: action.TaskID, ApprovalID: action.ApprovalID, CallbackID: update.Callback.ID}, nil
 }
 
 var directKinds = map[string]Kind{
@@ -57,6 +90,9 @@ func ParseCommand(input, botUsername string) (Command, error) {
 	if name == "codex" || name == "claude" {
 		if argument == "" {
 			return Command{}, errors.New("telegram: provider prompt is required")
+		}
+		if strings.EqualFold(argument, "usage") {
+			return Command{Kind: KindUsage, Provider: task.Provider(name)}, nil
 		}
 		return Command{Kind: KindPrompt, Provider: task.Provider(name), Argument: argument}, nil
 	}

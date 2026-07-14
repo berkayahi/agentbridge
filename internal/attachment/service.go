@@ -56,6 +56,9 @@ type TaskLocator interface {
 	TaskForStatusMessage(context.Context, int64, int64) (string, error)
 	ActiveTaskIDs(context.Context, int64) ([]string, error)
 }
+type explicitTaskLocator interface {
+	TaskForID(context.Context, int64, string) (string, error)
+}
 
 type draft struct {
 	taskID  string
@@ -106,6 +109,32 @@ func (s *Service) Save(ctx context.Context, in IncomingFile) (task.Attachment, e
 	if err != nil {
 		return task.Attachment{}, err
 	}
+	return s.saveForTask(ctx, taskID, in)
+}
+
+// SaveForTask associates a file with the task the trusted command dispatcher
+// just created, while still verifying the task belongs to the same chat.
+func (s *Service) SaveForTask(ctx context.Context, taskID string, in IncomingFile) (task.Attachment, error) {
+	locator, ok := s.locator.(explicitTaskLocator)
+	if !ok {
+		return task.Attachment{}, ErrTaskReference
+	}
+	verified, err := locator.TaskForID(ctx, in.ChatID, taskID)
+	if err != nil {
+		return task.Attachment{}, err
+	}
+	if verified != taskID {
+		return task.Attachment{}, ErrTaskReference
+	}
+	at := in.ReceivedAt
+	if at.IsZero() {
+		at = s.now()
+	}
+	s.remember(in, taskID, at)
+	return s.saveForTask(ctx, taskID, in)
+}
+
+func (s *Service) saveForTask(ctx context.Context, taskID string, in IncomingFile) (task.Attachment, error) {
 	reader, err := s.source.Open(ctx, in.FileID)
 	if err != nil {
 		return task.Attachment{}, fmt.Errorf("open Telegram attachment: %w", err)

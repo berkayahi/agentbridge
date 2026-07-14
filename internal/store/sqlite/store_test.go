@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,6 +265,95 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 	attachments, err := db.Attachments(ctx, "active")
 	if err != nil || len(attachments) != 1 || attachments[0].Name != attachment.Name || attachments[0].SHA256 != attachment.SHA256 {
 		t.Fatalf("Attachments() = %#v, %v", attachments, err)
+	}
+}
+
+func TestTaskProjectionsPersistOrchestrationResults(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t, filepath.Join(t.TempDir(), "projections.db"))
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Date(2026, time.July, 14, 12, 0, 0, 123, time.UTC)
+	seedTask(t, db, newTask("task-1", task.Running, now))
+
+	if err := db.SaveWorkspace(ctx, "task-1", "base-456", "/tmp/worktree-456"); err != nil {
+		t.Fatalf("SaveWorkspace(): %v", err)
+	}
+	if err := db.SaveTelegramMessage(ctx, "task-1", 9876); err != nil {
+		t.Fatalf("SaveTelegramMessage(): %v", err)
+	}
+	session := task.Session{
+		ID:                "session-1",
+		TaskID:            "task-1",
+		Provider:          task.ProviderCodex,
+		ProviderSessionID: "provider-session-1",
+		ProviderThreadID:  "thread-1",
+		Status:            "active",
+		Resumable:         true,
+		CreatedAt:         now.Add(time.Second),
+		UpdatedAt:         now.Add(2 * time.Second),
+	}
+	if err := db.SaveProviderSession(ctx, "task-1", session); err != nil {
+		t.Fatalf("SaveProviderSession(): %v", err)
+	}
+	if err := db.SaveDelivery(ctx, "task-1", "commit-789", "refs/heads/staging", "https://staging.example.test"); err != nil {
+		t.Fatalf("SaveDelivery(): %v", err)
+	}
+	if err := db.SaveFailure(ctx, "task-1", "Authorization: Bearer secret-token\nexport OPENAI_API_KEY=also-secret"); err != nil {
+		t.Fatalf("SaveFailure(): %v", err)
+	}
+
+	got, err := db.Task(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BaseSHA != "base-456" || got.WorktreePath != "/tmp/worktree-456" {
+		t.Fatalf("workspace projection = %q, %q", got.BaseSHA, got.WorktreePath)
+	}
+	if got.TelegramMessageID != 9876 {
+		t.Fatalf("TelegramMessageID = %d", got.TelegramMessageID)
+	}
+	if got.ProviderSessionID != session.ProviderSessionID || got.ProviderThreadID != session.ProviderThreadID {
+		t.Fatalf("provider projection = %q, %q", got.ProviderSessionID, got.ProviderThreadID)
+	}
+	if got.CommitSHA != "commit-789" || got.PushRef != "refs/heads/staging" || got.DeploymentURL != "https://staging.example.test" {
+		t.Fatalf("delivery projection = %q, %q, %q", got.CommitSHA, got.PushRef, got.DeploymentURL)
+	}
+	if strings.Contains(got.FailureReason, "secret-token") || strings.Contains(got.FailureReason, "also-secret") || !strings.Contains(got.FailureReason, "[REDACTED:") {
+		t.Fatalf("failure reason was not redacted: %q", got.FailureReason)
+	}
+	if got.UpdatedAt.Location() != time.UTC || got.UpdatedAt.Before(now) {
+		t.Fatalf("UpdatedAt = %v, want a current UTC timestamp", got.UpdatedAt)
+	}
+	resumable, err := db.ResumableSessions(ctx)
+	if err != nil || len(resumable) != 1 || resumable[0].ID != session.ID {
+		t.Fatalf("ResumableSessions() = %#v, %v", resumable, err)
+	}
+}
+
+func TestTaskProjectionRejectsMissingTaskAndMismatchedSession(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t, filepath.Join(t.TempDir(), "projection-errors.db"))
+	t.Cleanup(func() { _ = db.Close() })
+
+	for name, call := range map[string]func() error{
+		"workspace": func() error { return db.SaveWorkspace(ctx, "missing", "base", "/tmp/worktree") },
+		"message":   func() error { return db.SaveTelegramMessage(ctx, "missing", 1) },
+		"delivery":  func() error { return db.SaveDelivery(ctx, "missing", "commit", "refs/heads/staging", "") },
+		"failure":   func() error { return db.SaveFailure(ctx, "missing", "failed") },
+	} {
+		if err := call(); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("%s error = %v, want ErrNotFound", name, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	seedTask(t, db, newTask("task-1", task.Running, now))
+	session := task.Session{ID: "session-1", TaskID: "another-task", Provider: task.ProviderCodex, CreatedAt: now, UpdatedAt: now}
+	if err := db.SaveProviderSession(ctx, "task-1", session); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("SaveProviderSession(mismatch) = %v, want ErrConflict", err)
+	}
+	if sessions, err := db.ResumableSessions(ctx); err != nil || len(sessions) != 0 {
+		t.Fatalf("mismatched session persisted: %#v, %v", sessions, err)
 	}
 }
 

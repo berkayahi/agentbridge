@@ -22,13 +22,16 @@ const (
 	defaultMaxStreamLine = 1 << 20
 	processEventBuffer   = 256
 	maxProcessStderr     = 64 * 1024
+	maxCapabilityBytes   = 4 * 1024
 )
 
 type ProcessConfig struct {
 	Executable      string
 	MCPConfigPath   string
 	ClaudeConfigDir string
-	OAuthToken      []byte
+	Model           string
+	ControlSocket   string
+	Capability      []byte
 	Environment     []string
 	ResumeSession   string
 	InitialInput    provider.Input
@@ -59,11 +62,12 @@ func (OSSpawner) Spawn(ctx context.Context, cfg ProcessConfig) (Runner, error) {
 	return StartProcess(ctx, cfg)
 }
 
-func CommandArgs(mcpConfigPath, resumeSession string) []string {
+func CommandArgs(mcpConfigPath, resumeSession, model string) []string {
 	args := []string{
 		"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
 		"--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval",
 		"--mcp-config", mcpConfigPath,
+		"--model", model,
 	}
 	if resumeSession != "" {
 		args = append(args, "--resume", resumeSession)
@@ -71,22 +75,24 @@ func CommandArgs(mcpConfigPath, resumeSession string) []string {
 	return args
 }
 
-func ChildEnvironment(base []string, configDir string, oauthToken []byte) []string {
+func ChildEnvironment(base []string, configDir, taskID, controlSocket string) []string {
 	blocked := map[string]bool{
 		"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true,
 		"CLAUDE_CODE_OAUTH_TOKEN": true, "CLAUDE_CONFIG_DIR": true,
 	}
-	env := make([]string, 0, len(base)+2)
+	env := make([]string, 0, len(base)+4)
 	for _, entry := range base {
 		name, _, _ := strings.Cut(entry, "=")
-		if !blocked[name] {
+		if !blocked[name] && !strings.HasPrefix(name, "AGENTBRIDGE_") {
 			env = append(env, entry)
 		}
 	}
-	env = append(env, "CLAUDE_CONFIG_DIR="+configDir)
-	if len(oauthToken) > 0 {
-		env = append(env, "CLAUDE_CODE_OAUTH_TOKEN="+string(oauthToken))
-	}
+	env = append(env,
+		"CLAUDE_CONFIG_DIR="+configDir,
+		"AGENTBRIDGE_CONTROL_SOCKET="+controlSocket,
+		"AGENTBRIDGE_TASK_ID="+taskID,
+		"AGENTBRIDGE_PROVIDER=claude",
+	)
 	return env
 }
 
@@ -158,31 +164,52 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if cfg.Executable == "" {
 		cfg.Executable = "claude"
 	}
-	args := CommandArgs(cfg.MCPConfigPath, cfg.ResumeSession)
+	if !cfg.TaskID.Valid() || cfg.Model == "" || !filepath.IsAbs(cfg.ControlSocket) || len(cfg.Capability) == 0 || len(cfg.Capability) > maxCapabilityBytes {
+		return nil, errors.New("incomplete task-scoped Claude process configuration")
+	}
+	args := CommandArgs(cfg.MCPConfigPath, cfg.ResumeSession, cfg.Model)
 	if cfg.testArgs != nil {
 		args = cfg.testArgs
 	}
 	if cfg.Environment == nil {
 		cfg.Environment = os.Environ()
 	}
-	cmd := exec.CommandContext(ctx, cfg.Executable, args...)
-	cmd.Env = ChildEnvironment(cfg.Environment, cfg.ClaudeConfigDir, cfg.OAuthToken)
+	cmd := exec.Command(cfg.Executable, args...)
+	cmd.Env = ChildEnvironment(cfg.Environment, cfg.ClaudeConfigDir, cfg.TaskID.String(), cfg.ControlSocket)
+	provider.ConfigureProcessGroup(cmd)
+	capabilityFile, err := capabilityFile(cfg.Capability)
+	if err != nil {
+		return nil, err
+	}
+	cmd.ExtraFiles = []*os.File{capabilityFile}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		_ = capabilityFile.Close()
 		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = capabilityFile.Close()
 		return nil, err
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		_ = capabilityFile.Close()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		_ = capabilityFile.Close()
 		return nil, fmt.Errorf("start Claude Code: %w", err)
 	}
+	_ = capabilityFile.Close()
 	p := &Process{cmd: cmd, stdin: stdin, events: make(chan provider.Event, processEventBuffer), ready: make(chan string, 1), done: make(chan struct{}), taskID: cfg.TaskID}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = p.Close()
+		case <-p.done:
+		}
+	}()
 	var parserWG, stderrWG sync.WaitGroup
 	parserWG.Add(1)
 	go func() {
@@ -207,6 +234,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	}()
 	go func() {
 		err := cmd.Wait()
+		_ = provider.SweepProcessGroup(cmd.Process)
 		parserWG.Wait()
 		stderrWG.Wait()
 		if err != nil {
@@ -234,6 +262,38 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	case <-p.ready:
 		return p, nil
 	}
+}
+
+func capabilityFile(capability []byte) (*os.File, error) {
+	file, err := os.CreateTemp("", ".agentbridge-capability-*")
+	if err != nil {
+		return nil, fmt.Errorf("create Claude capability file: %w", err)
+	}
+	cleanup := func() {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+	}
+	if err := file.Chmod(0o600); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("protect Claude capability file: %w", err)
+	}
+	if _, err := file.Write(capability); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("write Claude capability file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("sync Claude capability file: %w", err)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("rewind Claude capability file: %w", err)
+	}
+	if err := os.Remove(file.Name()); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("unlink Claude capability file: %w", err)
+	}
+	return file, nil
 }
 
 func (p *Process) SessionID() string {
@@ -265,14 +325,7 @@ func (p *Process) Send(ctx context.Context, input provider.Input) error {
 func (p *Process) Close() error {
 	p.closeOnce.Do(func() {
 		_ = p.stdin.Close()
-		select {
-		case <-p.done:
-		default:
-			if p.cmd.Process != nil {
-				_ = p.cmd.Process.Kill()
-			}
-			<-p.done
-		}
+		_ = provider.StopProcessGroup(p.cmd.Process, p.done, 5*time.Second)
 	})
 	return nil
 }

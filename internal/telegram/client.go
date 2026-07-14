@@ -19,9 +19,17 @@ import (
 const maxTelegramError = 512
 
 type Message struct {
-	ChatID int64
-	Text   string
+	ChatID         int64
+	Text           string
+	InlineKeyboard InlineKeyboard
 }
+
+type InlineButton struct {
+	Text         string
+	CallbackData string
+}
+
+type InlineKeyboard [][]InlineButton
 
 type MessageRef struct {
 	ChatID    int64
@@ -153,10 +161,14 @@ func (c *Client) Send(ctx context.Context, message Message) (MessageRef, error) 
 	if message.ChatID == 0 || message.Text == "" {
 		return MessageRef{}, errors.New("telegram: invalid message")
 	}
+	markup, err := inlineKeyboardMarkup(message.InlineKeyboard)
+	if err != nil {
+		return MessageRef{}, err
+	}
 	var sent *models.Message
-	err := c.retry(ctx, func() error {
+	err = c.retry(ctx, func() error {
 		var err error
-		sent, err = c.bot.SendMessage(ctx, &telebot.SendMessageParams{ChatID: message.ChatID, Text: html.EscapeString(message.Text), ParseMode: models.ParseModeHTML})
+		sent, err = c.bot.SendMessage(ctx, &telebot.SendMessageParams{ChatID: message.ChatID, Text: html.EscapeString(message.Text), ParseMode: models.ParseModeHTML, ReplyMarkup: markup})
 		return err
 	})
 	if err != nil {
@@ -169,10 +181,42 @@ func (c *Client) Edit(ctx context.Context, ref MessageRef, message Message) erro
 	if ref.ChatID == 0 || ref.MessageID == 0 || message.Text == "" {
 		return errors.New("telegram: invalid edit")
 	}
+	markup, err := inlineKeyboardMarkup(message.InlineKeyboard)
+	if err != nil {
+		return err
+	}
 	return c.retry(ctx, func() error {
-		_, err := c.bot.EditMessageText(ctx, &telebot.EditMessageTextParams{ChatID: ref.ChatID, MessageID: int(ref.MessageID), Text: html.EscapeString(message.Text), ParseMode: models.ParseModeHTML})
+		_, err := c.bot.EditMessageText(ctx, &telebot.EditMessageTextParams{ChatID: ref.ChatID, MessageID: int(ref.MessageID), Text: html.EscapeString(message.Text), ParseMode: models.ParseModeHTML, ReplyMarkup: markup})
 		return err
 	})
+}
+
+func inlineKeyboardMarkup(keyboard InlineKeyboard) (models.ReplyMarkup, error) {
+	if len(keyboard) == 0 {
+		return nil, nil
+	}
+	if len(keyboard) > 8 {
+		return nil, errors.New("telegram: inline keyboard has too many rows")
+	}
+	rows := make([][]models.InlineKeyboardButton, len(keyboard))
+	total := 0
+	for rowIndex, row := range keyboard {
+		if len(row) == 0 || len(row) > 4 {
+			return nil, errors.New("telegram: inline keyboard row has invalid size")
+		}
+		total += len(row)
+		if total > 32 {
+			return nil, errors.New("telegram: inline keyboard has too many buttons")
+		}
+		rows[rowIndex] = make([]models.InlineKeyboardButton, len(row))
+		for buttonIndex, button := range row {
+			if strings.TrimSpace(button.Text) == "" || len([]rune(button.Text)) > 64 || len(button.CallbackData) == 0 || len(button.CallbackData) > 64 {
+				return nil, errors.New("telegram: invalid inline callback button")
+			}
+			rows[rowIndex][buttonIndex] = models.InlineKeyboardButton{Text: button.Text, CallbackData: button.CallbackData}
+		}
+	}
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
 }
 
 func (c *Client) AnswerCallback(ctx context.Context, callbackID, text string) error {
@@ -293,13 +337,34 @@ func convertUpdate(source *models.Update, now time.Time) (Update, bool) {
 
 func convertMessage(source *models.Message) *IncomingMessage {
 	message := &IncomingMessage{ID: int64(source.ID), Chat: Chat{ID: source.Chat.ID, Type: ChatType(source.Chat.Type)}, Text: source.Text, Caption: source.Caption, MediaGroupID: source.MediaGroupID}
+	if source.Date > 0 {
+		message.ReceivedAt = time.Unix(int64(source.Date), 0).UTC()
+	}
 	if source.From != nil {
 		message.From = convertUser(*source.From)
 	}
 	if source.ReplyToMessage != nil {
 		message.ReplyToMessageID = int64(source.ReplyToMessage.ID)
 	}
+	message.Attachment = convertAttachment(source)
 	return message
+}
+
+func convertAttachment(source *models.Message) *IncomingAttachment {
+	if len(source.Photo) > 0 {
+		largest := source.Photo[0]
+		for _, candidate := range source.Photo[1:] {
+			if candidate.FileSize > largest.FileSize || candidate.FileSize == largest.FileSize && candidate.Width*candidate.Height > largest.Width*largest.Height {
+				largest = candidate
+			}
+		}
+		return &IncomingAttachment{FileID: largest.FileID, UniqueID: largest.FileUniqueID, MediaType: "image/jpeg", SizeBytes: int64(largest.FileSize), Width: largest.Width, Height: largest.Height}
+	}
+	if source.Document == nil {
+		return nil
+	}
+	document := source.Document
+	return &IncomingAttachment{FileID: document.FileID, UniqueID: document.FileUniqueID, Filename: document.FileName, MediaType: document.MimeType, SizeBytes: document.FileSize}
 }
 
 func convertUser(source models.User) User { return User{ID: source.ID, Username: source.Username} }

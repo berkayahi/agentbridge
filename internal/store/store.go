@@ -37,6 +37,11 @@ type Store interface {
 	Task(context.Context, string) (task.Task, error)
 	ListTasks(context.Context, ListFilter) ([]task.Task, error)
 	NonterminalTasks(context.Context) ([]task.Task, error)
+	SaveWorkspace(context.Context, string, string, string) error
+	SaveTelegramMessage(context.Context, string, int64) error
+	SaveProviderSession(context.Context, string, task.Session) error
+	SaveDelivery(context.Context, string, string, string, string) error
+	SaveFailure(context.Context, string, string) error
 	SaveAttachment(context.Context, task.Attachment) error
 	Attachments(context.Context, string) ([]task.Attachment, error)
 	UpsertSession(context.Context, task.Session) error

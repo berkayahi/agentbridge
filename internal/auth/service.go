@@ -107,6 +107,10 @@ type Resumer interface {
 	ResumeTask(context.Context, task.Task) error
 }
 
+type ProviderSuspender interface {
+	SuspendProvider(context.Context, task.Provider) error
+}
+
 type RecoveryAuthorizer interface {
 	AuthorizeRecovery(context.Context, string) error
 }
@@ -121,6 +125,7 @@ type Options struct {
 	Incidents    IncidentStore
 	Notifier     Notifier
 	Resumer      Resumer
+	Suspender    ProviderSuspender
 	PTY          PTYRunner
 	Authorizer   RecoveryAuthorizer
 	Logger       *slog.Logger
@@ -136,6 +141,7 @@ type Service struct {
 	incidents    IncidentStore
 	notifier     Notifier
 	resumer      Resumer
+	suspender    ProviderSuspender
 	pty          PTYRunner
 	authorizer   RecoveryAuthorizer
 	logger       *slog.Logger
@@ -161,6 +167,9 @@ func NewService(options Options) (*Service, error) {
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	if options.Suspender == nil {
+		options.Suspender = noopSuspender{}
+	}
 	if options.Now == nil {
 		options.Now = func() time.Time { return time.Now().UTC() }
 	}
@@ -175,7 +184,7 @@ func NewService(options Options) (*Service, error) {
 	}
 	return &Service{
 		commands: options.Commands, tasks: options.Tasks, incidents: options.Incidents,
-		notifier: options.Notifier, resumer: options.Resumer, pty: options.PTY,
+		notifier: options.Notifier, resumer: options.Resumer, suspender: options.Suspender, pty: options.PTY,
 		authorizer: options.Authorizer, logger: options.Logger,
 		checkTimeout: options.CheckTimeout, recoveryTTL: options.RecoveryTTL,
 		now: options.Now, newID: options.NewID,
@@ -342,6 +351,14 @@ func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind
 	if err != nil {
 		return Incident{}, fmt.Errorf("list affected tasks: %w", err)
 	}
+	for _, value := range values {
+		if value.Provider == provider && value.State == task.Running {
+			if err := s.suspender.SuspendProvider(ctx, provider); err != nil {
+				return Incident{}, fmt.Errorf("suspend active %s provider sessions: %w", provider, err)
+			}
+			break
+		}
+	}
 	affected := make([]task.Task, 0)
 	seen := make(map[string]struct{})
 	for _, value := range values {
@@ -401,6 +418,10 @@ func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind
 	}
 	return incident, nil
 }
+
+type noopSuspender struct{}
+
+func (noopSuspender) SuspendProvider(context.Context, task.Provider) error { return nil }
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
@@ -590,15 +611,16 @@ func (s *Service) resumeAffected(ctx context.Context, provider task.Provider) er
 			}
 			continue
 		}
+		event := task.Event{ID: s.newID(), TaskID: value.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload("subscription authentication restored"), CreatedAt: s.now()}
+		if err := s.tasks.Transition(ctx, value.ID, task.Running, event); err != nil {
+			return fmt.Errorf("resume task %s: %w", value.ID, err)
+		}
+		value.State = task.Running
 		if err := s.resumer.ResumeTask(ctx, value); err != nil {
 			if transitionErr := s.pauseTask(ctx, value, "saved provider session could not be resumed safely"); transitionErr != nil {
 				return transitionErr
 			}
 			continue
-		}
-		event := task.Event{ID: s.newID(), TaskID: value.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload("subscription authentication restored"), CreatedAt: s.now()}
-		if err := s.tasks.Transition(ctx, value.ID, task.Running, event); err != nil {
-			return fmt.Errorf("resume task %s: %w", value.ID, err)
 		}
 	}
 	return nil
@@ -715,13 +737,13 @@ func (s *Service) SubmitCode(ctx context.Context, principal, id, code string) er
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if session.status != RecoveryRunning || !session.acceptingInput {
-		clear(value)
-		return ErrNotFound
-	}
 	if session.submitted {
 		clear(value)
 		return ErrCodeSubmitted
+	}
+	if session.status != RecoveryRunning || !session.acceptingInput {
+		clear(value)
+		return ErrNotFound
 	}
 	select {
 	case <-ctx.Done():

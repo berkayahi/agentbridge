@@ -214,6 +214,23 @@ func (s *CallbackSigner) Verify(token string) (CallbackAction, error) {
 	return action, nil
 }
 
+// ApprovalKeyboard creates a compact signed decision keyboard that fits
+// Telegram's 64-byte callback_data bound.
+func ApprovalKeyboard(signer *CallbackSigner, taskID, approvalID string, ttl time.Duration) (InlineKeyboard, error) {
+	if signer == nil {
+		return nil, errors.New("telegram: callback signer is required")
+	}
+	approve, err := signer.Sign(CallbackAction{Action: "approve", TaskID: taskID, ApprovalID: approvalID}, ttl)
+	if err != nil {
+		return nil, err
+	}
+	reject, err := signer.Sign(CallbackAction{Action: "reject", TaskID: taskID, ApprovalID: approvalID}, ttl)
+	if err != nil {
+		return nil, err
+	}
+	return InlineKeyboard{{{Text: "Approve", CallbackData: approve}, {Text: "Reject", CallbackData: reject}}}, nil
+}
+
 func (s *CallbackSigner) signature(payload string) []byte {
 	mac := hmac.New(sha256.New, s.secret)
 	_, _ = mac.Write([]byte(payload))

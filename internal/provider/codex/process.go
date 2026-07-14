@@ -7,7 +7,9 @@ import (
 	"io"
 	"os/exec"
 	"sync"
+	"time"
 
+	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/security"
 )
 
@@ -24,9 +26,11 @@ type Process struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 
-	stderrMu sync.Mutex
-	stderr   bytes.Buffer
-	wait     chan struct{}
+	stderrMu  sync.Mutex
+	stderr    bytes.Buffer
+	wait      chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func AppServerArgs() []string { return []string{"app-server", "--listen", "stdio://"} }
@@ -42,8 +46,9 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if cfg.Args == nil {
 		cfg.Args = AppServerArgs()
 	}
-	cmd := exec.CommandContext(ctx, cfg.Executable, cfg.Args...)
+	cmd := exec.Command(cfg.Executable, cfg.Args...)
 	cmd.Env = cfg.Env
+	provider.ConfigureProcessGroup(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("codex stdin: %w", err)
@@ -64,7 +69,15 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	go p.captureStderr(stderr)
 	go func() {
 		_ = cmd.Wait()
+		_ = provider.SweepProcessGroup(cmd.Process)
 		close(p.wait)
+	}()
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = p.Close()
+		case <-p.wait:
+		}
 	}()
 
 	initialize := map[string]any{
@@ -90,17 +103,12 @@ func (p *Process) Stderr() string {
 }
 
 func (p *Process) Close() error {
-	_ = p.stdin.Close()
-	_ = p.Client.Close()
-	select {
-	case <-p.wait:
-	default:
-		if p.cmd.Process != nil {
-			_ = p.cmd.Process.Kill()
-		}
-		<-p.wait
-	}
-	return nil
+	p.closeOnce.Do(func() {
+		_ = p.stdin.Close()
+		_ = p.Client.Close()
+		p.closeErr = provider.StopProcessGroup(p.cmd.Process, p.wait, 5*time.Second)
+	})
+	return p.closeErr
 }
 
 func (p *Process) captureStderr(reader io.Reader) {

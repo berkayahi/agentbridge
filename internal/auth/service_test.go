@@ -226,6 +226,24 @@ func TestHealthyChecksResolveAnIncidentExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestAuthIncidentSuspendsLiveProviderBeforeDurableTransition(t *testing.T) {
+	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.Running}}}
+	suspender := &fakeSuspender{}
+	svc := newTestService(t, Options{
+		Commands: &fakeCommands{responses: []commandResponse{{output: []byte("login required"), err: errors.New("exit 1")}}},
+		Tasks:    tasks, Suspender: suspender, NewID: sequenceIDs("event", "incident"),
+	})
+	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+		t.Fatal(err)
+	}
+	if !suspender.called || suspender.provider != task.ProviderCodex {
+		t.Fatalf("suspender = %#v", suspender)
+	}
+	if got := tasks.states()["task-1"]; got != task.AwaitingAuth {
+		t.Fatalf("state = %s", got)
+	}
+}
+
 func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 	t.Parallel()
 	tasks := &fakeTaskStore{tasks: []task.Task{
@@ -236,7 +254,12 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 		{output: []byte("session expired"), err: errors.New("exit 1")},
 		{output: []byte("Logged in using ChatGPT")},
 	}}
-	resumer := &fakeResumer{}
+	resumer := &fakeResumer{onResume: func(value task.Task) error {
+		if got := tasks.states()[value.ID]; got != task.Running {
+			return fmt.Errorf("task state during resume = %s, want running", got)
+		}
+		return nil
+	}}
 	login := &fakePTY{output: "Open https://auth.openai.com/device and enter ABCD-EFGH\n", release: closedChannel()}
 	svc := newTestService(t, Options{
 		Commands: commands, Tasks: tasks, Resumer: resumer, PTY: login,
@@ -679,6 +702,17 @@ type fakeResumer struct {
 	resumed     []string
 	validateErr error
 	resumeErr   error
+	onResume    func(task.Task) error
+}
+
+type fakeSuspender struct {
+	called   bool
+	provider task.Provider
+}
+
+func (f *fakeSuspender) SuspendProvider(_ context.Context, provider task.Provider) error {
+	f.called, f.provider = true, provider
+	return nil
 }
 
 func (f *fakeResumer) ValidateResume(_ context.Context, value task.Task) error {
@@ -690,9 +724,13 @@ func (f *fakeResumer) ValidateResume(_ context.Context, value task.Task) error {
 
 func (f *fakeResumer) ResumeTask(_ context.Context, value task.Task) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.resumed = append(f.resumed, value.ID)
-	return f.resumeErr
+	onResume, resumeErr := f.onResume, f.resumeErr
+	f.mu.Unlock()
+	if onResume != nil {
+		return onResume(value)
+	}
+	return resumeErr
 }
 
 type fakeAuthorizer map[string]bool

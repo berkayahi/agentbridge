@@ -67,6 +67,7 @@ type sessionState struct {
 type pendingApproval struct {
 	request ApprovalRequest
 	rpcID   json.RawMessage
+	events  chan<- provider.Event
 }
 
 type Adapter struct {
@@ -412,7 +413,7 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 		}
 	}
 	a.mu.Lock()
-	a.pending[id.String()] = pendingApproval{request: request, rpcID: responseID(message)}
+	a.pending[id.String()] = pendingApproval{request: request, rpcID: responseID(message), events: state.events}
 	a.mu.Unlock()
 	select {
 	case state.events <- provider.Event{TaskID: request.TaskID, RequestID: request.ID, Type: provider.EventApprovalRequired, Message: request.Summary, CreatedAt: now}:
@@ -444,6 +445,15 @@ func (a *Adapter) expireApproval(id provider.ID, after time.Duration) {
 	a.mu.Unlock()
 	if ok {
 		_ = a.rpc.RespondResult(context.Background(), pending.rpcID, map[string]any{"decision": "decline"})
+		if pending.events != nil {
+			select {
+			case pending.events <- provider.Event{
+				TaskID: pending.request.TaskID, RequestID: pending.request.ID,
+				Type: provider.EventApprovalExpired, Message: "approval request expired", CreatedAt: a.now().UTC(),
+			}:
+			case <-a.closed:
+			}
+		}
 	}
 }
 

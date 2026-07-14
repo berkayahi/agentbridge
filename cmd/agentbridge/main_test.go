@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -105,6 +106,41 @@ func TestRunMCPUsesInjectedIOAndProtectedEnvironment(t *testing.T) {
 		t.Fatalf("scope = %#v", got.Scope)
 	}
 }
+
+func TestRunServePassesConfigAndContextToDaemon(t *testing.T) {
+	var gotPath string
+	called := false
+	deps := commandDeps{
+		runServe: func(ctx context.Context, path string) error {
+			if ctx == nil {
+				t.Fatal("serve context is nil")
+			}
+			called = true
+			gotPath = path
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"serve", "--config", "/private/config.yaml"}, strings.NewReader(""), &stdout, &stderr, deps)
+	if code != 0 || !called || gotPath != "/private/config.yaml" {
+		t.Fatalf("code=%d called=%v path=%q stderr=%q", code, called, gotPath, stderr.String())
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("unexpected output: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunServeReportsConciseFailureWithoutPrivatePath(t *testing.T) {
+	deps := commandDeps{runServe: func(context.Context, string) error { return errors.New("open /private/config.yaml: permission denied") }}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"serve", "--config", "/private/config.yaml"}, strings.NewReader(""), &stdout, &stderr, deps)
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q", code, stdout.String())
+	}
+	if got, want := stderr.String(), "agentbridge: daemon stopped; inspect the service journal\n"; got != want {
+		t.Fatalf("stderr=%q, want %q", got, want)
+	}
+}
 func TestRunVersionReturnsFailureWhenOutputCannotBeWritten(t *testing.T) {
 	var stderr bytes.Buffer
 	code := run([]string{"version"}, failingWriter{}, &stderr)
@@ -127,7 +163,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }
@@ -140,8 +176,9 @@ func TestRunDoctorReportsOnlySafeSummary(t *testing.T) {
 telegram:
   private_chat_only: true
   allowed_user_ids: [987654321]
+  paired_chat_id: 987654321
 providers:
-  codex: {executable: /usr/local/bin/codex}
+  codex: {executable: /usr/local/bin/codex, model: gpt-5.6-terra}
 repositories:
   public-sample:
     checkout_path: /srv/agentbridge/checkouts/public-sample

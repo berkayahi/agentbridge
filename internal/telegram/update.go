@@ -30,6 +30,20 @@ type IncomingMessage struct {
 	Caption          string
 	ReplyToMessageID int64
 	MediaGroupID     string
+	ReceivedAt       time.Time
+	Attachment       *IncomingAttachment
+}
+
+// IncomingAttachment is Telegram file metadata only. File content is fetched
+// through Client.Open so Telegram SDK types do not cross the package boundary.
+type IncomingAttachment struct {
+	FileID    string
+	UniqueID  string
+	Filename  string
+	MediaType string
+	SizeBytes int64
+	Width     int
+	Height    int
 }
 
 type CallbackQuery struct {

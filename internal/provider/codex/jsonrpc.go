@@ -215,6 +215,10 @@ func (c *Client) Respond(ctx context.Context, id string, result any, responseErr
 	}
 }
 
+func (c *Client) RespondResult(ctx context.Context, id string, result any) error {
+	return c.Respond(ctx, id, result, nil)
+}
+
 func (c *Client) Close() error {
 	c.finish(ErrClosed)
 	if c.writerCloser != nil {

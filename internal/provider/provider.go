@@ -97,8 +97,10 @@ type Session struct {
 }
 
 type StartRequest struct {
-	TaskID ID
-	Input  Input
+	TaskID           ID
+	Input            Input
+	WorkingDirectory string
+	Model            string
 }
 
 type ResumeRequest struct {

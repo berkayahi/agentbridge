@@ -13,20 +13,21 @@ var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 type Kind string
 
 const (
-	KindPrompt   Kind = "prompt"
-	KindUsage    Kind = "usage"
-	KindStatus   Kind = "status"
-	KindTasks    Kind = "tasks"
-	KindSessions Kind = "sessions"
-	KindDiff     Kind = "diff"
-	KindLogs     Kind = "logs"
-	KindCancel   Kind = "cancel"
-	KindRetry    Kind = "retry"
-	KindHealth   Kind = "health"
-	KindHelp     Kind = "help"
-	KindChat     Kind = "chat"
-	KindApprove  Kind = "approve"
-	KindReject   Kind = "reject"
+	KindPrompt        Kind = "prompt"
+	KindUsage         Kind = "usage"
+	KindStatus        Kind = "status"
+	KindTasks         Kind = "tasks"
+	KindSessions      Kind = "sessions"
+	KindDiff          Kind = "diff"
+	KindLogs          Kind = "logs"
+	KindCancel        Kind = "cancel"
+	KindRetry         Kind = "retry"
+	KindHealth        Kind = "health"
+	KindHelp          Kind = "help"
+	KindChat          Kind = "chat"
+	KindSessionSelect Kind = "session_select"
+	KindApprove       Kind = "approve"
+	KindReject        Kind = "reject"
 )
 
 type Command struct {
@@ -59,6 +60,12 @@ func ParseUpdate(update Update, botUsername string, signer *CallbackSigner) (Com
 		return Command{}, err
 	}
 	kind := KindApprove
+	if action.Action == "session_use" {
+		return Command{Kind: KindSessionSelect, TaskID: action.TaskID, CallbackID: update.Callback.ID}, nil
+	}
+	if action.Action == "session_new" {
+		return Command{Kind: KindSessionSelect, Provider: task.Provider(action.TaskID), CallbackID: update.Callback.ID}, nil
+	}
 	if action.Action == "reject" {
 		kind = KindReject
 	} else if action.Action != "approve" {

@@ -118,6 +118,11 @@ type queuedTask struct {
 	resume bool
 	input  string
 }
+type pendingPrompt struct {
+	provider task.Provider
+	prompt   string
+	expires  time.Time
+}
 
 type App struct {
 	config Config
@@ -137,6 +142,8 @@ type App struct {
 	closeOnce    sync.Once
 	shutdownDone chan struct{}
 	shutdownErr  error
+	pendingMu    sync.Mutex
+	pending      map[int64]pendingPrompt
 }
 
 func New(config Config, deps Dependencies) (*App, error) {
@@ -161,7 +168,7 @@ func New(config Config, deps Dependencies) (*App, error) {
 	if config.QueueSize < 1 {
 		config.QueueSize = 16
 	}
-	return &App{config: config, deps: deps, newID: config.NewID, queue: make(chan queuedTask, config.QueueSize), active: make(map[string]activeTask), shutdownDone: make(chan struct{})}, nil
+	return &App{config: config, deps: deps, newID: config.NewID, queue: make(chan queuedTask, config.QueueSize), active: make(map[string]activeTask), pending: make(map[int64]pendingPrompt), shutdownDone: make(chan struct{})}, nil
 }
 
 func randomID() string {
@@ -330,7 +337,7 @@ func (a *App) HandleUpdate(ctx context.Context, update telegram.Update) (string,
 		if update.Message == nil {
 			return "", errors.New("app: prompt message is missing")
 		}
-		return a.createTask(ctx, update.Message, command)
+		return a.chooseSession(ctx, update.Message, command)
 	case telegram.KindCancel:
 		return "", a.cancelTask(ctx, command.TaskID)
 	case telegram.KindUsage:
@@ -347,6 +354,8 @@ func (a *App) HandleUpdate(ctx context.Context, update telegram.Update) (string,
 			return "", errors.New("app: chat message is missing")
 		}
 		return "", a.continueTask(ctx, command.TaskID, command.Argument, update.Message.Chat.ID)
+	case telegram.KindSessionSelect:
+		return "", a.resolveSessionChoice(ctx, update)
 	default:
 		return "", errors.New("app: command is not implemented by daemon")
 	}
@@ -384,6 +393,62 @@ func (a *App) createTask(ctx context.Context, message *telegram.IncomingMessage,
 		return "", err
 	}
 	return id, nil
+}
+
+func (a *App) chooseSession(ctx context.Context, message *telegram.IncomingMessage, command telegram.Command) (string, error) {
+	tasks, err := a.deps.Store.ListTasks(ctx, store.ListFilter{Limit: 20})
+	if err != nil {
+		return "", err
+	}
+	options := make([]task.Task, 0, 8)
+	for _, value := range tasks {
+		if value.Provider == command.Provider && value.TelegramChatID == message.Chat.ID && value.ProviderSessionID != "" && value.State != task.Failed && value.State != task.Canceled {
+			options = append(options, value)
+			if len(options) == 8 {
+				break
+			}
+		}
+	}
+	if len(options) == 0 {
+		return a.createTask(ctx, message, command)
+	}
+	a.pendingMu.Lock()
+	a.pending[message.Chat.ID] = pendingPrompt{provider: command.Provider, prompt: command.Argument, expires: time.Now().Add(10 * time.Minute)}
+	a.pendingMu.Unlock()
+	keyboard, err := telegram.SessionKeyboard(a.deps.Signer, command.Provider, options, 10*time.Minute)
+	if err != nil {
+		return "", err
+	}
+	_, err = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: message.Chat.ID, Text: fmt.Sprintf("Select %s session for this task:", command.Provider), InlineKeyboard: keyboard})
+	return "", err
+}
+
+func (a *App) resolveSessionChoice(ctx context.Context, update telegram.Update) error {
+	if update.Callback == nil {
+		return errors.New("app: session callback is missing")
+	}
+	chatID := update.Callback.Message.Chat.ID
+	a.pendingMu.Lock()
+	pending, ok := a.pending[chatID]
+	if ok {
+		delete(a.pending, chatID)
+	}
+	a.pendingMu.Unlock()
+	if !ok || time.Now().After(pending.expires) {
+		return errors.New("app: session selection expired")
+	}
+	var err error
+	updateCommand, parseErr := telegram.ParseUpdate(update, a.config.BotUsername, a.deps.Signer)
+	if parseErr == nil && updateCommand.Provider.Valid() {
+		message := update.Callback.Message
+		_, err = a.createTask(ctx, &message, telegram.Command{Kind: telegram.KindPrompt, Provider: pending.provider, Argument: pending.prompt})
+	} else if parseErr == nil {
+		err = a.continueTask(ctx, updateCommand.TaskID, pending.prompt, chatID)
+	} else {
+		err = parseErr
+	}
+	_ = a.deps.Messenger.AnswerCallback(ctx, update.Callback.ID, "Session selected")
+	return err
 }
 
 func incomingFile(message *telegram.IncomingMessage) attachment.IncomingFile {

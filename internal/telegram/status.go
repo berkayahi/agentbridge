@@ -231,6 +231,29 @@ func ApprovalKeyboard(signer *CallbackSigner, taskID, approvalID string, ttl tim
 	return InlineKeyboard{{{Text: "Approve", CallbackData: approve}, {Text: "Reject", CallbackData: reject}}}, nil
 }
 
+func SessionKeyboard(signer *CallbackSigner, provider task.Provider, tasks []task.Task, ttl time.Duration) (InlineKeyboard, error) {
+	if signer == nil {
+		return nil, errors.New("telegram: callback signer is required")
+	}
+	newTask, err := signer.Sign(CallbackAction{Action: "session_new", TaskID: string(provider)}, ttl)
+	if err != nil {
+		return nil, err
+	}
+	keyboard := InlineKeyboard{{{Text: "➕ New task", CallbackData: newTask}}}
+	for _, value := range tasks {
+		callback, signErr := signer.Sign(CallbackAction{Action: "session_use", TaskID: value.ID}, ttl)
+		if signErr != nil {
+			return nil, signErr
+		}
+		label := value.Title
+		if label == "" {
+			label = value.ID
+		}
+		keyboard = append(keyboard, []InlineButton{{Text: label, CallbackData: callback}})
+	}
+	return keyboard, nil
+}
+
 func (s *CallbackSigner) signature(payload string) []byte {
 	mac := hmac.New(sha256.New, s.secret)
 	_, _ = mac.Write([]byte(payload))

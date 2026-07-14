@@ -107,7 +107,7 @@ func NewClient(token string, opts ClientOptions) (*Client, error) {
 				return dialer.DialContext(ctx, "tcp4", address)
 			}
 		}
-		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout, Transport: transport}
+		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout + 5*time.Second, Transport: transport}
 	}
 	options := []telebot.Option{
 		telebot.WithSkipGetMe(),

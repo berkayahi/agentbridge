@@ -40,6 +40,23 @@ func TestCredentialReaderRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestCredentialReaderRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside-token")
+	if err := os.WriteFile(outside, []byte("must-not-be-read"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "telegram-token")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CREDENTIALS_DIRECTORY", dir)
+
+	credential, err := (CredentialReader{}).Read("telegram-token")
+	if err == nil {
+		t.Fatalf("Read() = %v, nil; want symlink rejection", credential)
+	}
+}
+
 func TestCredentialReaderRejectsEmptyCredential(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CREDENTIALS_DIRECTORY", dir)

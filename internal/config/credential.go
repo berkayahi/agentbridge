@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,25 @@ func (CredentialReader) Read(name string) (Credential, error) {
 	if !filepath.IsAbs(dir) {
 		return Credential{}, errors.New("credentials directory is not configured")
 	}
-	contents, err := os.ReadFile(filepath.Join(dir, name))
+
+	// systemd creates CREDENTIALS_DIRECTORY as a trusted, service-private
+	// directory. Validate the leaf before and after opening so it cannot be a
+	// symlink or be swapped between validation and use.
+	path := filepath.Join(dir, name)
+	before, err := os.Lstat(path)
+	if err != nil || before.Mode()&os.ModeSymlink != 0 || !before.Mode().IsRegular() {
+		return Credential{}, errors.New("credential is unavailable")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return Credential{}, errors.New("credential is unavailable")
+	}
+	defer file.Close()
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(before, after) {
+		return Credential{}, errors.New("credential is unavailable")
+	}
+	contents, err := io.ReadAll(file)
 	if err != nil {
 		return Credential{}, errors.New("credential is unavailable")
 	}

@@ -51,6 +51,24 @@ func TestLoadAcceptsSupportedLoopbackServers(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsInvalidTailscaleIdentityAllowlist(t *testing.T) {
+	tests := map[string]string{
+		"surrounding whitespace": strings.Replace(validYAML, "    - operator@example.invalid", `    - " operator@example.invalid "`, 1),
+		"duplicate identity": strings.Replace(
+			validYAML,
+			"    - operator@example.invalid",
+			"    - operator@example.invalid\n    - operator@example.invalid",
+			1,
+		),
+	}
+
+	for name, yml := range tests {
+		t.Run(name, func(t *testing.T) {
+			assertLoadError(t, yml, "allowed_tailscale_identities")
+		})
+	}
+}
+
 func TestLoadRejectsInvalidTelegramPolicy(t *testing.T) {
 	tests := map[string]string{
 		"private chats not required": strings.Replace(validYAML, "private_chat_only: true", "private_chat_only: false", 1),
@@ -77,6 +95,42 @@ func TestLoadRejectsUnsafeDeliveryRefs(t *testing.T) {
 		t.Run(ref, func(t *testing.T) {
 			yml := strings.Replace(validYAML, "allowed_ref: refs/heads/staging", "allowed_ref: "+ref, 1)
 			assertLoadError(t, yml, "allowed_ref")
+		})
+	}
+}
+
+func TestDeliveryRejectsInvalidGitBranchRefs(t *testing.T) {
+	refs := []string{
+		"refs/heads/",
+		"refs/heads//feature",
+		"refs/heads/feature/",
+		"refs/heads/.feature",
+		"refs/heads/feature/.hidden",
+		"refs/heads/feature.lock",
+		"refs/heads/feature.",
+		"refs/heads/feature branch",
+		"refs/heads/feature~1",
+		"refs/heads/feature^2",
+		"refs/heads/feature:one",
+		"refs/heads/feature?one",
+		"refs/heads/feature*one",
+		"refs/heads/feature[one",
+		`refs/heads/feature\one`,
+		"refs/heads/feature..one",
+		"refs/heads/feature@{one",
+		"refs/heads/feature\nnewline",
+		"refs/heads/feature\x01control",
+		"refs/heads/feature\x7fdelete",
+		"refs/tags/v1.0.0",
+		"feature",
+	}
+
+	for _, ref := range refs {
+		t.Run(strings.ReplaceAll(ref, "/", "_"), func(t *testing.T) {
+			err := (DeliveryPolicy{Enabled: true, AllowedRef: ref}).validate()
+			if err == nil {
+				t.Fatalf("delivery ref %q accepted, want rejection", ref)
+			}
 		})
 	}
 }

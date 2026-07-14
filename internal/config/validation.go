@@ -17,10 +17,15 @@ func (c Config) Validate() error {
 	if len(c.Server.AllowedTailscaleIdentities) == 0 {
 		return errors.New("server allowed_tailscale_identities must not be empty")
 	}
+	identities := make(map[string]struct{}, len(c.Server.AllowedTailscaleIdentities))
 	for _, identity := range c.Server.AllowedTailscaleIdentities {
-		if strings.TrimSpace(identity) == "" {
-			return errors.New("server allowed_tailscale_identities must not contain empty values")
+		if identity == "" || identity != strings.TrimSpace(identity) {
+			return errors.New("server allowed_tailscale_identities must contain trimmed, nonempty values")
 		}
+		if _, exists := identities[identity]; exists {
+			return errors.New("server allowed_tailscale_identities must not contain duplicates")
+		}
+		identities[identity] = struct{}{}
 	}
 	if err := c.Telegram.validate(); err != nil {
 		return err
@@ -163,6 +168,11 @@ func isHeadRef(ref string) bool {
 	branch := strings.TrimPrefix(ref, prefix)
 	if branch == ref || branch == "" || strings.HasSuffix(branch, "/") || strings.HasSuffix(branch, ".") {
 		return false
+	}
+	for i := 0; i < len(branch); i++ {
+		if branch[i] < 0x20 || branch[i] == 0x7f {
+			return false
+		}
 	}
 	if strings.Contains(branch, "..") || strings.Contains(branch, "//") || strings.Contains(branch, "@{") || strings.ContainsAny(branch, " ~^:?*[\\") {
 		return false

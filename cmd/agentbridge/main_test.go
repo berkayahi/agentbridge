@@ -52,6 +52,7 @@ func TestRunInvalidArguments(t *testing.T) {
 }
 
 func TestRunDoctorReportsOnlySafeSummary(t *testing.T) {
+	clearProviderAPIKeyEnvironment(t)
 	path := writeDoctorConfig(t, `server:
   listen: 127.0.0.1:8787
   allowed_tailscale_identities: [operator@example.invalid]
@@ -91,6 +92,7 @@ repositories:
 }
 
 func TestRunDoctorReturnsConciseValidationError(t *testing.T) {
+	clearProviderAPIKeyEnvironment(t)
 	path := writeDoctorConfig(t, "server: {listen: 0.0.0.0:8787}\n")
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"doctor", "--config", path}, &stdout, &stderr)
@@ -103,6 +105,13 @@ func TestRunDoctorReturnsConciseValidationError(t *testing.T) {
 	}
 	if got := stderr.String(); !strings.HasPrefix(got, "agentbridge: invalid configuration:") || strings.Contains(got, path) {
 		t.Fatalf("stderr = %q, want concise error without path", got)
+	}
+}
+
+func clearProviderAPIKeyEnvironment(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"} {
+		t.Setenv(name, "")
 	}
 }
 

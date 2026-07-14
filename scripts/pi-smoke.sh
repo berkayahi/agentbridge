@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PATH="$HOME/.local/bin:$PATH"
+export PATH
+
 config=${AGENTBRIDGE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/agentbridge/config.yaml}
 data_dir=${AGENTBRIDGE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/agentbridge}
 listen=${AGENTBRIDGE_LISTEN:-127.0.0.1:8787}

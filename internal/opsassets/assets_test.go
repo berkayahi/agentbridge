@@ -83,6 +83,13 @@ func TestInstallerUsesPathsReferencedByUnits(t *testing.T) {
 	}
 }
 
+func TestPiSmokeFindsPerUserInstalledCommands(t *testing.T) {
+	script := readAsset(t, "scripts/pi-smoke.sh")
+	if !strings.Contains(script, `PATH="$HOME/.local/bin:$PATH"`) {
+		t.Error("Pi smoke script must add the per-user install directory to PATH")
+	}
+}
+
 func TestAuthRecoveryIsInteractiveAndDashboardSupervised(t *testing.T) {
 	installer := readAsset(t, "deploy/install.sh")
 	credentialGuide := readAsset(t, "examples/credentials/README.md")

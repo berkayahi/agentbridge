@@ -10,7 +10,6 @@ EnvironmentFile=-%h/.config/agentbridge/backup.env
 ExecStart=%h/.local/lib/agentbridge/scripts/backup.sh
 NoNewPrivileges=true
 PrivateTmp=true
-PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 LockPersonality=true

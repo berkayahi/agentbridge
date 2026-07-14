@@ -50,6 +50,18 @@ func TestServiceIsHardenedAndRestartable(t *testing.T) {
 	}
 }
 
+func TestUserUnitsAvoidPrivateDevicesCapabilityFailure(t *testing.T) {
+	for _, asset := range []string{
+		"deploy/systemd/agentbridge.service",
+		"deploy/systemd/agentbridge-backup.service",
+	} {
+		unit := readAsset(t, asset)
+		if strings.Contains(unit, "PrivateDevices=true") {
+			t.Errorf("%s enables PrivateDevices, which fails with status 218/CAPABILITIES in an unprivileged systemd user manager", asset)
+		}
+	}
+}
+
 func TestInstallerUsesPathsReferencedByUnits(t *testing.T) {
 	installer := readAsset(t, "deploy/install.sh")
 	for _, fragment := range []string{

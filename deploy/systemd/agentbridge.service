@@ -21,7 +21,6 @@ TimeoutStopSec=45s
 KillMode=mixed
 NoNewPrivileges=true
 PrivateTmp=true
-PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=read-only
 ProtectControlGroups=true

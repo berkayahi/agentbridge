@@ -10,7 +10,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gofiber/fiber/v3 v3.4.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
-	golang.org/x/sys v0.46.0
+	golang.org/x/sys v0.47.0
 	modernc.org/sqlite v1.53.0
 )
 

@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/berkayahi/agentbridge/internal/telegram"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -22,6 +25,34 @@ func TestRunVersion(t *testing.T) {
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
 	}
+}
+
+func TestRunTelegramPairPrintsOnlyNumericIdentity(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runWithPairer([]string{"pair", "telegram", "--config", "config.yaml"}, &stdout, &stderr, fakePairer{})
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if got, want := stdout.String(), "telegram_user_id: 42\ntelegram_chat_id: 100\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if strings.Contains(stdout.String(), "username") || stderr.Len() != 0 {
+		t.Fatalf("unsafe output: %q %q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunTelegramPairDoesNotPretendTransportExists(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"pair", "telegram", "--config", "config.yaml"}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "transport is not configured") {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+type fakePairer struct{}
+
+func (fakePairer) Pair(context.Context) (telegram.Pairing, string, error) {
+	return telegram.Pairing{UserID: 42, ChatID: 100}, "not-printed", nil
 }
 
 func TestRunVersionReturnsFailureWhenOutputCannotBeWritten(t *testing.T) {
@@ -46,7 +77,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path>\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path>\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

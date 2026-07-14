@@ -6,7 +6,7 @@ func TestTransition(t *testing.T) {
 	valid := [][2]State{
 		{Queued, Preparing}, {Queued, Canceled}, {Queued, Paused},
 		{Preparing, Running}, {Preparing, Paused}, {Preparing, Failed}, {Preparing, Canceled},
-		{Running, AwaitingApproval}, {Running, AwaitingAuth}, {Running, Verifying}, {Running, Failed}, {Running, Canceled}, {Running, Paused},
+		{Running, AwaitingApproval}, {Running, AwaitingAuth}, {Running, Verifying}, {Running, Completed}, {Running, Failed}, {Running, Canceled}, {Running, Paused},
 		{AwaitingApproval, Running}, {AwaitingApproval, Failed}, {AwaitingApproval, Canceled}, {AwaitingApproval, Paused},
 		{AwaitingAuth, Running}, {AwaitingAuth, Paused}, {AwaitingAuth, Canceled},
 		{Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled}, {Verifying, Paused},

@@ -21,7 +21,7 @@ const (
 var transitions = map[State]map[State]struct{}{
 	Queued:           stateSet(Preparing, Canceled, Paused),
 	Preparing:        stateSet(Running, Paused, Failed, Canceled),
-	Running:          stateSet(AwaitingApproval, AwaitingAuth, Verifying, Failed, Canceled, Paused),
+	Running:          stateSet(AwaitingApproval, AwaitingAuth, Verifying, Completed, Failed, Canceled, Paused),
 	AwaitingApproval: stateSet(Running, Failed, Canceled, Paused),
 	AwaitingAuth:     stateSet(Running, Paused, Canceled),
 	Verifying:        stateSet(Committing, Failed, Canceled, Paused),

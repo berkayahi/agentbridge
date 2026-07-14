@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -110,6 +111,97 @@ func TestTransitionIsAtomic(t *testing.T) {
 	events, err := db.Events(ctx, "task-1")
 	if err != nil || len(events) != 2 {
 		t.Fatalf("events after rollback = %d, %v; want 2", len(events), err)
+	}
+}
+
+func TestTransitionPersistsLifecycleTimestamps(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t, filepath.Join(t.TempDir(), "lifecycle-times.db"))
+	t.Cleanup(func() { _ = db.Close() })
+	created := time.Date(2026, time.July, 14, 8, 0, 0, 0, time.UTC)
+	seedTask(t, db, newTask("task-1", task.Queued, created))
+
+	transitions := []struct {
+		to task.State
+		at time.Time
+	}{
+		{to: task.Preparing, at: created.Add(time.Minute)},
+		{to: task.Running, at: created.Add(2 * time.Minute)},
+		{to: task.Verifying, at: created.Add(3 * time.Minute)},
+		{to: task.Committing, at: created.Add(4 * time.Minute)},
+		{to: task.Pushing, at: created.Add(5 * time.Minute)},
+		{to: task.Completed, at: created.Add(6 * time.Minute)},
+	}
+	for index, transition := range transitions {
+		event := newEvent(fmt.Sprintf("transition-%d", index), "task-1", task.EventStateTransitioned, "", transition.at)
+		if err := db.Transition(ctx, "task-1", transition.to, event); err != nil {
+			t.Fatalf("Transition(%s): %v", transition.to, err)
+		}
+	}
+
+	got, err := db.Task(ctx, "task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StartedAt == nil || !got.StartedAt.Equal(created.Add(2*time.Minute)) {
+		t.Fatalf("StartedAt = %v, want running transition time", got.StartedAt)
+	}
+	if got.FinishedAt == nil || !got.FinishedAt.Equal(created.Add(6*time.Minute)) {
+		t.Fatalf("FinishedAt = %v, want completion transition time", got.FinishedAt)
+	}
+	if elapsed := got.Elapsed(created.Add(time.Hour)); elapsed != 4*time.Minute {
+		t.Fatalf("Elapsed() = %v, want 4m", elapsed)
+	}
+}
+
+func TestEventOrderingHandlesFractionalSeconds(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t, filepath.Join(t.TempDir(), "fractional-order.db"))
+	t.Cleanup(func() { _ = db.Close() })
+	base := time.Date(2026, time.July, 14, 8, 0, 0, 0, time.UTC)
+	value := newTask("task-1", task.Queued, base)
+	seedTask(t, db, value)
+	later := newEvent("later", value.ID, task.EventProviderMessage, "later", base.Add(100*time.Millisecond))
+	if err := db.AppendEvent(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := db.Events(ctx, value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0].CreatedAt.After(events[1].CreatedAt) {
+		t.Fatalf("Events() are not chronological: %#v", events)
+	}
+}
+
+func TestConcurrentTransitionReturnsStableConflict(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t, filepath.Join(t.TempDir(), "concurrent-transition.db"))
+	t.Cleanup(func() { _ = db.Close() })
+	created := time.Now().UTC()
+	seedTask(t, db, newTask("task-1", task.Queued, created))
+
+	start := make(chan struct{})
+	errorsCh := make(chan error, 2)
+	for i := range 2 {
+		go func(index int) {
+			<-start
+			event := newEvent(fmt.Sprintf("event-%d", index), "task-1", task.EventStateTransitioned, "", created.Add(time.Duration(index+1)*time.Nanosecond))
+			errorsCh <- db.Transition(ctx, "task-1", task.Preparing, event)
+		}(i)
+	}
+	close(start)
+	first, second := <-errorsCh, <-errorsCh
+	if first != nil && second != nil {
+		t.Fatalf("both transitions failed: %v, %v", first, second)
+	}
+	loser := first
+	if loser == nil {
+		loser = second
+	}
+	if !errors.Is(loser, store.ErrConflict) {
+		t.Fatalf("losing Transition() = %v, want ErrConflict", loser)
 	}
 }
 

@@ -97,20 +97,46 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin transition: %w", err)
+		return translateTransitionError("begin transition", err)
 	}
 	defer tx.Rollback()
 
 	var from task.State
 	if err := tx.QueryRowContext(ctx, "SELECT state FROM tasks WHERE id = ?", taskID).Scan(&from); err != nil {
+		if isBusy(err) {
+			return fmt.Errorf("load transition task: %w", store.ErrConflict)
+		}
 		return translateNotFound("load transition task", err)
+	}
+	if from == to {
+		return fmt.Errorf("task already in %s: %w", to, store.ErrConflict)
 	}
 	if !task.CanTransition(from, to) {
 		return fmt.Errorf("transition %s to %s: %w", from, to, store.ErrInvalidTransition)
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE tasks SET state = ?, updated_at = ? WHERE id = ? AND state = ?", to, timestamp(event.CreatedAt), taskID, from)
+	at := timestamp(event.CreatedAt)
+	result, err := tx.ExecContext(ctx, `
+		UPDATE tasks SET
+			state = ?,
+			updated_at = ?,
+			started_at = CASE
+				WHEN ? = ? AND started_at IS NULL THEN ?
+				WHEN ? = ? THEN NULL
+				ELSE started_at
+			END,
+			finished_at = CASE
+				WHEN ? = ? THEN NULL
+				WHEN ? IN (?, ?, ?) THEN ?
+				ELSE finished_at
+			END
+		WHERE id = ? AND state = ?`,
+		to, at,
+		to, task.Running, at, to, task.Queued,
+		to, task.Queued, to, task.Completed, task.Failed, task.Canceled, at,
+		taskID, from,
+	)
 	if err != nil {
-		return fmt.Errorf("update task state: %w", err)
+		return translateTransitionError("update task state", err)
 	}
 	changed, err := result.RowsAffected()
 	if err != nil {
@@ -123,7 +149,7 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 		return translateEventError(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transition: %w", err)
+		return translateTransitionError("commit transition", err)
 	}
 	return nil
 }
@@ -277,7 +303,9 @@ func (s *Store) Events(ctx context.Context, taskID string) ([]task.Event, error)
 
 func placeholders(count int) string { return strings.TrimSuffix(strings.Repeat("?,", count), ",") }
 
-func timestamp(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+const timestampLayout = "2006-01-02T15:04:05.000000000Z"
+
+func timestamp(value time.Time) string { return value.UTC().Format(timestampLayout) }
 
 func nullableTimestamp(value *time.Time) any {
 	if value == nil {
@@ -324,4 +352,18 @@ func translateEventError(err error) error {
 		return fmt.Errorf("append event: %w", store.ErrDuplicateEvent)
 	}
 	return fmt.Errorf("append event: %w", err)
+}
+
+func translateTransitionError(action string, err error) error {
+	if isBusy(err) {
+		return fmt.Errorf("%s: %w", action, store.ErrConflict)
+	}
+	return fmt.Errorf("%s: %w", action, err)
+}
+
+func isBusy(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "sqlite_busy") ||
+		strings.Contains(message, "busy_snapshot")
 }

@@ -1,0 +1,44 @@
+# Editors and local tooling
+.idea/
+.vscode/
+.superpowers/
+.worktrees/
+
+# Build outputs
+/agentbridge
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Runtime data
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.envrc
+*.credential
+*.credentials
+*.key
+*.pem
+*.secret
+*.token
+credentials/
+secrets/
+
+# Task worktrees
+.task-worktrees/
+task-worktrees/

@@ -665,7 +665,7 @@ func agentContext(value task.Task, workspacePath, prompt string) string {
 	return fmt.Sprintf(`AgentBridge operating context:
 - You are the %s coding agent operating inside repository profile %q.
 - Current isolated workspace: %s
-- The default repository is ceptemenu, but the operator may explicitly request another configured repository; follow the selected repository profile.
+- Use the configured default repository unless the operator explicitly requests another configured repository; always follow the selected repository profile.
 - First inspect the repository's AGENTS.md, CLAUDE.md, README, and existing conventions before changing code.
 - Use the existing installed skills/workflows when they match the task. If no suitable skill exists, explicitly tell the operator before proceeding and then use the safest documented fallback.
 - Report what you are doing, keep changes scoped to the selected workspace, run relevant verification, and never invent successful results.

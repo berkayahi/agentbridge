@@ -22,6 +22,7 @@ const (
 	EventApprovalResolved  EventType = "approval_resolved"
 	EventAuthRequired      EventType = "auth_required"
 	EventAttachmentAdded   EventType = "attachment_added"
+	EventDiffSummary       EventType = "diff_summary"
 	EventVerification      EventType = "verification"
 	EventCommitCreated     EventType = "commit_created"
 	EventPushCompleted     EventType = "push_completed"

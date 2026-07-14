@@ -69,6 +69,52 @@ func TestTimestampMigrationRejectsNonUTCDataTransactionally(t *testing.T) {
 	}
 }
 
+func TestMigrationAdoptsLegacyAttachmentChecksumSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-checksum.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := migrations.ReadFile("migrations/001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(initial)); err != nil {
+		t.Fatalf("apply initial schema: %v", err)
+	}
+	if _, err := db.Exec(`
+		ALTER TABLE attachments ADD COLUMN sha256 TEXT NOT NULL DEFAULT '';
+		CREATE UNIQUE INDEX attachments_task_sha256_idx
+			ON attachments(task_id, sha256) WHERE sha256 <> '';
+		CREATE TABLE schema_migrations (
+			version INTEGER PRIMARY KEY,
+			name TEXT NOT NULL,
+			applied_at TEXT NOT NULL
+		);
+		INSERT INTO schema_migrations(version, name, applied_at)
+		VALUES (1, '001_initial.sql', '2026-07-14T08:00:00.000000000Z');
+	`); err != nil {
+		t.Fatalf("seed legacy checksum schema: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(legacy checksum schema): %v", err)
+	}
+	defer store.Close()
+	var name string
+	if err := store.db.QueryRow("SELECT name FROM schema_migrations WHERE version = 3").Scan(&name); err != nil {
+		t.Fatalf("read adopted migration: %v", err)
+	}
+	if name != "003_attachment_sha256.sql" {
+		t.Fatalf("adopted migration name = %q", name)
+	}
+}
+
 func seedLegacyDatabase(t *testing.T, path string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)
@@ -106,8 +152,8 @@ func assertTimestampMigration(t *testing.T, db *Store) {
 	if err := db.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {
 		t.Fatalf("read schema migrations: %v", err)
 	}
-	if versions != 2 {
-		t.Fatalf("schema migration count = %d, want 2", versions)
+	if versions != 3 {
+		t.Fatalf("schema migration count = %d, want 3", versions)
 	}
 	wantValues := map[string]string{
 		"task created":    "2026-07-14T08:00:00.000000000Z",

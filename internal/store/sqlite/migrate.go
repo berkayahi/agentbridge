@@ -43,6 +43,18 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if applied[next.version] {
 			continue
 		}
+		if next.version == 3 && next.name == "003_attachment_sha256.sql" {
+			hasChecksum, err := attachmentChecksumExists(ctx, db)
+			if err != nil {
+				return err
+			}
+			if hasChecksum {
+				if err := adoptAttachmentChecksumMigration(ctx, db, next); err != nil {
+					return err
+				}
+				continue
+			}
+		}
 		if err := applyMigration(ctx, db, next); err != nil {
 			return err
 		}
@@ -121,18 +133,28 @@ func applyMigration(ctx context.Context, db *sql.DB, next migration) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %s: %w", next.name, err)
 	}
-	hasChecksum, err := attachmentChecksumExists(ctx, db)
+	return nil
+}
+
+func adoptAttachmentChecksumMigration(ctx context.Context, db *sql.DB, next migration) error {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("begin migration adoption %s: %w", next.name, err)
 	}
-	if !hasChecksum {
-		checksum, err := migrations.ReadFile("migrations/002_attachment_sha256.sql")
-		if err != nil {
-			return fmt.Errorf("read attachment checksum migration: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, string(checksum)); err != nil {
-			return fmt.Errorf("apply attachment checksum migration: %w", err)
-		}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE UNIQUE INDEX IF NOT EXISTS attachments_task_sha256_idx
+		ON attachments(task_id, sha256) WHERE sha256 <> ''`); err != nil {
+		return fmt.Errorf("repair adopted migration %s: %w", next.name, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		"INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+		next.version, next.name, timestamp(time.Now()),
+	); err != nil {
+		return fmt.Errorf("record adopted migration %s: %w", next.name, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit adopted migration %s: %w", next.name, err)
 	}
 	return nil
 }

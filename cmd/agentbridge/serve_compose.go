@@ -123,7 +123,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		_ = data.Close()
 		return nil, cause
 	}
-	client, err := telegram.NewClient(credential.Value(), telegram.ClientOptions{ForceIPv4: cfg.Telegram.ForceIPv4})
+	client, err := telegram.NewClient(credential.Value(), telegram.ClientOptions{ForceIPv4: true})
 	if err != nil {
 		return fail(err)
 	}

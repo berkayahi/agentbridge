@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"path"
 	"strings"
@@ -53,6 +54,7 @@ type Messenger interface {
 type ClientOptions struct {
 	ServerURL      string
 	HTTPClient     telebot.HttpClient
+	ForceIPv4      bool
 	RetryAttempts  int
 	PollTimeout    time.Duration
 	ReplayCapacity int
@@ -98,7 +100,14 @@ func NewClient(token string, opts ClientOptions) (*Client, error) {
 	}
 	raw := make(chan Update, opts.ReplayCapacity)
 	if opts.HTTPClient == nil {
-		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout}
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if opts.ForceIPv4 {
+			dialer := &net.Dialer{Timeout: opts.PollTimeout}
+			transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+				return dialer.DialContext(ctx, "tcp4", address)
+			}
+		}
+		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout, Transport: transport}
 	}
 	options := []telebot.Option{
 		telebot.WithSkipGetMe(),

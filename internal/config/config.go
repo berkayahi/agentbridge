@@ -28,6 +28,7 @@ type TelegramConfig struct {
 	PrivateChatOnly bool    `yaml:"private_chat_only"`
 	AllowedUserIDs  []int64 `yaml:"allowed_user_ids"`
 	PairedChatID    int64   `yaml:"paired_chat_id"`
+	ForceIPv4       bool    `yaml:"force_ipv4"`
 }
 
 type ProviderConfig struct {

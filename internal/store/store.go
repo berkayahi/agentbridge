@@ -43,6 +43,8 @@ type Store interface {
 	ResumableSessions(context.Context) ([]task.Session, error)
 	UpsertApproval(context.Context, task.Approval) error
 	PendingApprovals(context.Context) ([]task.Approval, error)
+	UpsertAuthIncident(context.Context, task.AuthIncident) error
+	OpenAuthIncident(context.Context, task.Provider) (task.AuthIncident, error)
 	AcquireLease(context.Context, string, string, time.Duration) (bool, error)
 	HeartbeatLease(context.Context, string, string, time.Duration) error
 	ReleaseLease(context.Context, string, string) error

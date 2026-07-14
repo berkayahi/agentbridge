@@ -87,6 +87,16 @@ type Approval struct {
 	ResolvedAt      *time.Time
 }
 
+// AuthIncident is the durable, secret-free authentication incident record.
+type AuthIncident struct {
+	ID         string
+	Provider   Provider
+	Status     string
+	Detail     json.RawMessage
+	DetectedAt time.Time
+	ResolvedAt *time.Time
+}
+
 // Title normalizes whitespace and deterministically truncates text by Unicode runes.
 func Title(text string, maxRunes int) string {
 	if maxRunes <= 0 {

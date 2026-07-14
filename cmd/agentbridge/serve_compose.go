@@ -667,6 +667,17 @@ type deliveryAdapter struct {
 	git      bridgegit.Runner
 }
 
+func (d *deliveryAdapter) Changed(ctx context.Context, value task.Task, workspace bridgeapp.Workspace) (bool, error) {
+	if _, ok := d.config[value.RepoProfileID]; !ok {
+		return false, bridgegit.ErrInvalidProfile
+	}
+	result, err := d.git.Run(ctx, workspace.Path, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		return false, err
+	}
+	return result.Stdout != "", nil
+}
+
 func (d *deliveryAdapter) Verify(ctx context.Context, value task.Task, workspace bridgeapp.Workspace) error {
 	profile, ok := d.config[value.RepoProfileID]
 	if !ok {

@@ -425,6 +425,10 @@ type fakeDelivery struct {
 	verifyErr error
 }
 
+func (f *fakeDelivery) Changed(context.Context, task.Task, Workspace) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeDelivery) Verify(context.Context, task.Task, Workspace) error {
 	f.record("verify")
 	return f.verifyErr

@@ -67,6 +67,7 @@ type WorkspacePort interface {
 	Inspect(context.Context, task.Task) (WorkspaceInspection, error)
 }
 type DeliveryPort interface {
+	Changed(context.Context, task.Task, Workspace) (bool, error)
 	Verify(context.Context, task.Task, Workspace) error
 	Commit(context.Context, task.Task, Workspace) (string, error)
 	Push(context.Context, task.Task, Workspace, string) (string, error)
@@ -783,6 +784,15 @@ func (a *App) expireApproval(ctx context.Context, value task.Task, observed prov
 }
 
 func (a *App) deliver(ctx context.Context, value task.Task, workspace Workspace) {
+	changed, err := a.deps.Delivery.Changed(ctx, value, workspace)
+	if err != nil {
+		a.executionFailure(ctx, value, err)
+		return
+	}
+	if !changed {
+		a.transition(ctx, &value, task.Completed, "provider completed without repository changes")
+		return
+	}
 	if value.State == task.Running && !a.transition(ctx, &value, task.Verifying, "running configured verification") {
 		return
 	}

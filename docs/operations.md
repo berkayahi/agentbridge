@@ -39,6 +39,20 @@ must be mode `0700`. Pair one numeric Telegram user in a private chat. Log out
 from any provider API-key authentication before starting; only official
 subscription CLI sessions owned by each provider are supported.
 
+Before filling the final numeric IDs in the private configuration, run the
+one-time pairing flow against the same credential directory:
+
+```sh
+CREDENTIALS_DIRECTORY="$HOME/.config/agentbridge/credentials" \
+  "$HOME/.local/bin/agentbridge" pair telegram \
+  --config "$HOME/.config/agentbridge/config.yaml"
+```
+
+The command prints a short-lived `/pair <nonce>` instruction first. Send it to
+the bot in a private Telegram chat; the command then prints only
+`telegram_user_id` and `telegram_chat_id`. Put those numeric values in
+`allowed_user_ids` and `paired_chat_id`, then run `agentbridge doctor` again.
+
 Use `loginctl enable-linger "$USER"` only if the service must survive logout.
 Review that choice against the security policy of the host.
 

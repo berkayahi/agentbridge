@@ -20,8 +20,13 @@ import (
 	"github.com/berkayahi/agentbridge/internal/telegram"
 )
 
+type pairAttempt interface {
+	Nonce() string
+	Wait(context.Context) (telegram.Pairing, error)
+}
+
 type pairer interface {
-	Pair(context.Context) (telegram.Pairing, string, error)
+	Begin() (pairAttempt, error)
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -35,6 +40,7 @@ func runWithPairer(args []string, stdout, stderr io.Writer, pairing pairer) int 
 type commandDeps struct {
 	getenv         func(string) string
 	readCapability func() ([]byte, error)
+	newPairer      func(context.Context, string) (pairer, error)
 	runMCP         func(context.Context, mcpserver.RunOptions) error
 	runStatusline  func(context.Context, io.Reader, claude.StatuslineCaller, claude.StatuslineScope, func() time.Time) error
 	runServe       func(context.Context, string) error
@@ -42,7 +48,8 @@ type commandDeps struct {
 
 func defaultCommandDeps() commandDeps {
 	return commandDeps{
-		getenv: os.Getenv,
+		getenv:    os.Getenv,
+		newPairer: newTelegramPairer,
 		readCapability: func() ([]byte, error) {
 			fd := 3
 			if value := os.Getenv("AGENTBRIDGE_CAPABILITY_FD"); value != "" {
@@ -77,10 +84,27 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	}
 	if len(args) == 4 && args[0] == "pair" && args[1] == "telegram" && args[2] == "--config" && strings.TrimSpace(args[3]) != "" {
 		if pairing == nil {
-			fmt.Fprintln(stderr, "agentbridge: Telegram transport is not configured; install the live adapter first")
+			if deps.newPairer == nil {
+				fmt.Fprintln(stderr, "agentbridge: Telegram pairing unavailable")
+				return 1
+			}
+			var err error
+			pairing, err = deps.newPairer(ctx, args[3])
+			if err != nil {
+				fmt.Fprintln(stderr, "agentbridge: Telegram pairing unavailable")
+				return 1
+			}
+		}
+		attempt, err := pairing.Begin()
+		if err != nil {
+			fmt.Fprintln(stderr, "agentbridge: Telegram pairing failed")
 			return 1
 		}
-		result, _, err := pairing.Pair(context.Background())
+		if _, err := fmt.Fprintf(stdout, "send_to_bot: /pair %s\n", attempt.Nonce()); err != nil {
+			fmt.Fprintln(stderr, "agentbridge: failed to write pairing instruction")
+			return 1
+		}
+		result, err := attempt.Wait(ctx)
 		if err != nil {
 			fmt.Fprintln(stderr, "agentbridge: Telegram pairing failed")
 			return 1

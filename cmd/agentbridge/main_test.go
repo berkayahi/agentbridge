@@ -31,13 +31,13 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestRunTelegramPairPrintsOnlyNumericIdentity(t *testing.T) {
+func TestRunTelegramPairPrintsNonceBeforeNumericIdentity(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runWithPairer([]string{"pair", "telegram", "--config", "config.yaml"}, &stdout, &stderr, fakePairer{})
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
-	if got, want := stdout.String(), "telegram_user_id: 42\ntelegram_chat_id: 100\n"; got != want {
+	if got, want := stdout.String(), "send_to_bot: /pair not-printed\ntelegram_user_id: 42\ntelegram_chat_id: 100\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if strings.Contains(stdout.String(), "username") || stderr.Len() != 0 {
@@ -45,18 +45,26 @@ func TestRunTelegramPairPrintsOnlyNumericIdentity(t *testing.T) {
 	}
 }
 
-func TestRunTelegramPairDoesNotPretendTransportExists(t *testing.T) {
+func TestRunTelegramPairUsesProductionFactoryAndReportsUnavailableCredential(t *testing.T) {
+	t.Setenv("CREDENTIALS_DIRECTORY", "")
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"pair", "telegram", "--config", "config.yaml"}, &stdout, &stderr)
-	if code != 1 || !strings.Contains(stderr.String(), "transport is not configured") {
+	if code != 1 || stderr.String() != "agentbridge: Telegram pairing unavailable\n" {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
 }
 
 type fakePairer struct{}
 
-func (fakePairer) Pair(context.Context) (telegram.Pairing, string, error) {
-	return telegram.Pairing{UserID: 42, ChatID: 100}, "not-printed", nil
+func (fakePairer) Begin() (pairAttempt, error) {
+	return fakePairAttempt{}, nil
+}
+
+type fakePairAttempt struct{}
+
+func (fakePairAttempt) Nonce() string { return "not-printed" }
+func (fakePairAttempt) Wait(context.Context) (telegram.Pairing, error) {
+	return telegram.Pairing{UserID: 42, ChatID: 100}, nil
 }
 
 func TestRunClaudeStatuslineUsesControlScope(t *testing.T) {

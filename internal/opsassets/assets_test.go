@@ -39,12 +39,14 @@ func TestServiceIsHardenedAndRestartable(t *testing.T) {
 		"ExecStartPre=%h/.local/bin/agentbridge doctor --config %h/.config/agentbridge/config.yaml",
 		"AGENTBRIDGE_LISTEN=127.0.0.1:8787",
 		"LoadCredential=telegram_bot_token:",
-		"LoadCredential=claude_oauth_token:",
 	}
 	for _, property := range required {
 		if !strings.Contains(service, property) {
 			t.Errorf("service is missing %q", property)
 		}
+	}
+	if strings.Contains(service, "claude_oauth_token") {
+		t.Error("Claude subscription sessions must remain owned by Claude Code")
 	}
 }
 
@@ -60,6 +62,34 @@ func TestInstallerUsesPathsReferencedByUnits(t *testing.T) {
 		if !strings.Contains(installer, fragment) {
 			t.Errorf("installer does not provision unit path %q", fragment)
 		}
+	}
+}
+
+func TestAuthRecoveryIsInteractiveAndDashboardSupervised(t *testing.T) {
+	installer := readAsset(t, "deploy/install.sh")
+	credentialGuide := readAsset(t, "examples/credentials/README.md")
+	for name, contents := range map[string]string{
+		"installer":        installer,
+		"credential guide": credentialGuide,
+	} {
+		if strings.Contains(contents, "claude_oauth_token") {
+			t.Errorf("%s must not copy Claude subscription sessions into AgentBridge credentials", name)
+		}
+	}
+
+	guide := readAsset(t, "docs/auth-recovery.md")
+	for _, fragment := range []string{
+		"Tailscale-only dashboard",
+		"codex login --device-auth",
+		"claude auth login --claudeai",
+		"CLI owns",
+	} {
+		if !strings.Contains(guide, fragment) {
+			t.Errorf("auth recovery guide is missing %q", fragment)
+		}
+	}
+	if strings.Contains(guide, "setup-token") || strings.Contains(guide, "claude_oauth_token") {
+		t.Error("auth recovery guide must not transfer setup tokens into AgentBridge")
 	}
 }
 

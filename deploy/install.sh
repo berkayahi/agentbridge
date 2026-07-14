@@ -31,7 +31,7 @@ install -m 0644 "$script_dir/systemd/agentbridge.service" "$unit_dir/agentbridge
 install -m 0644 "$script_dir/systemd/agentbridge-backup.service" "$unit_dir/agentbridge-backup.service"
 install -m 0644 "$script_dir/systemd/agentbridge-backup.timer" "$unit_dir/agentbridge-backup.timer"
 
-for credential in telegram_bot_token claude_oauth_token; do
+for credential in telegram_bot_token; do
   if [[ ! -e "$config_dir/credentials/$credential" ]]; then
     install -m 0600 /dev/null "$config_dir/credentials/$credential"
   fi

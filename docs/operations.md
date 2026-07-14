@@ -33,11 +33,11 @@ $HOME/.local/bin/agentbridge doctor --config $HOME/.config/agentbridge/config.ya
 systemctl --user enable --now agentbridge.service agentbridge-backup.timer
 ```
 
-Populate systemd credential source files without exposing their contents in
-shell history. Each file must be mode `0600`; its parent directory must be mode
-`0700`. Pair one numeric Telegram user in a private chat. Log out from any
-provider API-key authentication before starting; only official subscription
-CLI sessions are supported.
+Populate the Telegram bot systemd credential source without exposing its
+contents in shell history. The file must be mode `0600`; its parent directory
+must be mode `0700`. Pair one numeric Telegram user in a private chat. Log out
+from any provider API-key authentication before starting; only official
+subscription CLI sessions owned by each provider are supported.
 
 Use `loginctl enable-linger "$USER"` only if the service must survive logout.
 Review that choice against the security policy of the host.

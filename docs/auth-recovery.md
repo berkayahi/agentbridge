@@ -1,40 +1,63 @@
-# Subscription Authentication Recovery
+# Interactive Subscription Authentication Recovery
 
-Authentication recovery is a privileged operation. Perform it from the private
-dashboard over the tailnet or an authenticated shell. Never send device codes,
-OAuth tokens, login URLs containing secrets, or credential files through
-Telegram.
+Authentication recovery is a privileged, interactive operation. Use the
+Tailscale-only dashboard from an allowed device. Never send device codes,
+login URLs containing secrets, CLI session files, or other authentication
+material through Telegram.
 
-## Detection
+## Dashboard-supervised recovery
 
-An authentication failure pauses affected work, records a redacted incident,
-and leaves repository delivery disabled. Confirm the provider named by the
-incident and inspect its official CLI status command. Do not repeatedly restart
-the bridge; restart loops do not repair expired sessions.
+When a provider reports expired authentication, AgentBridge pauses affected
+tasks and records a redacted incident. The daemon remains running so the
+dashboard can supervise recovery while unrelated healthy work remains visible.
 
-## Codex CLI
+1. Open the private dashboard over Tailscale and inspect the provider incident.
+2. Start recovery for only the affected provider.
+3. AgentBridge launches the official login command in a supervised local
+   session and streams only safe, observable status to the dashboard.
+4. Complete the provider's interactive authorization on the allowed device.
+5. Confirm the official CLI status, close the incident, and explicitly resume
+   the intended paused task.
 
-1. Pause or cancel active Codex tasks.
-2. Stop the AgentBridge service.
-3. Use the official Codex device-login flow as the service account.
-4. Confirm the CLI reports a valid ChatGPT subscription session.
-5. Run `agentbridge doctor`, restart the service, and resume only the intended task.
+Each CLI owns and persists its subscription session files. AgentBridge does
+not copy provider sessions into its configuration, database, systemd
+credentials, Telegram messages, logs, or backups.
 
-Codex owns its session files. Do not copy them into AgentBridge configuration,
-Telegram, logs, or backups.
+### Codex CLI
 
-## Claude Code
+The supervised recovery command is:
 
-1. Pause or cancel active Claude tasks and stop the service.
-2. Use Claude Code's official subscription setup-token flow as the service account.
-3. Transfer the resulting subscription credential directly into the
-   `claude_oauth_token` systemd credential source with mode `0600`.
-4. Confirm official CLI authentication status without a model turn.
-5. Run `agentbridge doctor`, restart, and resume the intended task.
+```sh
+codex login --device-auth
+```
+
+Complete the device authorization in the browser, then confirm the CLI reports
+a valid ChatGPT subscription session. A successful login does not automatically
+resume or deliver any paused repository task.
+
+### Claude Code
+
+The supervised recovery command is:
+
+```sh
+claude auth login --claudeai
+```
+
+Complete the Claude subscription authorization in the browser, then confirm
+the official CLI authentication status. A successful login does not
+automatically resume or deliver any paused repository task.
+
+## Authenticated-shell fallback
+
+If the private dashboard is unavailable, connect to the service account over
+the tailnet. Pause active work and stop AgentBridge only if necessary to avoid
+a conflicting provider session. Run the same official login command directly
+as the service account, verify CLI status, restart the daemon if it was stopped,
+and run the smoke checks. Do not copy session files or tokens into AgentBridge.
 
 ## Verification
 
-After either recovery, confirm that the dashboard is still loopback-only, the
-Telegram identity allowlist is unchanged, no provider API-key credentials are
-present, and a usage/status command succeeds without a model turn. Record the
-time and provider version, but never credential contents.
+Confirm that the dashboard remains loopback-only, the Tailscale identity policy
+and Telegram numeric allowlist are unchanged, no provider API-key credentials
+are present, and a provider usage/status command succeeds without a model turn.
+Record the recovery time and provider version, never authentication material.

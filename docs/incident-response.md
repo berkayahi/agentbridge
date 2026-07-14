@@ -29,7 +29,8 @@ survived service shutdown.
 
 ## Recovery
 
-Rotate compromised credentials directly into systemd credential sources,
+Rotate a compromised Telegram bot credential directly into its systemd
+credential source. Recover provider authentication through each official CLI,
 verify subscription CLI status, restore a checked database only when needed,
 and run `agentbridge doctor` plus the smoke script. Re-enable repository write
 access last. Resume tasks one at a time and require normal verification before

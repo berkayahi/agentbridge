@@ -64,6 +64,28 @@ func TestProviderAuthFailureAwaitsRecovery(t *testing.T) {
 	}
 }
 
+func TestProviderFailureNotifiesTelegram(t *testing.T) {
+	fixture := newFixture(t, []provider.Event{{ID: provider.MustID("failure"), Type: provider.EventError, Message: "provider failed"}})
+	fixture.start(t)
+	id, err := fixture.app.HandleUpdate(context.Background(), promptUpdate(22, "/codex run the task"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.wait(t, id); got.State != task.Failed {
+		t.Fatalf("state = %s", got.State)
+	}
+	var found bool
+	for _, message := range fixture.messenger.messages() {
+		if strings.Contains(message.Text, "Task failed") && strings.Contains(message.Text, id) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Telegram messages = %#v", fixture.messenger.messages())
+	}
+}
+
 func TestApprovalRejectionFailsWithoutDelivery(t *testing.T) {
 	fixture := newFixture(t, []provider.Event{
 		{ID: provider.MustID("approval"), Type: provider.EventApprovalRequired, Message: "push requested"},

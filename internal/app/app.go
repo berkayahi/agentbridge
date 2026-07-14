@@ -1013,6 +1013,10 @@ func (a *App) fail(value task.Task, cause error) {
 		value.State = task.Failed
 		_ = a.project(ctx, value, reason, true)
 	}
+	notification := fmt.Sprintf("Task failed: %s\nTitle: %s\nReason: %s\nUse /logs %s for redacted details.", value.ID, value.Title, reason, value.ID)
+	if _, err := a.deps.Messenger.Send(ctx, telegram.Message{ChatID: value.TelegramChatID, Text: notification}); err != nil {
+		a.deps.Logger.Warn("failed to notify Telegram about task failure", "task", value.ID, "error_type", fmt.Sprintf("%T", err))
+	}
 	a.deps.Logger.Error("task failed", "task", value.ID, "error_type", fmt.Sprintf("%T", cause))
 }
 

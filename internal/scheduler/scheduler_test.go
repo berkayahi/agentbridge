@@ -89,6 +89,44 @@ func TestSchedulerRecoversPersistedStaleLease(t *testing.T) {
 	}
 	permit.Release()
 }
+
+type delayedLeases struct {
+	entered  chan struct{}
+	unblock  chan struct{}
+	released chan struct{}
+}
+
+func (d *delayedLeases) AcquireLease(context.Context, string, string, time.Duration) (bool, error) {
+	close(d.entered)
+	<-d.unblock
+	return true, nil
+}
+func (*delayedLeases) HeartbeatLease(context.Context, string, string, time.Duration) error {
+	return nil
+}
+func (d *delayedLeases) ReleaseLease(context.Context, string, string) error {
+	close(d.released)
+	return nil
+}
+func TestSchedulerDoesNotLeakLeaseWhenAcquireIsCanceled(t *testing.T) {
+	leases := &delayedLeases{entered: make(chan struct{}), unblock: make(chan struct{}), released: make(chan struct{})}
+	s := New(leases, "owner", time.Minute, time.Hour)
+	defer s.Close(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { _, err := s.Acquire(ctx, Request{TaskID: "task", Repository: "repo"}); result <- err }()
+	<-leases.entered
+	cancel()
+	close(leases.unblock)
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	select {
+	case <-leases.released:
+	case <-time.After(time.Second):
+		t.Fatal("canceled acquisition leaked durable lease")
+	}
+}
 func (m *memoryLeases) ReleaseLease(_ context.Context, repo, owner string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -94,9 +94,11 @@ func (s *Scheduler) Acquire(ctx context.Context, req Request) (*Permit, error) {
 	}
 	select {
 	case result := <-reply:
+		if err := ctx.Err(); err != nil && result.permit != nil {
+			result.permit.Release()
+			return nil, err
+		}
 		return result.permit, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
 	case <-s.done:
 		return nil, ErrClosed
 	}
@@ -144,6 +146,7 @@ func (s *Scheduler) run() {
 				next := queue[0]
 				queue = queue[1:]
 				if next.ctx.Err() != nil {
+					next.reply <- acquireReply{err: next.ctx.Err()}
 					continue
 				}
 				s.grant(next, func(repo string, permit *Permit) { active[repo] = activeLease{permit: permit, heartbeat: true} })
@@ -192,6 +195,11 @@ func (s *Scheduler) grant(request acquireRequest, activate func(string, *Permit)
 	}
 	if !ok {
 		request.reply <- acquireReply{err: errors.New("scheduler: repository lease unavailable")}
+		return
+	}
+	if err := request.ctx.Err(); err != nil {
+		_ = s.store.ReleaseLease(context.Background(), repo, s.owner)
+		request.reply <- acquireReply{err: err}
 		return
 	}
 	permit := &Permit{lost: make(chan struct{})}

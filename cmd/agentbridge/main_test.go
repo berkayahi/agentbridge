@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/berkayahi/agentbridge/internal/mcpserver"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -21,6 +24,32 @@ func TestRunVersion(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunMCPUsesInjectedIOAndProtectedEnvironment(t *testing.T) {
+	var got mcpserver.RunOptions
+	deps := commandDeps{
+		getenv: func(name string) string {
+			return map[string]string{
+				"AGENTBRIDGE_CONTROL_SOCKET": "/run/user/1000/agentbridge/control.sock",
+				"AGENTBRIDGE_TASK_ID":        "task-1",
+				"AGENTBRIDGE_PROVIDER":       "claude",
+			}[name]
+		},
+		readCapability: func() ([]byte, error) { return []byte("capability"), nil },
+		runMCP: func(_ context.Context, options mcpserver.RunOptions) error {
+			got = options
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"mcp"}, strings.NewReader(""), &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if got.Scope.TaskID != "task-1" || got.Scope.Provider != "claude" || string(got.Scope.Capability) != "capability" {
+		t.Fatalf("scope = %#v", got.Scope)
 	}
 }
 
@@ -46,7 +75,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path>\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge mcp\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

@@ -244,7 +244,7 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 	if err := db.UpsertApproval(ctx, approval); err != nil {
 		t.Fatalf("UpsertApproval(): %v", err)
 	}
-	attachment := task.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, CreatedAt: now}
+	attachment := task.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, SHA256: "abc123", CreatedAt: now}
 	if err := db.SaveAttachment(ctx, attachment); err != nil {
 		t.Fatalf("SaveAttachment(): %v", err)
 	}
@@ -262,7 +262,7 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 		t.Fatalf("PendingApprovals() = %#v, %v", pending, err)
 	}
 	attachments, err := db.Attachments(ctx, "active")
-	if err != nil || len(attachments) != 1 || attachments[0].Name != attachment.Name {
+	if err != nil || len(attachments) != 1 || attachments[0].Name != attachment.Name || attachments[0].SHA256 != attachment.SHA256 {
 		t.Fatalf("Attachments() = %#v, %v", attachments, err)
 	}
 }
@@ -319,6 +319,53 @@ func TestErrorsFiltersAndCanceledContext(t *testing.T) {
 	cancel()
 	if _, err := db.Task(canceled, "one"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Task(canceled) = %v, want context.Canceled", err)
+	}
+}
+
+func TestOpenUpgradesLegacyAttachmentChecksumSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, storage_path TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := storesqlite.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrade legacy schema: %v", err)
+	}
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	rows, err := check.Query(`PRAGMA table_info(attachments)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "sha256" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("sha256 column was not migrated")
 	}
 }
 

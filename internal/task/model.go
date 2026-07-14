@@ -50,6 +50,7 @@ type Attachment struct {
 	MediaType   string
 	StoragePath string
 	SizeBytes   int64
+	SHA256      string
 	CreatedAt   time.Time
 }
 

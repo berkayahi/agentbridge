@@ -10,9 +10,9 @@ import (
 
 func (s *Store) SaveAttachment(ctx context.Context, value task.Attachment) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO attachments (id, task_id, kind, name, media_type, storage_path, size_bytes, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		value.ID, value.TaskID, value.Kind, value.Name, value.MediaType, value.StoragePath, value.SizeBytes, timestamp(value.CreatedAt),
+		INSERT INTO attachments (id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		value.ID, value.TaskID, value.Kind, value.Name, value.MediaType, value.StoragePath, value.SizeBytes, value.SHA256, timestamp(value.CreatedAt),
 	)
 	if err != nil {
 		return fmt.Errorf("save attachment: %w", err)
@@ -22,7 +22,7 @@ func (s *Store) SaveAttachment(ctx context.Context, value task.Attachment) error
 
 func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachment, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, task_id, kind, name, media_type, storage_path, size_bytes, created_at
+		SELECT id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at
 		FROM attachments WHERE task_id = ? ORDER BY created_at, id`, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("query attachments: %w", err)
@@ -32,7 +32,7 @@ func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachme
 	for rows.Next() {
 		var value task.Attachment
 		var created string
-		if err := rows.Scan(&value.ID, &value.TaskID, &value.Kind, &value.Name, &value.MediaType, &value.StoragePath, &value.SizeBytes, &created); err != nil {
+		if err := rows.Scan(&value.ID, &value.TaskID, &value.Kind, &value.Name, &value.MediaType, &value.StoragePath, &value.SizeBytes, &value.SHA256, &created); err != nil {
 			return nil, fmt.Errorf("scan attachment: %w", err)
 		}
 		value.CreatedAt, err = parseTimestamp(created)

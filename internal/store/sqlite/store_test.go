@@ -244,7 +244,7 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 	if err := db.UpsertApproval(ctx, approval); err != nil {
 		t.Fatalf("UpsertApproval(): %v", err)
 	}
-	attachment := task.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, CreatedAt: now}
+	attachment := task.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, SHA256: "abc123", CreatedAt: now}
 	if err := db.SaveAttachment(ctx, attachment); err != nil {
 		t.Fatalf("SaveAttachment(): %v", err)
 	}
@@ -262,7 +262,7 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 		t.Fatalf("PendingApprovals() = %#v, %v", pending, err)
 	}
 	attachments, err := db.Attachments(ctx, "active")
-	if err != nil || len(attachments) != 1 || attachments[0].Name != attachment.Name {
+	if err != nil || len(attachments) != 1 || attachments[0].Name != attachment.Name || attachments[0].SHA256 != attachment.SHA256 {
 		t.Fatalf("Attachments() = %#v, %v", attachments, err)
 	}
 }

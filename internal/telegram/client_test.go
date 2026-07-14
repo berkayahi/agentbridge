@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -156,6 +157,37 @@ func TestClientLongPollAdvancesOffsetAndSuppressesDuplicates(t *testing.T) {
 	defer mu.Unlock()
 	if len(offsets) < 2 || offsets[0] != 1 || offsets[1] < 7 {
 		t.Fatalf("offsets = %v", offsets)
+	}
+}
+
+func TestClientOpensTelegramFileThroughNarrowReader(t *testing.T) {
+	api := newFakeBotAPI(t)
+	defer api.Close()
+	api.handler = func(method string, w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/file/bot") {
+			_, _ = w.Write([]byte("image-bytes"))
+			return
+		}
+		if method != "getFile" {
+			t.Fatalf("method=%s", method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_id": "remote", "file_unique_id": "unique", "file_size": 11, "file_path": "images/safe.png"}})
+	}
+	c, err := NewClient("123:test", ClientOptions{ServerURL: api.URL(), HTTPClient: api.server.Client(), RetryAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := c.Open(context.Background(), "remote")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "image-bytes" {
+		t.Fatalf("data=%q", data)
 	}
 }
 

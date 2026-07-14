@@ -7,6 +7,7 @@ import (
 	"html"
 	"io"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -60,11 +61,12 @@ type Client struct {
 	jitter   func(time.Duration) time.Duration
 	raw      <-chan Update
 
-	mu       sync.Mutex
-	running  bool
-	seen     map[int64]struct{}
-	order    []int64
-	capacity int
+	mu         sync.Mutex
+	running    bool
+	seen       map[int64]struct{}
+	order      []int64
+	capacity   int
+	httpClient telebot.HttpClient
 }
 
 func NewClient(token string, opts ClientOptions) (*Client, error) {
@@ -87,6 +89,9 @@ func NewClient(token string, opts ClientOptions) (*Client, error) {
 		opts.Now = time.Now
 	}
 	raw := make(chan Update, 1)
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout}
+	}
 	options := []telebot.Option{
 		telebot.WithSkipGetMe(),
 		telebot.WithNotAsyncHandlers(),
@@ -101,14 +106,44 @@ func NewClient(token string, opts ClientOptions) (*Client, error) {
 	if opts.ServerURL != "" {
 		options = append(options, telebot.WithServerURL(strings.TrimRight(opts.ServerURL, "/")))
 	}
-	if opts.HTTPClient != nil {
-		options = append(options, telebot.WithHTTPClient(opts.PollTimeout, opts.HTTPClient))
-	}
+	options = append(options, telebot.WithHTTPClient(opts.PollTimeout, opts.HTTPClient))
 	b, err := telebot.New(token, options...)
 	if err != nil {
 		return nil, fmt.Errorf("create Telegram client: %w", err)
 	}
-	return &Client{bot: b, attempts: opts.RetryAttempts, sleep: opts.Sleep, jitter: opts.Jitter, raw: raw, seen: make(map[int64]struct{}), capacity: opts.ReplayCapacity}, nil
+	return &Client{bot: b, attempts: opts.RetryAttempts, sleep: opts.Sleep, jitter: opts.Jitter, raw: raw, seen: make(map[int64]struct{}), capacity: opts.ReplayCapacity, httpClient: opts.HTTPClient}, nil
+}
+
+// Open resolves a Telegram file ID and returns a streaming reader.
+func (c *Client) Open(ctx context.Context, fileID string) (io.ReadCloser, error) {
+	if strings.TrimSpace(fileID) == "" {
+		return nil, errors.New("telegram: file ID is required")
+	}
+	var file *models.File
+	if err := c.retry(ctx, func() error {
+		var err error
+		file, err = c.bot.GetFile(ctx, &telebot.GetFileParams{FileID: fileID})
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	clean := path.Clean(file.FilePath)
+	if clean == "." || clean != file.FilePath || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return nil, errors.New("telegram: unsafe remote file path")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.bot.FileDownloadLink(file), nil)
+	if err != nil {
+		return nil, errors.New("telegram: create file download request")
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return nil, errors.New("telegram: file download failed")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("telegram: file download returned status %d", response.StatusCode)
+	}
+	return response.Body, nil
 }
 
 func (c *Client) Send(ctx context.Context, message Message) (MessageRef, error) {

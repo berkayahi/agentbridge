@@ -75,6 +75,42 @@ func TestSocketRejectsOversizedRequestsAndUnavailableDaemon(t *testing.T) {
 	}
 }
 
+func TestClientCancellationCancelsServerHandler(t *testing.T) {
+	path := shortSocketPath(t)
+	handlerCanceled := make(chan struct{})
+	server := NewServer(path, HandlerFunc(func(ctx context.Context, _ Request) (any, error) {
+		<-ctx.Done()
+		close(handlerCanceled)
+		return nil, ctx.Err()
+	}))
+	capability := []byte("0123456789abcdef0123456789abcdef")
+	server.Grant("task-1", "claude", capability)
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- (Client{Path: path}).Call(ctx, Request{TaskID: "task-1", Provider: "claude", Capability: capability, Tool: "get_task_context"}, nil)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("client error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("client did not cancel")
+	}
+	select {
+	case <-handlerCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("server handler did not observe cancellation")
+	}
+}
+
 func shortSocketPath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "ab-")

@@ -101,7 +101,11 @@ func (a *Adapter) Interrupt(_ context.Context, session provider.Session) error {
 	if err != nil {
 		return err
 	}
-	return runner.Close()
+	err = runner.Close()
+	a.mu.Lock()
+	delete(a.runners, session.ExternalID)
+	a.mu.Unlock()
+	return err
 }
 
 func (a *Adapter) ResolveApproval(context.Context, provider.ApprovalDecision) error {

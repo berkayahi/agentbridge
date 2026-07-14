@@ -1,8 +1,10 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -63,7 +65,14 @@ func CaptureStatusline(ctx context.Context, reader io.Reader, caller StatuslineC
 	if now == nil {
 		now = time.Now
 	}
-	decoder := json.NewDecoder(io.LimitReader(reader, maxStatuslineBytes+1))
+	data, err := io.ReadAll(io.LimitReader(reader, maxStatuslineBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > maxStatuslineBytes {
+		return errors.New("status-line input too large")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	var input struct {
 		SessionID  string `json:"session_id"`
 		RateLimits struct {
@@ -73,6 +82,10 @@ func CaptureStatusline(ctx context.Context, reader io.Reader, caller StatuslineC
 	}
 	if err := decoder.Decode(&input); err != nil {
 		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return errors.New("status-line input must contain one JSON object")
 	}
 	snapshot := UsageSnapshot{SessionID: input.SessionID, ObservedAt: now().UTC(), FiveHour: input.RateLimits.FiveHour.window(), SevenDay: input.RateLimits.SevenDay.window()}
 	params, _ := json.Marshal(snapshot)

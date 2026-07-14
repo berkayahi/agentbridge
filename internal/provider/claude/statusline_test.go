@@ -30,6 +30,18 @@ func TestStatuslineExtractsOnlySafeUsageSubset(t *testing.T) {
 	}
 }
 
+func TestStatuslineRejectsOversizedOrTrailingInput(t *testing.T) {
+	caller := statusCallerFunc(func(context.Context, controlsocket.Request, any) error { return nil })
+	for _, input := range []string{
+		`{"session_id":"s"} {"second":true}`,
+		`{"session_id":"` + strings.Repeat("x", maxStatuslineBytes) + `"}`,
+	} {
+		if err := CaptureStatusline(context.Background(), strings.NewReader(input), caller, StatuslineScope{}, time.Now); err == nil {
+			t.Fatalf("invalid input accepted")
+		}
+	}
+}
+
 type statusCallerFunc func(context.Context, controlsocket.Request, any) error
 
 func (f statusCallerFunc) Call(ctx context.Context, request controlsocket.Request, result any) error {

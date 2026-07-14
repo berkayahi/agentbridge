@@ -3,6 +3,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -14,8 +15,10 @@ import (
 )
 
 const (
-	MaxAttachments = 16
-	MaxInputBytes  = 1 << 20
+	MaxAttachments          = 16
+	MaxInputBytes           = 1 << 20
+	MaxAttachmentBytes      = 64 << 20
+	MaxTotalAttachmentBytes = 128 << 20
 )
 
 var ErrInvalidInput = errors.New("invalid provider input")
@@ -39,8 +42,10 @@ func MustID(value string) ID {
 	return id
 }
 
-func (id ID) String() string { return id.value }
-func (id ID) Valid() bool    { return id.value != "" }
+func (id ID) String() string               { return id.value }
+func (id ID) Valid() bool                  { return id.value != "" }
+func (id ID) MarshalJSON() ([]byte, error) { return json.Marshal(id.value) }
+func (id ID) MarshalText() ([]byte, error) { return []byte(id.value), nil }
 
 type LocalAttachment struct {
 	path      string
@@ -75,15 +80,24 @@ func (in Input) Validate() error {
 	if len(in.Attachments) > MaxAttachments {
 		return fmt.Errorf("%w: too many attachments", ErrInvalidInput)
 	}
-	total := len(in.Text)
+	if len(in.Text) > MaxInputBytes {
+		return fmt.Errorf("%w: text size", ErrInvalidInput)
+	}
+	var attachmentBytes int64
 	for _, attachment := range in.Attachments {
 		if attachment.path == "" || !filepath.IsAbs(attachment.path) {
 			return fmt.Errorf("%w: invalid attachment", ErrInvalidInput)
 		}
-		total += int(attachment.size)
+		if attachment.size > MaxAttachmentBytes {
+			return fmt.Errorf("%w: attachment size", ErrInvalidInput)
+		}
+		attachmentBytes += attachment.size
 	}
-	if total == 0 || total > MaxInputBytes {
+	if len(in.Text) == 0 && attachmentBytes == 0 {
 		return fmt.Errorf("%w: input size", ErrInvalidInput)
+	}
+	if attachmentBytes > MaxTotalAttachmentBytes {
+		return fmt.Errorf("%w: total attachment size", ErrInvalidInput)
 	}
 	return nil
 }

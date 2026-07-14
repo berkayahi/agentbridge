@@ -30,6 +30,8 @@ func (c Client) Call(ctx context.Context, request Request, result any) error {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	defer conn.Close()
+	stopCancelWatch := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancelWatch()
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	} else {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -100,7 +101,7 @@ func New(caller Caller, scope Scope) *mcp.Server {
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "send_artifact", Description: "Send a task-owned artifact to the Telegram operator."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input ArtifactInput) (*mcp.CallToolResult, ArtifactOutput, error) {
-			if input.Path == "" || len(input.Path)+len(input.Name) > maxArtifactBytes {
+			if !filepath.IsAbs(input.Path) || len(input.Path)+len(input.Name) > maxArtifactBytes {
 				return nil, ArtifactOutput{}, errors.New("invalid bounded artifact")
 			}
 			var output ArtifactOutput

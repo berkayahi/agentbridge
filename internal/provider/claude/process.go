@@ -193,7 +193,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 			}
 			if parsed.Event.Type != "" {
 				parsed.Event.TaskID = cfg.TaskID
-				p.events <- parsed.Event
+				p.emit(parsed.Event)
 			}
 		}
 	}()
@@ -216,7 +216,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 			if strings.Contains(lower, "login") || strings.Contains(lower, "oauth") || strings.Contains(lower, "authentication") {
 				typeOfEvent = provider.EventAuthRequired
 			}
-			p.events <- provider.Event{TaskID: cfg.TaskID, Type: typeOfEvent, Message: message}
+			p.emit(provider.Event{TaskID: cfg.TaskID, Type: typeOfEvent, Message: message})
 		}
 		close(p.events)
 		close(p.done)
@@ -286,6 +286,13 @@ func (p *Process) setSession(sessionID string) {
 	p.sessionMu.Unlock()
 	if first {
 		p.ready <- sessionID
+	}
+}
+
+func (p *Process) emit(event provider.Event) {
+	select {
+	case p.events <- event:
+	default:
 	}
 }
 

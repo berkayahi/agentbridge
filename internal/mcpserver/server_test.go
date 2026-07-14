@@ -55,6 +55,10 @@ func TestServerExposesExactlyFourBoundedTools(t *testing.T) {
 	if err == nil && !result.IsError {
 		t.Fatal("unknown field was accepted")
 	}
+	result, err = clientSession.CallTool(ctx, &mcp.CallToolParams{Name: "send_artifact", Arguments: map[string]any{"path": "relative.txt"}})
+	if err == nil && !result.IsError {
+		t.Fatal("relative artifact path was accepted")
+	}
 }
 
 func TestApprovalTimeoutReturnsDenyAndCancellationPropagates(t *testing.T) {

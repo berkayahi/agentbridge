@@ -84,9 +84,6 @@ func (s *Server) Start() error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create runtime directory: %w", err)
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return fmt.Errorf("secure runtime directory: %w", err)
-	}
 	info, err := os.Stat(dir)
 	if err != nil {
 		return err
@@ -183,12 +180,18 @@ func (s *Server) handleConn(conn *net.UnixConn) {
 		s.writeResponse(conn, nil, err)
 		return
 	}
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	if request.DeadlineUnixNano > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, time.Unix(0, request.DeadlineUnixNano))
-		defer cancel()
+		deadlineCtx, deadlineCancel := context.WithDeadline(ctx, time.Unix(0, request.DeadlineUnixNano))
+		defer deadlineCancel()
+		ctx = deadlineCtx
 	}
+	go func() {
+		var probe [1]byte
+		_, _ = conn.Read(probe[:])
+		cancel()
+	}()
 	result, err := s.handler.Handle(ctx, request)
 	s.writeResponse(conn, result, err)
 }

@@ -3,6 +3,7 @@ package fake
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 )
 
 const eventCapacity = 32
+
+var ErrScriptTooLarge = errors.New("fake provider script exceeds event bound")
 
 type Provider struct {
 	name      task.Provider
@@ -34,6 +37,9 @@ func (p *Provider) Start(ctx context.Context, req provider.StartRequest) (provid
 	if err := req.Input.Validate(); err != nil {
 		return provider.Session{}, nil, err
 	}
+	if len(p.events) > eventCapacity {
+		return provider.Session{}, nil, ErrScriptTooLarge
+	}
 	p.record("start")
 	session := provider.Session{ID: p.sessionID, TaskID: req.TaskID, Provider: p.name}
 	return session, p.eventChannel(req.TaskID), nil
@@ -45,6 +51,9 @@ func (p *Provider) Resume(ctx context.Context, req provider.ResumeRequest) (prov
 	}
 	if err := req.Input.Validate(); err != nil {
 		return provider.Session{}, nil, err
+	}
+	if len(p.events) > eventCapacity {
+		return provider.Session{}, nil, ErrScriptTooLarge
 	}
 	p.record("resume")
 	return req.Session, p.eventChannel(req.TaskID), nil
@@ -106,9 +115,9 @@ func (p *Provider) record(call string) {
 }
 
 func (p *Provider) eventChannel(taskID provider.ID) <-chan provider.Event {
-	capacity := min(len(p.events), eventCapacity)
+	capacity := len(p.events)
 	events := make(chan provider.Event, capacity)
-	for _, event := range p.events[:capacity] {
+	for _, event := range p.events {
 		event.TaskID = taskID
 		events <- event
 	}

@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -117,5 +118,35 @@ func TestEventContractContainsOnlyObservableFields(t *testing.T) {
 		if _, ok := typeOfEvent.FieldByName(forbidden); ok {
 			t.Fatalf("event exposes hidden reasoning field %q", forbidden)
 		}
+	}
+}
+
+func TestIDMarshalsAsItsOpaqueString(t *testing.T) {
+	data, err := json.Marshal(provider.MustID("task-1"))
+	if err != nil || string(data) != `"task-1"` {
+		t.Fatalf("Marshal = %s, %v", data, err)
+	}
+}
+
+func TestLargeScreenshotDoesNotCountAgainstTextLimit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.png")
+	if err := os.WriteFile(path, make([]byte, 2<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attachment, err := provider.NewLocalAttachment(path, "image/png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := (provider.Input{Text: "inspect", Attachments: []provider.LocalAttachment{attachment}}).Validate(); err != nil {
+		t.Fatalf("large screenshot rejected: %v", err)
+	}
+}
+
+func TestFakeRejectsScriptLargerThanItsBound(t *testing.T) {
+	events := make([]provider.Event, 33)
+	p := fake.New(task.ProviderCodex, provider.MustID("session-1"), events)
+	_, _, err := p.Start(context.Background(), provider.StartRequest{TaskID: provider.MustID("task-1"), Input: provider.Input{Text: "work"}})
+	if !errors.Is(err, fake.ErrScriptTooLarge) {
+		t.Fatalf("error = %v, want ErrScriptTooLarge", err)
 	}
 }

@@ -254,7 +254,7 @@ func (a *Adapter) AuthStatus(ctx context.Context) (provider.AuthStatus, error) {
 		return provider.AuthStatus{}, ErrAPIKeyAccount
 	}
 	return provider.AuthStatus{
-		Authenticated: !response.RequiresOpenAIAuth && response.Account.Type == "chatgpt",
+		Authenticated: response.Account.Type == "chatgpt",
 		Account:       response.Account.Email, CheckedAt: a.now().UTC(),
 	}, nil
 }

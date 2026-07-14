@@ -574,6 +574,7 @@ func (a *App) resume(ctx context.Context, value task.Task, cancel context.Cancel
 }
 
 func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace, stream <-chan provider.Event) {
+	var assistant strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
@@ -595,6 +596,11 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 			}
 			switch observed.Type {
 			case provider.EventCompleted:
+				if text := strings.TrimSpace(assistant.String()); text != "" {
+					if current, err := a.deps.Store.Task(ctx, value.ID); err == nil {
+						_, _ = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: current.TelegramChatID, Text: a.deps.Redactor.RedactString(text)})
+					}
+				}
 				if current, err := a.deps.Store.Task(ctx, value.ID); err == nil {
 					value = current
 				}
@@ -627,6 +633,9 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 				a.executionFailure(ctx, value, errors.New("provider reported a redacted failure"))
 				return
 			default:
+				if observed.Type == provider.EventAssistantMessage {
+					assistant.WriteString(observed.Message)
+				}
 				a.appendProviderEvent(ctx, value.ID, observed)
 			}
 		}
@@ -865,11 +874,6 @@ func (a *App) appendProviderEvent(ctx context.Context, id string, observed provi
 	event.ProviderEventID = observed.ID.String()
 	if err := a.deps.Store.AppendEvent(ctx, event); err == nil {
 		_ = a.publish(ctx, event)
-	}
-	if observed.Type == provider.EventAssistantMessage && strings.TrimSpace(observed.Message) != "" {
-		if value, err := a.deps.Store.Task(ctx, id); err == nil {
-			_, _ = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: value.TelegramChatID, Text: a.deps.Redactor.RedactString(observed.Message)})
-		}
 	}
 }
 

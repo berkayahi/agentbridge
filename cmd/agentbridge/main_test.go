@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/berkayahi/agentbridge/internal/mcpserver"
+	"github.com/berkayahi/agentbridge/internal/provider/claude"
 	"github.com/berkayahi/agentbridge/internal/telegram"
 )
 
@@ -55,6 +58,53 @@ func (fakePairer) Pair(context.Context) (telegram.Pairing, string, error) {
 	return telegram.Pairing{UserID: 42, ChatID: 100}, "not-printed", nil
 }
 
+func TestRunClaudeStatuslineUsesControlScope(t *testing.T) {
+	var got claude.StatuslineScope
+	deps := commandDeps{
+		getenv: func(name string) string {
+			return map[string]string{"AGENTBRIDGE_CONTROL_SOCKET": "/run/control.sock", "AGENTBRIDGE_TASK_ID": "task-1"}[name]
+		},
+		readCapability: func() ([]byte, error) { return []byte("capability"), nil },
+		runStatusline: func(_ context.Context, _ io.Reader, _ claude.StatuslineCaller, scope claude.StatuslineScope, _ func() time.Time) error {
+			got = scope
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"claude-statusline"}, strings.NewReader(`{"session_id":"s"}`), &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if got.TaskID != "task-1" || got.Provider != "claude" || string(got.Capability) != "capability" {
+		t.Fatalf("scope = %#v", got)
+	}
+}
+
+func TestRunMCPUsesInjectedIOAndProtectedEnvironment(t *testing.T) {
+	var got mcpserver.RunOptions
+	deps := commandDeps{
+		getenv: func(name string) string {
+			return map[string]string{
+				"AGENTBRIDGE_CONTROL_SOCKET": "/run/user/1000/agentbridge/control.sock",
+				"AGENTBRIDGE_TASK_ID":        "task-1",
+				"AGENTBRIDGE_PROVIDER":       "claude",
+			}[name]
+		},
+		readCapability: func() ([]byte, error) { return []byte("capability"), nil },
+		runMCP: func(_ context.Context, options mcpserver.RunOptions) error {
+			got = options
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"mcp"}, strings.NewReader(""), &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if got.Scope.TaskID != "task-1" || got.Scope.Provider != "claude" || string(got.Scope.Capability) != "capability" {
+		t.Fatalf("scope = %#v", got.Scope)
+	}
+}
 func TestRunVersionReturnsFailureWhenOutputCannotBeWritten(t *testing.T) {
 	var stderr bytes.Buffer
 	code := run([]string{"version"}, failingWriter{}, &stderr)
@@ -77,7 +127,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path>\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

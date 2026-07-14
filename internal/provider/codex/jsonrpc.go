@@ -33,6 +33,7 @@ type ClientOptions struct {
 
 type ServerMessage struct {
 	ID     string
+	RawID  json.RawMessage
 	Method string
 	Params json.RawMessage
 }
@@ -192,19 +193,15 @@ func (c *Client) Notify(ctx context.Context, method string, params any) error {
 	}
 }
 
-func (c *Client) Respond(ctx context.Context, id string, result any, responseErr *rpcError) error {
-	if id == "" {
+func (c *Client) Respond(ctx context.Context, id json.RawMessage, result any, responseErr *rpcError) error {
+	if len(id) == 0 || !json.Valid(id) {
 		return fmt.Errorf("%w: missing request id", ErrProtocol)
-	}
-	encodedID, err := json.Marshal(id)
-	if err != nil {
-		return err
 	}
 	encodedResult, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	message := wireMessage{JSONRPC: "2.0", ID: encodedID, Result: encodedResult, Error: responseErr}
+	message := wireMessage{JSONRPC: "2.0", ID: append(json.RawMessage(nil), id...), Result: encodedResult, Error: responseErr}
 	select {
 	case c.writes <- message:
 		return nil
@@ -215,7 +212,7 @@ func (c *Client) Respond(ctx context.Context, id string, result any, responseErr
 	}
 }
 
-func (c *Client) RespondResult(ctx context.Context, id string, result any) error {
+func (c *Client) RespondResult(ctx context.Context, id json.RawMessage, result any) error {
 	return c.Respond(ctx, id, result, nil)
 }
 
@@ -290,7 +287,7 @@ func (c *Client) dispatch(message wireMessage) {
 		c.report(fmt.Errorf("%w: missing method", ErrProtocol))
 		return
 	}
-	serverMessage := ServerMessage{ID: normalizeID(message.ID), Method: message.Method}
+	serverMessage := ServerMessage{ID: normalizeID(message.ID), RawID: append(json.RawMessage(nil), message.ID...), Method: message.Method}
 	if message.Params != nil {
 		serverMessage.Params, _ = json.Marshal(message.Params)
 	}

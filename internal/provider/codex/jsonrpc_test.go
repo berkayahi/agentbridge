@@ -162,6 +162,33 @@ func TestOfficialAppServerArguments(t *testing.T) {
 	}
 }
 
+func TestResponsePreservesNumericServerRequestID(t *testing.T) {
+	clientReader, serverWriter := io.Pipe()
+	serverReader, clientWriter := io.Pipe()
+	client := NewClient(clientReader, clientWriter, ClientOptions{})
+	defer client.Close()
+	if _, err := serverWriter.Write([]byte(`{"jsonrpc":"2.0","id":7,"method":"item/fileChange/requestApproval","params":{}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	request := <-client.Requests()
+	if err := client.RespondResult(context.Background(), request.RawID, map[string]any{"decision": "decline"}); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReader(serverReader).ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(line, &response); err != nil {
+		t.Fatal(err)
+	}
+	if string(response.ID) != "7" {
+		t.Fatalf("response id = %s, want numeric 7", response.ID)
+	}
+}
+
 func runCodexHelper() {
 	scanner := bufio.NewScanner(os.Stdin)
 	var writeMu sync.Mutex

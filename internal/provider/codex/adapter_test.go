@@ -161,7 +161,7 @@ func TestApprovalRejectsWrongTaskAndExpiredDecisionAndTimesOutDeny(t *testing.T)
 			rpc := newFakeRPC()
 			adapter := NewAdapter(rpc, AdapterConfig{Now: func() time.Time { return test.now }})
 			t.Cleanup(adapter.Close)
-			adapter.pending["approval-1"] = pendingApproval{rpcID: "approval-1", request: ApprovalRequest{
+			adapter.pending["approval-1"] = pendingApproval{rpcID: json.RawMessage(`"approval-1"`), request: ApprovalRequest{
 				ID: provider.MustID("approval-1"), TaskID: provider.MustID("task-1"), UserID: "operator", ExpiresAt: time.Unix(150, 0).UTC(),
 			}}
 			if err := adapter.ResolveApproval(context.Background(), test.decision); !errors.Is(err, ErrApprovalRejected) {
@@ -175,7 +175,7 @@ func TestApprovalRejectsWrongTaskAndExpiredDecisionAndTimesOutDeny(t *testing.T)
 
 	rpc := newFakeRPC()
 	adapter := NewAdapter(rpc, AdapterConfig{ApprovalTimeout: 5 * time.Millisecond})
-	adapter.pending["approval-timeout"] = pendingApproval{rpcID: "approval-timeout"}
+	adapter.pending["approval-timeout"] = pendingApproval{rpcID: json.RawMessage(`"approval-timeout"`)}
 	adapter.wg.Add(1)
 	go adapter.expireApproval(provider.MustID("approval-timeout"), 5*time.Millisecond)
 	select {
@@ -260,9 +260,10 @@ func (f *fakeRPC) Call(_ context.Context, method string, params, result any) err
 	return f.call(method, params, result)
 }
 func (f *fakeRPC) Notify(context.Context, string, any) error { return nil }
-func (f *fakeRPC) RespondResult(_ context.Context, id string, result any) error {
+
+func (f *fakeRPC) RespondResult(_ context.Context, id json.RawMessage, result any) error {
 	decision := jsonValue(result)["decision"].(string)
-	f.responses <- approvalResponse{ID: id, Decision: decision}
+	f.responses <- approvalResponse{ID: normalizeID(id), Decision: decision}
 	return nil
 }
 func (f *fakeRPC) Notifications() <-chan ServerMessage { return f.notifications }

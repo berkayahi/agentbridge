@@ -27,7 +27,7 @@ var (
 type rpcTransport interface {
 	Call(context.Context, string, any, any) error
 	Notify(context.Context, string, any) error
-	RespondResult(context.Context, string, any) error
+	RespondResult(context.Context, json.RawMessage, any) error
 	Notifications() <-chan ServerMessage
 	Requests() <-chan ServerMessage
 }
@@ -66,7 +66,7 @@ type sessionState struct {
 
 type pendingApproval struct {
 	request ApprovalRequest
-	rpcID   string
+	rpcID   json.RawMessage
 }
 
 type Adapter struct {
@@ -374,7 +374,7 @@ func (a *Adapter) handleNotification(message ServerMessage) {
 
 func (a *Adapter) handleRequest(message ServerMessage) {
 	if message.Method != "item/commandExecution/requestApproval" && message.Method != "item/fileChange/requestApproval" {
-		_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
 	var params struct {
@@ -383,17 +383,17 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 		Reason   string `json:"reason"`
 	}
 	if json.Unmarshal(message.Params, &params) != nil {
-		_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
 	state, err := a.state(params.ThreadID)
 	if err != nil {
-		_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
 	id, err := provider.NewID(message.ID)
 	if err != nil {
-		_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
 	now := a.now().UTC()
@@ -407,12 +407,12 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 	}
 	if a.approvals != nil {
 		if err := a.approvals.SaveApproval(context.Background(), request); err != nil {
-			_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+			_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 			return
 		}
 	}
 	a.mu.Lock()
-	a.pending[id.String()] = pendingApproval{request: request, rpcID: message.ID}
+	a.pending[id.String()] = pendingApproval{request: request, rpcID: responseID(message)}
 	a.mu.Unlock()
 	select {
 	case state.events <- provider.Event{TaskID: request.TaskID, RequestID: request.ID, Type: provider.EventApprovalRequired, Message: request.Summary, CreatedAt: now}:
@@ -420,7 +420,7 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 		a.mu.Lock()
 		delete(a.pending, id.String())
 		a.mu.Unlock()
-		_ = a.rpc.RespondResult(context.Background(), message.ID, map[string]any{"decision": "decline"})
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
 	a.wg.Add(1)
@@ -445,6 +445,14 @@ func (a *Adapter) expireApproval(id provider.ID, after time.Duration) {
 	if ok {
 		_ = a.rpc.RespondResult(context.Background(), pending.rpcID, map[string]any{"decision": "decline"})
 	}
+}
+
+func responseID(message ServerMessage) json.RawMessage {
+	if len(message.RawID) > 0 {
+		return append(json.RawMessage(nil), message.RawID...)
+	}
+	encoded, _ := json.Marshal(message.ID)
+	return encoded
 }
 
 func newSession(taskID provider.ID, threadID string) (provider.Session, error) {

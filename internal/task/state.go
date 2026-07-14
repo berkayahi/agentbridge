@@ -27,7 +27,7 @@ var transitions = map[State]map[State]struct{}{
 	Verifying:        stateSet(Committing, Failed, Canceled, Paused),
 	Committing:       stateSet(Pushing, Failed, Paused),
 	Pushing:          stateSet(Completed, Failed, Paused),
-	Completed:        stateSet(),
+	Completed:        stateSet(Running),
 	Failed:           stateSet(Queued),
 	Canceled:         stateSet(),
 	Paused:           stateSet(Queued),

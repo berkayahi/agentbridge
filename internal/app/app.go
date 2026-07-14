@@ -116,6 +116,7 @@ type activeTask struct {
 type queuedTask struct {
 	id     string
 	resume bool
+	input  string
 }
 
 type App struct {
@@ -341,6 +342,11 @@ func (a *App) HandleUpdate(ctx context.Context, update telegram.Update) (string,
 		return "", a.resolveApproval(ctx, update, command)
 	case telegram.KindStatus, telegram.KindTasks, telegram.KindSessions, telegram.KindDiff, telegram.KindLogs, telegram.KindHealth, telegram.KindRetry, telegram.KindHelp:
 		return "", a.handleDirectCommand(ctx, update, command)
+	case telegram.KindChat:
+		if update.Message == nil {
+			return "", errors.New("app: chat message is missing")
+		}
+		return "", a.continueTask(ctx, command.TaskID, command.Argument, update.Message.Chat.ID)
 	default:
 		return "", errors.New("app: command is not implemented by daemon")
 	}
@@ -443,7 +449,7 @@ func (a *App) execute(job queuedTask) {
 		<-leaseWatchDone
 	}()
 	if job.resume {
-		a.resume(ctx, value, cancel)
+		a.resume(ctx, value, cancel, job.input)
 		return
 	}
 	if value.State == task.Verifying {
@@ -528,7 +534,7 @@ func (a *App) requeueAfter(id string, resume bool) {
 	}()
 }
 
-func (a *App) resume(ctx context.Context, value task.Task, cancel context.CancelCauseFunc) {
+func (a *App) resume(ctx context.Context, value task.Task, cancel context.CancelCauseFunc, input string) {
 	p := a.deps.Providers[value.Provider]
 	taskID, err := provider.NewID(value.ID)
 	if err != nil {
@@ -541,7 +547,10 @@ func (a *App) resume(ctx context.Context, value task.Task, cancel context.Cancel
 		return
 	}
 	saved := provider.Session{ID: sessionID, TaskID: taskID, ExternalID: value.ProviderSessionID, ThreadID: value.ProviderThreadID, Provider: value.Provider}
-	session, stream, err := p.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: saved, Input: provider.Input{Text: "Continue the interrupted task from the durable session."}})
+	if strings.TrimSpace(input) == "" {
+		input = "Continue the interrupted task from the durable session."
+	}
+	session, stream, err := p.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: saved, Input: provider.Input{Text: input}})
 	if err != nil {
 		a.pause(value, "saved provider session could not be resumed safely")
 		return

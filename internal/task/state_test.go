@@ -12,6 +12,7 @@ func TestTransition(t *testing.T) {
 		{Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled}, {Verifying, Paused},
 		{Committing, Pushing}, {Committing, Failed}, {Committing, Paused},
 		{Pushing, Completed}, {Pushing, Failed}, {Pushing, Paused},
+		{Completed, Running},
 		{Failed, Queued}, {Paused, Queued},
 	}
 

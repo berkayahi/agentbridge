@@ -24,6 +24,7 @@ const (
 	KindRetry    Kind = "retry"
 	KindHealth   Kind = "health"
 	KindHelp     Kind = "help"
+	KindChat     Kind = "chat"
 	KindApprove  Kind = "approve"
 	KindReject   Kind = "reject"
 )
@@ -88,6 +89,13 @@ func ParseCommand(input, botUsername string) (Command, error) {
 		return Command{}, errors.New("telegram: command is for another bot")
 	}
 	name = strings.ToLower(parts[0])
+	if name == "chat" {
+		fields := strings.SplitN(argument, " ", 2)
+		if len(fields) != 2 || !taskIDPattern.MatchString(fields[0]) || strings.TrimSpace(fields[1]) == "" {
+			return Command{}, errors.New("telegram: /chat requires task ID and message")
+		}
+		return Command{Kind: KindChat, TaskID: fields[0], Argument: strings.TrimSpace(fields[1])}, nil
+	}
 	if name == "codex" || name == "claude" {
 		if argument == "" {
 			return Command{}, errors.New("telegram: provider prompt is required")

@@ -60,6 +60,26 @@ func (a *App) handleDirectCommand(ctx context.Context, update telegram.Update, c
 	return err
 }
 
+func (a *App) continueTask(ctx context.Context, id, input string, chatID int64) error {
+	value, err := a.deps.Store.Task(ctx, id)
+	if err != nil {
+		return err
+	}
+	if value.TelegramChatID != chatID {
+		return errors.New("app: task belongs to another chat")
+	}
+	if value.ProviderSessionID == "" {
+		return errors.New("app: task has no resumable provider session")
+	}
+	if !task.CanTransition(value.State, task.Running) {
+		return errors.New("app: task is not resumable in its current state")
+	}
+	if !a.transition(ctx, &value, task.Running, "queued session continuation") {
+		return errors.New("app: could not resume task")
+	}
+	return a.enqueue(queuedTask{id: id, resume: true, input: input})
+}
+
 func (a *App) statusText(ctx context.Context) (string, error) {
 	tasks, err := a.deps.Store.ListTasks(ctx, store.ListFilter{})
 	if err != nil {

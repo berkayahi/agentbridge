@@ -354,11 +354,38 @@ func (a *App) HandleUpdate(ctx context.Context, update telegram.Update) (string,
 			return "", errors.New("app: chat message is missing")
 		}
 		return "", a.continueTask(ctx, command.TaskID, command.Argument, update.Message.Chat.ID)
+	case telegram.KindRename:
+		if update.Message == nil {
+			return "", errors.New("app: rename message is missing")
+		}
+		return "", a.renameTask(ctx, command.TaskID, command.Argument, update.Message.Chat.ID)
 	case telegram.KindSessionSelect:
 		return "", a.resolveSessionChoice(ctx, update)
 	default:
 		return "", errors.New("app: command is not implemented by daemon")
 	}
+}
+
+func (a *App) renameTask(ctx context.Context, id, title string, chatID int64) error {
+	value, err := a.deps.Store.Task(ctx, id)
+	if err != nil {
+		return err
+	}
+	if value.TelegramChatID != chatID {
+		return errors.New("app: task belongs to another chat")
+	}
+	renamer, ok := a.deps.Store.(interface {
+		RenameTask(context.Context, string, string) error
+	})
+	if !ok {
+		return errors.New("app: task rename is unavailable")
+	}
+	title = task.Title(title, task.DefaultTitleRunes)
+	if err := renamer.RenameTask(ctx, id, title); err != nil {
+		return err
+	}
+	_, err = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: chatID, Text: fmt.Sprintf("Task renamed: %s", title)})
+	return err
 }
 
 func (a *App) createTask(ctx context.Context, message *telegram.IncomingMessage, command telegram.Command) (string, error) {
@@ -437,6 +464,7 @@ func (a *App) resolveSessionChoice(ctx context.Context, update telegram.Update) 
 	if !ok || time.Now().After(pending.expires) {
 		return errors.New("app: session selection expired")
 	}
+	_, _ = a.deps.Messenger.Send(ctx, telegram.Message{ChatID: chatID, Text: fmt.Sprintf("Session selected (%s). Starting your task now…", pending.provider)})
 	var err error
 	updateCommand, parseErr := telegram.ParseUpdate(update, a.config.BotUsername, a.deps.Signer)
 	if parseErr == nil && updateCommand.Provider.Valid() {

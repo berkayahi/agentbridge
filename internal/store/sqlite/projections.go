@@ -67,6 +67,13 @@ func (s *Store) SaveFailure(ctx context.Context, taskID, reason string) error {
 	)
 }
 
+func (s *Store) RenameTask(ctx context.Context, taskID, title string) error {
+	return s.updateProjection(ctx, "rename task", `
+		UPDATE tasks SET title = ?, updated_at = ? WHERE id = ?`,
+		title, timestamp(time.Now()), taskID,
+	)
+}
+
 func (s *Store) updateProjection(ctx context.Context, operation, query string, args ...any) error {
 	return updateProjection(ctx, s.db, operation, query, args...)
 }

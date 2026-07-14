@@ -249,6 +249,7 @@ func SessionKeyboard(signer *CallbackSigner, provider task.Provider, tasks []tas
 		if label == "" {
 			label = value.ID
 		}
+		label = fmt.Sprintf("%s [%s] · %s", label, value.State, value.ID[:min(len(value.ID), 6)])
 		keyboard = append(keyboard, []InlineButton{{Text: label, CallbackData: callback}})
 	}
 	return keyboard, nil

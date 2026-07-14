@@ -26,6 +26,7 @@ const (
 	KindHelp          Kind = "help"
 	KindChat          Kind = "chat"
 	KindSessionSelect Kind = "session_select"
+	KindRename        Kind = "rename"
 	KindApprove       Kind = "approve"
 	KindReject        Kind = "reject"
 )
@@ -78,6 +79,7 @@ var directKinds = map[string]Kind{
 	"usage": KindUsage, "status": KindStatus, "tasks": KindTasks,
 	"sessions": KindSessions, "diff": KindDiff, "logs": KindLogs,
 	"cancel": KindCancel, "retry": KindRetry, "health": KindHealth, "help": KindHelp, "start": KindHelp,
+	"rename": KindRename,
 }
 
 func ParseCommand(input, botUsername string) (Command, error) {
@@ -102,6 +104,13 @@ func ParseCommand(input, botUsername string) (Command, error) {
 			return Command{}, errors.New("telegram: /chat requires task ID and message")
 		}
 		return Command{Kind: KindChat, TaskID: fields[0], Argument: strings.TrimSpace(fields[1])}, nil
+	}
+	if name == "rename" {
+		fields := strings.SplitN(argument, " ", 2)
+		if len(fields) != 2 || !taskIDPattern.MatchString(fields[0]) || strings.TrimSpace(fields[1]) == "" {
+			return Command{}, errors.New("telegram: /rename requires task ID and title")
+		}
+		return Command{Kind: KindRename, TaskID: fields[0], Argument: strings.TrimSpace(fields[1])}, nil
 	}
 	if name == "codex" || name == "claude" {
 		if argument == "" {

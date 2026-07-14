@@ -32,6 +32,8 @@ func (a *App) handleDirectCommand(ctx context.Context, update telegram.Update, c
 		err  error
 	)
 	switch command.Kind {
+	case telegram.KindHelp:
+		text = "AgentBridge commands\n/codex <task>\n/claude <task>\n/usage or /codex usage\n/status\n/tasks\n/sessions\n/health\n/logs <task_id>\n/diff <task_id>\n/cancel <task_id>\n/retry <task_id>"
 	case telegram.KindStatus:
 		text, err = a.statusText(ctx)
 	case telegram.KindTasks:

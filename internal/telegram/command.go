@@ -23,6 +23,7 @@ const (
 	KindCancel   Kind = "cancel"
 	KindRetry    Kind = "retry"
 	KindHealth   Kind = "health"
+	KindHelp     Kind = "help"
 	KindApprove  Kind = "approve"
 	KindReject   Kind = "reject"
 )
@@ -68,7 +69,7 @@ func ParseUpdate(update Update, botUsername string, signer *CallbackSigner) (Com
 var directKinds = map[string]Kind{
 	"usage": KindUsage, "status": KindStatus, "tasks": KindTasks,
 	"sessions": KindSessions, "diff": KindDiff, "logs": KindLogs,
-	"cancel": KindCancel, "retry": KindRetry, "health": KindHealth,
+	"cancel": KindCancel, "retry": KindRetry, "health": KindHealth, "help": KindHelp, "start": KindHelp,
 }
 
 func ParseCommand(input, botUsername string) (Command, error) {

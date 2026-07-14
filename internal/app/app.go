@@ -339,7 +339,7 @@ func (a *App) HandleUpdate(ctx context.Context, update telegram.Update) (string,
 		return "", a.sendUsage(ctx, update.Message.Chat.ID, command.Provider)
 	case telegram.KindApprove, telegram.KindReject:
 		return "", a.resolveApproval(ctx, update, command)
-	case telegram.KindStatus, telegram.KindTasks, telegram.KindSessions, telegram.KindDiff, telegram.KindLogs, telegram.KindHealth, telegram.KindRetry:
+	case telegram.KindStatus, telegram.KindTasks, telegram.KindSessions, telegram.KindDiff, telegram.KindLogs, telegram.KindHealth, telegram.KindRetry, telegram.KindHelp:
 		return "", a.handleDirectCommand(ctx, update, command)
 	default:
 		return "", errors.New("app: command is not implemented by daemon")

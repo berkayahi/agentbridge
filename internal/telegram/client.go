@@ -88,18 +88,21 @@ func NewClient(token string, opts ClientOptions) (*Client, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	raw := make(chan Update, 1)
+	raw := make(chan Update, opts.ReplayCapacity)
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: opts.PollTimeout}
 	}
 	options := []telebot.Option{
 		telebot.WithSkipGetMe(),
 		telebot.WithNotAsyncHandlers(),
-		telebot.WithUpdatesChannelCap(1),
+		telebot.WithUpdatesChannelCap(opts.ReplayCapacity),
 		telebot.WithInitialOffset(0),
-		telebot.WithDefaultHandler(func(_ context.Context, _ *telebot.Bot, update *models.Update) {
+		telebot.WithDefaultHandler(func(handlerCtx context.Context, _ *telebot.Bot, update *models.Update) {
 			if converted, ok := convertUpdate(update, opts.Now()); ok {
-				raw <- converted
+				select {
+				case raw <- converted:
+				case <-handlerCtx.Done():
+				}
 			}
 		}),
 	}

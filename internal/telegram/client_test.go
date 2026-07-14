@@ -191,6 +191,36 @@ func TestClientOpensTelegramFileThroughNarrowReader(t *testing.T) {
 	}
 }
 
+func TestClientRunStopsWhenUpdateConsumerIsAbsent(t *testing.T) {
+	api := newFakeBotAPI(t)
+	defer api.Close()
+	requested := make(chan struct{})
+	var once sync.Once
+	api.handler = func(method string, w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(requested) })
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": []any{incomingUpdateJSON(1, "one"), incomingUpdateJSON(2, "two"), incomingUpdateJSON(3, "three")}})
+	}
+	c, err := NewClient("123:test", ClientOptions{ServerURL: api.URL(), HTTPClient: api.server.Client(), PollTimeout: time.Second, ReplayCapacity: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { c.Run(ctx); close(done) }()
+	select {
+	case <-requested:
+	case <-time.After(time.Second):
+		t.Fatal("poll did not start")
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("poller did not stop without a consumer")
+	}
+}
+
 func incomingUpdateJSON(id int64, text string) map[string]any {
 	return map[string]any{"update_id": id, "message": map[string]any{"message_id": id, "date": 1, "text": text, "from": map[string]any{"id": 42, "is_bot": false, "first_name": "x"}, "chat": map[string]any{"id": 100, "type": "private"}}}
 }

@@ -84,6 +84,29 @@ func TestCallbackSignerRoundTripExpiryTamperAndSize(t *testing.T) {
 	}
 }
 
+func TestStatusProjectorDoesNotBlockOtherTasksOnSlowNetwork(t *testing.T) {
+	messenger := &blockingMessenger{started: make(chan struct{}), release: make(chan struct{})}
+	p := NewStatusProjector(messenger, time.Minute, time.Now)
+	doneFirst := make(chan struct{})
+	go func() {
+		_ = p.Project(context.Background(), TaskStatus{TaskID: "slow", ChatID: 1, State: task.Running, RepoProfile: "one"})
+		close(doneFirst)
+	}()
+	<-messenger.started
+	doneSecond := make(chan struct{})
+	go func() {
+		_ = p.Project(context.Background(), TaskStatus{TaskID: "fast", ChatID: 2, State: task.Running, RepoProfile: "two"})
+		close(doneSecond)
+	}()
+	select {
+	case <-doneSecond:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("independent task blocked by slow network call")
+	}
+	close(messenger.release)
+	<-doneFirst
+}
+
 type recordingMessenger struct {
 	mu     sync.Mutex
 	sent   []Message
@@ -106,3 +129,24 @@ func (m *recordingMessenger) Edit(ctx context.Context, ref MessageRef, msg Messa
 }
 func (*recordingMessenger) AnswerCallback(context.Context, string, string) error { return nil }
 func (*recordingMessenger) SendDocument(context.Context, Document) error         { return nil }
+
+type blockingMessenger struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (m *blockingMessenger) Send(ctx context.Context, msg Message) (MessageRef, error) {
+	if msg.ChatID == 1 {
+		m.once.Do(func() { close(m.started) })
+		select {
+		case <-m.release:
+		case <-ctx.Done():
+			return MessageRef{}, ctx.Err()
+		}
+	}
+	return MessageRef{ChatID: msg.ChatID, MessageID: 1}, nil
+}
+func (*blockingMessenger) Edit(context.Context, MessageRef, Message) error      { return nil }
+func (*blockingMessenger) AnswerCallback(context.Context, string, string) error { return nil }
+func (*blockingMessenger) SendDocument(context.Context, Document) error         { return nil }

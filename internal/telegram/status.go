@@ -28,6 +28,7 @@ type TaskStatus struct {
 }
 
 type projection struct {
+	mu       sync.Mutex
 	ref      MessageRef
 	lastText string
 	lastEdit time.Time
@@ -60,14 +61,27 @@ func (p *StatusProjector) Project(ctx context.Context, status TaskStatus) error 
 	now := p.now()
 	text := renderStatus(status, now)
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	current, ok := p.tasks[status.TaskID]
 	if !ok {
+		current = &projection{}
+		p.tasks[status.TaskID] = current
+	}
+	p.mu.Unlock()
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.ref.MessageID == 0 {
 		ref, err := p.messenger.Send(ctx, Message{ChatID: status.ChatID, Text: text})
 		if err != nil {
+			p.mu.Lock()
+			if p.tasks[status.TaskID] == current {
+				delete(p.tasks, status.TaskID)
+			}
+			p.mu.Unlock()
 			return err
 		}
-		p.tasks[status.TaskID] = &projection{ref: ref, lastText: text, lastEdit: now}
+		current.ref = ref
+		current.lastText = text
+		current.lastEdit = now
 		return nil
 	}
 	if text == current.lastText || text == current.pending {
@@ -88,9 +102,14 @@ func (p *StatusProjector) Project(ctx context.Context, status TaskStatus) error 
 
 func (p *StatusProjector) Flush(ctx context.Context, taskID string) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	current, ok := p.tasks[taskID]
-	if !ok || current.pending == "" || current.pending == current.lastText {
+	p.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	current.mu.Lock()
+	defer current.mu.Unlock()
+	if current.pending == "" || current.pending == current.lastText {
 		return nil
 	}
 	now := p.now()

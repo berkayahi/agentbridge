@@ -46,10 +46,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     media_type TEXT NOT NULL,
     storage_path TEXT NOT NULL,
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
-    sha256 TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS attachments_task_sha256_idx ON attachments(task_id, sha256);
 CREATE INDEX IF NOT EXISTS attachments_task_idx ON attachments(task_id, created_at);
 
 CREATE TABLE IF NOT EXISTS approvals (

@@ -322,6 +322,53 @@ func TestErrorsFiltersAndCanceledContext(t *testing.T) {
 	}
 }
 
+func TestOpenUpgradesLegacyAttachmentChecksumSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, storage_path TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := storesqlite.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("upgrade legacy schema: %v", err)
+	}
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	rows, err := check.Query(`PRAGMA table_info(attachments)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, kind string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == "sha256" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("sha256 column was not migrated")
+	}
+}
+
 func openStore(t *testing.T, path string) *storesqlite.Store {
 	t.Helper()
 	db, err := storesqlite.Open(context.Background(), path)

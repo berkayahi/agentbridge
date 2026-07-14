@@ -55,6 +55,23 @@ func TestGeneratePairNonceIsOpaque(t *testing.T) {
 	}
 }
 
+func TestPairAttemptRevealsNonceBeforeWaitExpiresAndIsOneUse(t *testing.T) {
+	svc := NewPairService(&blockingUpdateSource{}, func(int) (string, error) { return "visible-first", nil }, time.Now, 10*time.Millisecond)
+	attempt, err := svc.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Nonce() != "visible-first" {
+		t.Fatalf("nonce = %q", attempt.Nonce())
+	}
+	if _, err := attempt.Wait(context.Background()); !errors.Is(err, ErrPairExpired) {
+		t.Fatalf("error = %v", err)
+	}
+	if _, err := attempt.Wait(context.Background()); !errors.Is(err, ErrPairUsed) {
+		t.Fatalf("second wait error = %v", err)
+	}
+}
+
 type sliceUpdateSource struct {
 	updates []Update
 	onNext  func()

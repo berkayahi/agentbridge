@@ -1,0 +1,31 @@
+# Copy this file to an untracked, private location and replace every placeholder.
+# Never commit credentials. systemd credentials are loaded separately at runtime.
+server:
+  listen: 127.0.0.1:8787
+  allowed_tailscale_identities:
+    - operator@example.invalid
+
+telegram:
+  private_chat_only: true
+  allowed_user_ids:
+    - 123456789
+
+providers:
+  codex:
+    executable: /usr/local/bin/codex
+  claude:
+    executable: /usr/local/bin/claude
+
+repositories:
+  sample-app:
+    checkout_path: /srv/agentbridge/checkouts/sample-app
+    remote: origin
+    base_ref: refs/heads/staging
+    verification:
+      - argv: ["go", "test", "./..."]
+        dir: .
+    # Keep real deployment URLs in your private, untracked configuration.
+    deployment_url: https://staging.example.invalid
+    delivery:
+      # Delivery is opt-in. Enabling it also requires one exact allowed_ref.
+      enabled: false

@@ -46,6 +46,10 @@ type UsageSource interface {
 	Usage(context.Context) ([]ProviderUsage, error)
 }
 
+type AttachmentContent interface {
+	Read(context.Context, task.Attachment) ([]byte, error)
+}
+
 type RecoveryView struct {
 	ID        string    `json:"id"`
 	Provider  string    `json:"provider"`
@@ -75,6 +79,7 @@ type Dependencies struct {
 	Usage    UsageSource
 	Recovery RecoveryService
 	Live     *events.Bus
+	Content  AttachmentContent
 }
 
 type Server struct {
@@ -83,6 +88,7 @@ type Server struct {
 	deps     Dependencies
 	allowed  map[string]struct{}
 	csrf     *csrfTokens
+	views    *viewRenderer
 	peerIP   func(any) string
 	scheme   func(any) string
 	identity func(any) string
@@ -110,6 +116,11 @@ func New(config Config, dependencies Dependencies) (*Server, error) {
 		allowed[identity] = struct{}{}
 	}
 	s := &Server{config: config, deps: dependencies, allowed: allowed, csrf: newCSRFTokens(config.CSRFSecret, config.Now)}
+	views, err := newViewRenderer()
+	if err != nil {
+		return nil, err
+	}
+	s.views = views
 	s.peerIP = func(value any) string {
 		ctx, ok := value.(fiber.Ctx)
 		if !ok || !ctx.IsFromLocal() {
@@ -154,12 +165,18 @@ func (s *Server) App() *fiber.App { return s.app }
 
 func (s *Server) routes() {
 	s.app.Use(s.securityMiddleware)
+	s.app.Get("/", s.overviewPage)
+	s.app.Get("/tasks/:id", s.taskPage)
+	s.app.Get("/auth/:provider", s.authPage)
+	s.app.Get("/assets/app.js", s.javascriptAsset)
+	s.app.Get("/assets/styles.css", s.stylesheetAsset)
 	api := s.app.Group("/api/v1")
 	api.Get("/health", s.health)
 	api.Get("/tasks", s.tasks)
 	api.Get("/tasks/:id", s.task)
 	api.Get("/tasks/:id/events", s.taskEvents)
 	api.Get("/tasks/:id/attachments", s.taskAttachments)
+	api.Get("/tasks/:id/attachments/:attachment/content", s.taskAttachmentContent)
 	api.Get("/tasks/:id/stream", s.taskStream)
 	api.Get("/usage", s.usage)
 	api.Get("/csrf", s.issueCSRF)

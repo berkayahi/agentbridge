@@ -98,6 +98,39 @@ func (s *Server) taskAttachments(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"items": items})
 }
 
+func (s *Server) taskAttachmentContent(c fiber.Ctx) error {
+	if s.deps.Content == nil {
+		return fiber.NewError(fiber.StatusNotFound)
+	}
+	values, err := s.deps.Store.Attachments(c.Context(), c.Params("id"))
+	if err != nil {
+		return err
+	}
+	var selected task.Attachment
+	for _, value := range values {
+		if value.ID == c.Params("attachment") {
+			selected = value
+			break
+		}
+	}
+	if selected.ID == "" || selected.MediaType != "image/jpeg" && selected.MediaType != "image/png" && selected.MediaType != "image/webp" {
+		return fiber.NewError(fiber.StatusNotFound)
+	}
+	if selected.SizeBytes < 0 || selected.SizeBytes > 20<<20 {
+		return fiber.NewError(fiber.StatusRequestEntityTooLarge)
+	}
+	content, err := s.deps.Content.Read(c.Context(), selected)
+	if err != nil {
+		return err
+	}
+	if int64(len(content)) != selected.SizeBytes {
+		return fiber.NewError(fiber.StatusInternalServerError)
+	}
+	c.Set(fiber.HeaderContentType, selected.MediaType)
+	c.Set(fiber.HeaderContentDisposition, `inline; filename="attachment"`)
+	return c.Send(content)
+}
+
 func (s *Server) usage(c fiber.Ctx) error {
 	values, err := s.deps.Usage.Usage(c.Context())
 	if err != nil {

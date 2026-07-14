@@ -1,0 +1,6 @@
+{{define "head"}}<!doctype html><html lang="tr"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
+<title>{{.Title}} · AgentBridge</title><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23b7f34b' d='M4 24V8h6v10h4V4h6v14h4V8h4v16zM2 27h28v3H2z'/%3E%3C/svg%3E"><link rel="stylesheet" href="/assets/styles.css"><script src="/assets/app.js" defer></script>
+</head>{{end}}
+{{define "masthead"}}<header class="masthead"><a class="brand" href="/" aria-label="AgentBridge overview"><svg aria-hidden="true" viewBox="0 0 36 36"><path d="M7 26V10h6v10h4V6h6v14h4V10h4v16H7Z"/><path d="M4 29h28v3H4z"/></svg><span>AGENT<span>BRIDGE</span></span></a><div class="identity" title="Tailscale identity"><span class="signal" aria-hidden="true"></span>{{.Identity}}</div></header>{{end}}
+{{define "foot"}}<footer class="footer"><span>TAILNET CONTROL PLANE</span><span>LOCAL / ENCRYPTED</span></footer></body></html>{{end}}

@@ -22,6 +22,9 @@ func (s *Server) taskStream(c fiber.Ctx) error {
 		return err
 	}
 	lastID := c.Get("Last-Event-ID")
+	if lastID == "" {
+		lastID = c.Query("last_event_id")
+	}
 	c.Set(fiber.HeaderContentType, "text/event-stream")
 	c.Set(fiber.HeaderCacheControl, "no-store")
 	c.Set(fiber.HeaderConnection, "keep-alive")

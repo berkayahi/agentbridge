@@ -23,13 +23,24 @@ type Request struct {
 }
 
 type Permit struct {
-	release func()
-	once    sync.Once
+	release  func()
+	once     sync.Once
+	lost     chan struct{}
+	loseOnce sync.Once
 }
 
 func (p *Permit) Release() {
 	if p != nil {
 		p.once.Do(p.release)
+	}
+}
+
+// Done closes when durable lease ownership can no longer be proven. Callers
+// must use it to cancel the mutating process before releasing the permit.
+func (p *Permit) Done() <-chan struct{} { return p.lost }
+func (p *Permit) lose() {
+	if p != nil {
+		p.loseOnce.Do(func() { close(p.lost) })
 	}
 }
 
@@ -105,21 +116,25 @@ func (s *Scheduler) run() {
 	defer close(s.done)
 	ticker := time.NewTicker(s.heartbeat)
 	defer ticker.Stop()
-	active := make(map[string]bool)
+	type activeLease struct {
+		permit    *Permit
+		heartbeat bool
+	}
+	active := make(map[string]activeLease)
 	queues := make(map[string][]acquireRequest)
 	for {
 		select {
 		case request := <-s.acquire:
 			if request.req.ReadOnly {
-				request.reply <- acquireReply{permit: &Permit{release: func() {}}}
+				request.reply <- acquireReply{permit: &Permit{release: func() {}, lost: make(chan struct{})}}
 				continue
 			}
 			repo := request.req.Repository
-			if active[repo] {
+			if _, exists := active[repo]; exists {
 				queues[repo] = append(queues[repo], request)
 				continue
 			}
-			s.grant(request, active)
+			s.grant(request, func(repo string, permit *Permit) { active[repo] = activeLease{permit: permit, heartbeat: true} })
 		case released := <-s.release:
 			repo := released.repository
 			_ = s.store.ReleaseLease(context.Background(), repo, s.owner)
@@ -131,7 +146,7 @@ func (s *Scheduler) run() {
 				if next.ctx.Err() != nil {
 					continue
 				}
-				s.grant(next, active)
+				s.grant(next, func(repo string, permit *Permit) { active[repo] = activeLease{permit: permit, heartbeat: true} })
 				break
 			}
 			if len(queue) == 0 {
@@ -140,11 +155,22 @@ func (s *Scheduler) run() {
 				queues[repo] = queue
 			}
 		case <-ticker.C:
-			for repo := range active {
-				_ = s.store.HeartbeatLease(context.Background(), repo, s.owner, s.ttl)
+			for repo, lease := range active {
+				if !lease.heartbeat {
+					continue
+				}
+				heartbeatCtx, cancel := context.WithTimeout(context.Background(), s.heartbeat)
+				err := s.store.HeartbeatLease(heartbeatCtx, repo, s.owner, s.ttl)
+				cancel()
+				if err != nil {
+					lease.permit.lose()
+					lease.heartbeat = false
+					active[repo] = lease
+				}
 			}
 		case <-s.stop:
-			for repo := range active {
+			for repo, lease := range active {
+				lease.permit.lose()
 				_ = s.store.ReleaseLease(context.Background(), repo, s.owner)
 			}
 			for _, queue := range queues {
@@ -157,7 +183,7 @@ func (s *Scheduler) run() {
 	}
 }
 
-func (s *Scheduler) grant(request acquireRequest, active map[string]bool) {
+func (s *Scheduler) grant(request acquireRequest, activate func(string, *Permit)) {
 	repo := request.req.Repository
 	ok, err := s.store.AcquireLease(request.ctx, repo, s.owner, s.ttl)
 	if err != nil {
@@ -168,11 +194,13 @@ func (s *Scheduler) grant(request acquireRequest, active map[string]bool) {
 		request.reply <- acquireReply{err: errors.New("scheduler: repository lease unavailable")}
 		return
 	}
-	active[repo] = true
-	request.reply <- acquireReply{permit: &Permit{release: func() {
+	permit := &Permit{lost: make(chan struct{})}
+	permit.release = func() {
 		select {
 		case s.release <- releaseRequest{repository: repo}:
 		case <-s.done:
 		}
-	}}}
+	}
+	activate(repo, permit)
+	request.reply <- acquireReply{permit: permit}
 }

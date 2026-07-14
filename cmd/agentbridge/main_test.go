@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/berkayahi/agentbridge/internal/mcpserver"
+	"github.com/berkayahi/agentbridge/internal/provider/claude"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -24,6 +26,28 @@ func TestRunVersion(t *testing.T) {
 	}
 	if got := stderr.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
+func TestRunClaudeStatuslineUsesControlScope(t *testing.T) {
+	var got claude.StatuslineScope
+	deps := commandDeps{
+		getenv: func(name string) string {
+			return map[string]string{"AGENTBRIDGE_CONTROL_SOCKET": "/run/control.sock", "AGENTBRIDGE_TASK_ID": "task-1"}[name]
+		},
+		readCapability: func() ([]byte, error) { return []byte("capability"), nil },
+		runStatusline: func(_ context.Context, _ io.Reader, _ claude.StatuslineCaller, scope claude.StatuslineScope, _ func() time.Time) error {
+			got = scope
+			return nil
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	code := runWithDeps(context.Background(), []string{"claude-statusline"}, strings.NewReader(`{"session_id":"s"}`), &stdout, &stderr, deps)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
+	}
+	if got.TaskID != "task-1" || got.Provider != "claude" || string(got.Capability) != "capability" {
+		t.Fatalf("scope = %#v", got)
 	}
 }
 
@@ -75,7 +99,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge mcp\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

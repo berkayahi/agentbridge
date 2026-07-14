@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"session-example"}
+{"type":"assistant","session_id":"session-example","message":{"content":[{"type":"text","text":"Visible response"},{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"README.md"}}]}}
+{"type":"user","session_id":"session-example","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]}}
+{"type":"rate_limit_event","session_id":"session-example","rate_limit_info":{"status":"rejected","resets_at":"2026-07-14T12:00:00Z"}}
+{"type":"result","subtype":"success","is_error":false,"session_id":"session-example","result":"Complete"}

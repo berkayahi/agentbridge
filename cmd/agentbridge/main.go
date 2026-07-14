@@ -8,11 +8,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/berkayahi/agentbridge/internal/buildinfo"
 	"github.com/berkayahi/agentbridge/internal/config"
 	"github.com/berkayahi/agentbridge/internal/controlsocket"
 	"github.com/berkayahi/agentbridge/internal/mcpserver"
+	"github.com/berkayahi/agentbridge/internal/provider/claude"
 )
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -23,6 +25,7 @@ type commandDeps struct {
 	getenv         func(string) string
 	readCapability func() ([]byte, error)
 	runMCP         func(context.Context, mcpserver.RunOptions) error
+	runStatusline  func(context.Context, io.Reader, claude.StatuslineCaller, claude.StatuslineScope, func() time.Time) error
 }
 
 func defaultCommandDeps() commandDeps {
@@ -39,7 +42,8 @@ func defaultCommandDeps() commandDeps {
 			}
 			return mcpserver.ReadCapability(fd, nil, nil)
 		},
-		runMCP: mcpserver.Run,
+		runMCP:        mcpserver.Run,
+		runStatusline: claude.CaptureStatusline,
 	}
 }
 
@@ -57,9 +61,36 @@ func runWithDeps(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	if len(args) == 1 && args[0] == "mcp" {
 		return runMCPCommand(ctx, stdin, stdout, stderr, deps)
 	}
+	if len(args) == 1 && args[0] == "claude-statusline" {
+		return runClaudeStatusline(ctx, stdin, stderr, deps)
+	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge mcp")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
+}
+
+func runClaudeStatusline(ctx context.Context, stdin io.Reader, stderr io.Writer, deps commandDeps) int {
+	if deps.getenv == nil || deps.readCapability == nil || deps.runStatusline == nil {
+		fmt.Fprintln(stderr, "agentbridge: status-line dependencies unavailable")
+		return 1
+	}
+	socketPath := strings.TrimSpace(deps.getenv("AGENTBRIDGE_CONTROL_SOCKET"))
+	taskID := strings.TrimSpace(deps.getenv("AGENTBRIDGE_TASK_ID"))
+	if socketPath == "" || taskID == "" {
+		fmt.Fprintln(stderr, "agentbridge: incomplete status-line task scope")
+		return 1
+	}
+	capability, err := deps.readCapability()
+	if err != nil {
+		fmt.Fprintln(stderr, "agentbridge: status-line capability unavailable")
+		return 1
+	}
+	scope := claude.StatuslineScope{TaskID: taskID, Provider: "claude", Capability: capability}
+	if err := deps.runStatusline(ctx, stdin, controlsocket.Client{Path: socketPath}, scope, time.Now); err != nil {
+		fmt.Fprintln(stderr, "agentbridge: status-line capture failed")
+		return 1
+	}
+	return 0
 }
 
 func runMCPCommand(ctx context.Context, stdin io.Reader, stdout, stderr io.Writer, deps commandDeps) int {

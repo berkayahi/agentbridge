@@ -251,7 +251,7 @@ func (c *Client) readLoop(maxLine int) {
 	scanner.Buffer(make([]byte, 64*1024), maxLine)
 	for scanner.Scan() {
 		var message wireMessage
-		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil || message.JSONRPC != "2.0" {
+		if err := json.Unmarshal(scanner.Bytes(), &message); err != nil || (message.JSONRPC != "" && message.JSONRPC != "2.0") {
 			c.report(fmt.Errorf("%w: malformed message", ErrProtocol))
 			continue
 		}

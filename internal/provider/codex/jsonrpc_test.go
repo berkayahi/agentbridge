@@ -57,9 +57,45 @@ func TestClientDispatchesResponsesNotificationsAndServerRequests(t *testing.T) {
 	}
 }
 
+func TestClientAcceptsCurrentCodexMessagesWithoutJSONRPCVersion(t *testing.T) {
+	clientReader, serverWriter := io.Pipe()
+	serverReader, clientWriter := io.Pipe()
+	client := NewClient(clientReader, clientWriter, ClientOptions{})
+	t.Cleanup(func() { _ = client.Close() })
+
+	go func() {
+		line, _ := bufio.NewReader(serverReader).ReadBytes('\n')
+		var request wireMessage
+		_ = json.Unmarshal(line, &request)
+		fmt.Fprintf(serverWriter, `{"id":%s,"result":{"ok":true}}`+"\n", request.ID)
+		fmt.Fprintln(serverWriter, `{"method":"configWarning","params":{"summary":"warning"}}`)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.Call(ctx, "initialize", map[string]any{}, &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK {
+		t.Fatal("response was not decoded")
+	}
+	select {
+	case notification := <-client.Notifications():
+		if notification.Method != "configWarning" {
+			t.Fatalf("notification = %#v", notification)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("notification not dispatched")
+	}
+}
+
 func TestClientRejectsMalformedDuplicateAndUnknownResponseIDs(t *testing.T) {
 	for _, input := range []string{
 		"not-json\n",
+		`{"jsonrpc":"1.0","method":"invalid"}` + "\n",
 		`{"jsonrpc":"2.0","id":"missing","result":{}}` + "\n",
 	} {
 		client := NewClient(strings.NewReader(input), io.Discard, ClientOptions{})

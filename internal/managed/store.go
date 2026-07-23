@@ -39,6 +39,7 @@ type fileState struct {
 	Version int              `json:"version"`
 	Cursor  Cursor           `json:"cursor"`
 	Inbox   map[string]Frame `json:"inbox"`
+	Trust   TrustSet         `json:"trust"`
 }
 
 type FileStateStore struct {
@@ -77,6 +78,36 @@ func (s *FileStateStore) Save(ctx context.Context, cursor Cursor) error {
 		return err
 	}
 	state.Cursor = cursor
+	return s.saveLocked(state)
+}
+
+func (s *FileStateStore) LoadTrust(ctx context.Context) (TrustSet, error) {
+	if err := ctx.Err(); err != nil {
+		return TrustSet{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.loadLocked()
+	if err != nil {
+		return TrustSet{}, err
+	}
+	return cloneTrust(state.Trust), nil
+}
+
+func (s *FileStateStore) SaveTrust(ctx context.Context, trust TrustSet) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := trust.Validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.loadLocked()
+	if err != nil {
+		return err
+	}
+	state.Trust = cloneTrust(trust)
 	return s.saveLocked(state)
 }
 
@@ -210,4 +241,8 @@ func pruneExpired(state *fileState, now time.Time) {
 			delete(state.Inbox, key)
 		}
 	}
+}
+
+func cloneTrust(value TrustSet) TrustSet {
+	return TrustSet{Active: cloneKeys(value.Active), Next: cloneKeys(value.Next), HighestEpoch: value.HighestEpoch, Revoked: value.Revoked}
 }

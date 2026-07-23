@@ -35,19 +35,20 @@ type BackupOptions struct {
 }
 
 type BackupManifest struct {
-	SourceSHA256           string           `json:"source_sha256"`
-	BackupSHA256           string           `json:"backup_sha256"`
-	SchemaFingerprint      string           `json:"schema_fingerprint"`
-	ToolVersion            string           `json:"tool_version"`
-	CreatedAt              time.Time        `json:"created_at"`
-	Counts                 map[string]int64 `json:"counts"`
-	Mode                   string           `json:"mode"`
-	OrganizationID         string           `json:"organization_id,omitempty"`
-	DeviceID               string           `json:"device_id,omitempty"`
-	DeviceFingerprint      string           `json:"device_fingerprint,omitempty"`
-	HighestControllerEpoch uint64           `json:"highest_controller_epoch,omitempty"`
-	ManagedCursor          *managed.Cursor  `json:"managed_cursor,omitempty"`
-	ReEnrollmentRequired   bool             `json:"re_enrollment_required,omitempty"`
+	SourceSHA256           string            `json:"source_sha256"`
+	BackupSHA256           string            `json:"backup_sha256"`
+	SchemaFingerprint      string            `json:"schema_fingerprint"`
+	ToolVersion            string            `json:"tool_version"`
+	CreatedAt              time.Time         `json:"created_at"`
+	Counts                 map[string]int64  `json:"counts"`
+	Mode                   string            `json:"mode"`
+	OrganizationID         string            `json:"organization_id,omitempty"`
+	DeviceID               string            `json:"device_id,omitempty"`
+	DeviceFingerprint      string            `json:"device_fingerprint,omitempty"`
+	HighestControllerEpoch uint64            `json:"highest_controller_epoch,omitempty"`
+	ManagedCursor          *managed.Cursor   `json:"managed_cursor,omitempty"`
+	ManagedTrust           *managed.TrustSet `json:"managed_command_trust,omitempty"`
+	ReEnrollmentRequired   bool              `json:"re_enrollment_required,omitempty"`
 }
 
 type BackupResult struct {
@@ -190,6 +191,16 @@ func collectManagedFacts(ctx context.Context, options BackupOptions, manifest *B
 			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read managed cursor: %w", err)
+		}
+		trust, err := state.LoadTrust(ctx)
+		if err != nil {
+			return fmt.Errorf("read managed command trust: %w", err)
+		}
+		if len(trust.Active) > 0 {
+			manifest.ManagedTrust = &trust
+			if trust.HighestEpoch > manifest.HighestControllerEpoch {
+				manifest.HighestControllerEpoch = trust.HighestEpoch
+			}
 		}
 	}
 	return nil

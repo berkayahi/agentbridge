@@ -2,6 +2,7 @@ package managed
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"errors"
 	"testing"
@@ -31,6 +32,10 @@ func TestFileStateStorePersistsInboxBeforeDispatch(t *testing.T) {
 	if err := guard.Accept(context.Background(), frame, now); err != nil {
 		t.Fatal(err)
 	}
+	wantTrust := TrustSet{Active: map[string]ed25519.PublicKey{"platform-1": make(ed25519.PublicKey, ed25519.PublicKeySize)}, HighestEpoch: 4}
+	if err := store.SaveTrust(context.Background(), wantTrust); err != nil {
+		t.Fatal(err)
+	}
 	reloaded, err := NewFileStateStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -48,5 +53,9 @@ func TestFileStateStorePersistsInboxBeforeDispatch(t *testing.T) {
 	}
 	if cursor.MessageID != frame.MessageID || cursor.ControllerEpoch != frame.ControllerEpoch {
 		t.Fatalf("cursor = %#v, want persisted frame cursor", cursor)
+	}
+	gotTrust, err := reloaded.LoadTrust(context.Background())
+	if err != nil || gotTrust.HighestEpoch != wantTrust.HighestEpoch || len(gotTrust.Active["platform-1"]) != ed25519.PublicKeySize {
+		t.Fatalf("trust = %#v err=%v, want persisted trust set", gotTrust, err)
 	}
 }

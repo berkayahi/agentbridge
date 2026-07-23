@@ -112,6 +112,9 @@ func (r fiberRuntime) ShutdownWithContext(ctx context.Context) error {
 }
 
 func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, credential config.Credential, environment []string) (daemonRuntime, error) {
+	if cfg.Mode == "managed" {
+		return buildManagedDaemon(ctx, cfg, paths)
+	}
 	data, err := sqlite.Open(ctx, paths.database)
 	if err != nil {
 		return nil, err

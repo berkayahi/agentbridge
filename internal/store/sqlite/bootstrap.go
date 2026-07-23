@@ -42,6 +42,18 @@ func OpenV2(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	defer release()
+	return openV2WithRuntimeLock(ctx, path)
+}
+
+// OpenV2WithRuntimeLock opens a v2 database when the caller already holds the
+// cooperative runtime lock for the complete daemon lifetime. It is kept
+// separate from OpenV2 so managed composition can share the same lock that
+// serve owns while still using the v2 bootstrap path.
+func OpenV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
+	return openV2WithRuntimeLock(ctx, path)
+}
+
+func openV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
 
 	db, err := openRaw(ctx, path)
 	if err != nil {

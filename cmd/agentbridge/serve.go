@@ -155,9 +155,12 @@ func serveDaemonWithBuilderAndMode(ctx context.Context, configPath, mode string,
 		return err
 	}
 	defer releaseDatabaseLock()
-	token, err := (config.CredentialReader{}).Read("telegram_bot_token")
-	if err != nil {
-		return err
+	var token config.Credential
+	if cfg.Mode != string(controller.ModeManaged) {
+		token, err = (config.CredentialReader{}).Read("telegram_bot_token")
+		if err != nil {
+			return err
+		}
 	}
 	runtime, err := builder(ctx, cfg, paths, token, subscriptionEnvironment(os.Environ(), paths.claudeConfig))
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/events"
 	"github.com/berkayahi/agentbridge/internal/execution"
 	"github.com/berkayahi/agentbridge/internal/gitoperation"
+	"github.com/berkayahi/agentbridge/internal/intent"
 	"github.com/berkayahi/agentbridge/internal/localtask"
 	"github.com/berkayahi/agentbridge/internal/repository"
 	"github.com/berkayahi/agentbridge/internal/session"
@@ -72,6 +73,7 @@ type Repositories struct {
 	Repositories  repository.Repository
 	GitOperations gitoperation.Repository
 	Events        events.Repository
+	Intents       intent.Repository
 }
 
 // UnitOfWork is the transaction boundary for v2 state plus durable events.

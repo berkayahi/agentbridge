@@ -16,6 +16,7 @@ func repositoriesFor(db v2Querier) store.Repositories {
 		LocalTasks: localTaskRepository{db: db}, Executions: executionRepository{db: db},
 		Sessions: sessionRepository{db: db}, Repositories: repositoryRepository{db: db},
 		GitOperations: gitOperationRepository{db: db}, Events: eventRepository{db: db},
+		Intents: intentRepository{db: db},
 	}
 }
 

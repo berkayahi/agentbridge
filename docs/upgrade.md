@@ -25,6 +25,20 @@ operation or travel. Pin the versions validated by the acceptance suite.
    SQLite integrity, private dashboard access, and repository status.
 9. Keep the previous binary until the next verified backup and normal task complete.
 
+For a signed candidate, use the local-only update boundary after independently
+verifying the metadata and root files:
+
+```sh
+agentbridge update --metadata /protected/metadata.json \
+  --trust-root /protected/update-root.json \
+  --target "$HOME/.local/bin/agentbridge" \
+  --staged /protected/agentbridge.staged \
+  --floor "$HOME/.local/share/agentbridge/update-floor.json"
+```
+
+The command never downloads a URL, accepts a runtime health command, or
+changes Codex/Claude installations.
+
 Do not run database migrations against the only copy of a database. The
 verified pre-cutover backup and restore check must pass before service start.
 

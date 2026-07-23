@@ -59,7 +59,7 @@ func (s *MemoryFloorStore) Save(ctx context.Context, value Floor) error {
 	if err := value.Validate(); err != nil {
 		return err
 	}
-	if value.MetadataVersion < s.value.MetadataVersion {
+	if value.MetadataVersion < s.value.MetadataVersion || value.MetadataVersion == s.value.MetadataVersion && value != s.value {
 		return ErrRollback
 	}
 	s.value = value
@@ -123,7 +123,7 @@ func (s *FileFloorStore) Save(ctx context.Context, value Floor) error {
 	if err != nil {
 		return err
 	}
-	if value.MetadataVersion < current.MetadataVersion {
+	if value.MetadataVersion < current.MetadataVersion || value.MetadataVersion == current.MetadataVersion && value != current {
 		return ErrRollback
 	}
 	directory := filepath.Dir(s.path)

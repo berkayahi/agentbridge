@@ -99,6 +99,9 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	if len(args) > 0 && args[0] == "restore-check" {
 		return runRestoreCheckCommand(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "update" {
+		return runUpdateCommand(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "enroll" {
 		return runEnrollCommand(ctx, args[1:], stdout, stderr)
 	}

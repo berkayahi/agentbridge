@@ -2,8 +2,12 @@ package update
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -78,6 +82,52 @@ func TestFileFloorStoreRoundTripsOwnerOnlyState(t *testing.T) {
 	info, err := os.Stat(path)
 	if err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("floor permissions = %v err=%v", info.Mode().Perm(), err)
+	}
+}
+
+func TestUpdateTrustDocumentsRejectURLsAndWritableFiles(t *testing.T) {
+	if _, err := ReadTrustRootFile("https://updates.example/root.json"); !errors.Is(err, ErrUntrustedDocument) {
+		t.Fatalf("URL trust root error = %v, want ErrUntrustedDocument", err)
+	}
+	path := filepath.Join(t.TempDir(), "root.json")
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := json.Marshal(map[string]any{
+		"threshold": 1,
+		"keys":      map[string]string{"release-1": base64.StdEncoding.EncodeToString(public)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, document, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTrustRootFile(path); !errors.Is(err, ErrUntrustedDocument) {
+		t.Fatalf("writable trust root error = %v, want ErrUntrustedDocument", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadTrustRootFile(path); err != nil {
+		t.Fatalf("protected trust root error = %v", err)
+	}
+}
+
+func TestFloorCannotBeRewrittenAtSameMetadataVersion(t *testing.T) {
+	store := &MemoryFloorStore{}
+	first := Floor{MetadataVersion: 1, ProductVersion: "2.0.1", BuildTag: "v2.0.1", ArtifactDigest: hex.EncodeToString(make([]byte, 32)), UpdatedAt: time.Unix(4_000, 0).UTC()}
+	if err := store.Save(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.BuildTag = "v2.0.1-replaced"
+	if err := store.Save(context.Background(), second); !errors.Is(err, ErrRollback) {
+		t.Fatalf("same-version floor error = %v, want ErrRollback", err)
 	}
 }
 

@@ -13,3 +13,8 @@ identity in a secure floor that ordinary database/archive restore cannot lower.
 Installation stages and verifies a target, atomically swaps it, runs the
 bounded health contract, and restores the previous binary on failure. Platform
 command trust and update trust are never interchangeable.
+
+The operator CLI accepts only protected local metadata, root, staged-binary,
+target, and floor paths. It has no URL downloader and no arbitrary health
+command. Managed command frames cannot invoke this path or supply a trust root;
+they may select only a version/channel already authorized by signed metadata.

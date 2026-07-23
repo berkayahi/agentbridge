@@ -8,4 +8,6 @@ a provider, reads a credential, or returns secret material.
 `scripts/ops-smoke.sh` uses a supplied binary and optional config/database
 paths, so CI can run it against temporary fake-runtime assets. Raspberry Pi
 systemd and real-runtime evidence remains a separately controlled hardware
-gate; a local macOS run is not treated as ARM evidence.
+gate. `scripts/pi-smoke.sh` exits `3` with `not_executed` unless it is run on
+controlled ARM64 Linux with `RUN_PI_SMOKE=1` and an immutable candidate
+manifest; a local macOS run is not treated as ARM evidence.

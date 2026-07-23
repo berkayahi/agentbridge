@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/operations"
@@ -21,6 +22,10 @@ func runDatabaseDoctor(ctx context.Context, args []string, stdout, stderr io.Wri
 	}
 	if !*jsonOutput {
 		fmt.Fprintln(stderr, "agentbridge: database doctor requires --json")
+		return 2
+	}
+	if strings.TrimSpace(*database) == "" || !filepath.IsAbs(strings.TrimSpace(*database)) {
+		fmt.Fprintln(stderr, "agentbridge: database doctor requires an absolute --database path")
 		return 2
 	}
 	report, err := operations.Doctor(ctx, operations.DoctorOptions{Database: strings.TrimSpace(*database)})

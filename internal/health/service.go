@@ -13,6 +13,7 @@ type Status string
 const (
 	StatusOK       Status = "ok"
 	StatusNotReady Status = "not_ready"
+	defaultTimeout        = 5 * time.Second
 )
 
 type CheckResult struct {
@@ -30,8 +31,9 @@ type Report struct {
 type Check func(context.Context) error
 
 type Service struct {
-	clock  func() time.Time
-	checks []namedCheck
+	clock   func() time.Time
+	timeout time.Duration
+	checks  []namedCheck
 }
 
 type namedCheck struct {
@@ -40,8 +42,15 @@ type namedCheck struct {
 }
 
 func New(clock func() time.Time, checks map[string]Check) (*Service, error) {
+	return NewWithTimeout(clock, checks, defaultTimeout)
+}
+
+func NewWithTimeout(clock func() time.Time, checks map[string]Check, timeout time.Duration) (*Service, error) {
 	if clock == nil {
 		clock = func() time.Time { return time.Now().UTC() }
+	}
+	if timeout <= 0 {
+		return nil, errors.New("health: invalid timeout")
 	}
 	values := make([]namedCheck, 0, len(checks))
 	for name, check := range checks {
@@ -57,7 +66,7 @@ func New(clock func() time.Time, checks map[string]Check) (*Service, error) {
 			}
 		}
 	}
-	return &Service{clock: clock, checks: values}, nil
+	return &Service{clock: clock, timeout: timeout, checks: values}, nil
 }
 
 func Liveness(clock func() time.Time) Report {
@@ -68,15 +77,30 @@ func Liveness(clock func() time.Time) Report {
 }
 
 func (s *Service) Readiness(ctx context.Context) Report {
+	if s == nil {
+		return Report{Status: StatusNotReady, At: time.Now().UTC(), Checks: []CheckResult{{Name: "service", Status: StatusNotReady, Detail: "unavailable"}}}
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
 	report := Report{Status: StatusOK, At: s.clock().UTC(), Checks: make([]CheckResult, 0, len(s.checks))}
 	for _, item := range s.checks {
 		result := CheckResult{Name: item.name, Status: StatusOK}
-		if err := item.check(ctx); err != nil {
+		if err := item.check(checkCtx); err != nil {
 			result.Status = StatusNotReady
-			result.Detail = err.Error()
+			result.Detail = safeDetail(err)
 			report.Status = StatusNotReady
 		}
 		report.Checks = append(report.Checks, result)
 	}
 	return report
+}
+
+func safeDetail(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	return "unavailable"
 }

@@ -26,6 +26,7 @@ install -d -m 0700 "$bin_dir" "$lib_dir/scripts" "$data_dir" "$cache_dir" "$data
 install -m 0755 "$binary_source" "$bin_dir/agentbridge"
 install -m 0755 "$repository_root/scripts/backup.sh" "$lib_dir/scripts/backup.sh"
 install -m 0755 "$repository_root/scripts/restore-check.sh" "$lib_dir/scripts/restore-check.sh"
+install -m 0755 "$repository_root/scripts/ops-smoke.sh" "$lib_dir/scripts/ops-smoke.sh"
 install -m 0755 "$repository_root/scripts/pi-smoke.sh" "$lib_dir/scripts/pi-smoke.sh"
 install -m 0644 "$script_dir/systemd/agentbridge.service" "$unit_dir/agentbridge.service"
 install -m 0644 "$script_dir/systemd/agentbridge-backup.service" "$unit_dir/agentbridge-backup.service"

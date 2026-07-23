@@ -91,6 +91,11 @@ journalctl --user -u agentbridge.service --since today
 $HOME/.local/lib/agentbridge/scripts/pi-smoke.sh
 ```
 
+The Pi script is a controlled release gate, not a routine laptop check. It
+returns exit code `3` with `not_executed` unless `RUN_PI_SMOKE=1`, the host is
+ARM64 Linux, and `AGENTBRIDGE_CANDIDATE_MANIFEST` names the immutable candidate
+manifest. Never convert that result into a passing release attestation.
+
 Observable logs must be redacted. Treat unexpected command lines, files,
 approval requests, repeated restarts, or repository changes as an incident.
 

@@ -29,7 +29,7 @@ LockPersonality=true
 RestrictSUIDSGID=true
 RestrictRealtime=true
 RemoveIPC=true
-ReadWritePaths=%h/.local/share/agentbridge %h/.cache/agentbridge -%h/.codex -%h/.claude
+ReadWritePaths=%h/.local/share/agentbridge %h/.cache/agentbridge %h/.codex %h/.claude
 
 [Install]
 WantedBy=default.target

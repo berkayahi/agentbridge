@@ -66,16 +66,20 @@ type Request struct {
 	ProviderRequestID string
 	Kind              string
 	Summary           string
+	Binding           Binding
 }
 
 type Result struct {
-	Approved bool   `json:"approved"`
-	Reason   string `json:"reason,omitempty"`
+	Approved      bool   `json:"approved"`
+	Reason        string `json:"reason,omitempty"`
+	ApprovalID    string `json:"approval_id,omitempty"`
+	BindingDigest string `json:"binding_digest,omitempty"`
 }
 
 type pending struct {
-	record task.Approval
-	result chan Result
+	record  task.Approval
+	result  chan Result
+	binding Binding
 
 	mu       sync.Mutex
 	canceled bool
@@ -138,6 +142,7 @@ func (b *Broker) Request(ctx context.Context, request Request) (Result, error) {
 		ProviderRequestID: truncateRunes(b.redactor.RedactString(request.ProviderRequestID), maxProviderID),
 		ChatID:            request.ChatID,
 		Summary:           summary,
+		Binding:           request.Binding,
 	})
 	if err != nil {
 		return Result{}, fmt.Errorf("approval: encode request: %w", err)
@@ -148,6 +153,9 @@ func (b *Broker) Request(ctx context.Context, request Request) (Result, error) {
 		RequestedAt: now, ExpiresAt: &expires,
 	}
 	waiter := &pending{record: value, result: make(chan Result, 1)}
+	if request.Binding.Valid() {
+		waiter.binding = request.Binding
+	}
 	if !b.reserve(approvalID, waiter) {
 		return Result{}, errors.New("approval: identifier collision")
 	}
@@ -175,6 +183,10 @@ func (b *Broker) Request(ctx context.Context, request Request) (Result, error) {
 	defer timer.Stop()
 	select {
 	case result := <-waiter.result:
+		result.ApprovalID = approvalID
+		if waiter.binding.Valid() {
+			result.BindingDigest = waiter.binding.Digest()
+		}
 		return result, nil
 	case <-ctx.Done():
 		return b.expire(ctx, approvalID, waiter, "approval canceled")
@@ -183,9 +195,30 @@ func (b *Broker) Request(ctx context.Context, request Request) (Result, error) {
 	}
 }
 
+// HandleBoundDecision consumes a decision only when every immutable binding
+// field matches the request that was durably persisted before delivery.
+func (b *Broker) HandleBoundDecision(ctx context.Context, taskID, approvalID, userID string, allow bool, binding Binding) error {
+	waiter, err := b.lookupPending(taskID, approvalID)
+	if err != nil {
+		return err
+	}
+	if err := ValidateBinding(waiter.binding, binding); err != nil {
+		return err
+	}
+	return b.handleDecision(ctx, taskID, approvalID, userID, allow, binding)
+}
+
 // HandleDecision consumes one matching, authorized callback. The durable
 // decision is written before an approval is released to the waiting provider.
 func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID string, allow bool) error {
+	waiter, err := b.lookupPending(taskID, approvalID)
+	if err != nil {
+		return err
+	}
+	return b.handleDecision(ctx, taskID, approvalID, userID, allow, waiter.binding)
+}
+
+func (b *Broker) handleDecision(ctx context.Context, taskID, approvalID, userID string, allow bool, binding Binding) error {
 	if !validUserID(userID) || !b.authorizeUser(userID) {
 		return ErrUnauthorized
 	}
@@ -200,6 +233,17 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 	}
 
 	now := b.clock().UTC()
+	if waiter.record.ExpiresAt != nil && !now.Before(*waiter.record.ExpiresAt) {
+		waiter.canceled = true
+		waiter.mu.Unlock()
+		_ = b.persistExpiredDetached(ctx, waiter, "approval expired before decision")
+		return ErrNotPending
+	}
+	if waiter.binding.Valid() && !waiter.binding.Matches(binding) {
+		b.restore(approvalID, waiter)
+		waiter.mu.Unlock()
+		return ErrBindingMismatch
+	}
 	value := waiter.record
 	value.Status = task.ApprovalRejected
 	reason := "rejected by Telegram operator"
@@ -208,7 +252,7 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 		reason = "approved by Telegram operator"
 	}
 	value.ResolvedAt = &now
-	value.DecisionPayload, _ = json.Marshal(decisionPayload{Approved: allow, UserID: userID, Reason: reason})
+	value.DecisionPayload, _ = json.Marshal(decisionPayload{Approved: allow, UserID: userID, Reason: reason, BindingDigest: waiter.binding.Digest()})
 	if err := b.store.UpsertApproval(ctx, value); err != nil {
 		b.restore(approvalID, waiter)
 		waiter.mu.Unlock()
@@ -228,9 +272,22 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 	}
 
 	waiter.finished = true
-	waiter.result <- Result{Approved: allow, Reason: reason}
+	waiter.result <- Result{Approved: allow, Reason: reason, ApprovalID: approvalID, BindingDigest: waiter.binding.Digest()}
 	waiter.mu.Unlock()
 	return nil
+}
+
+func (b *Broker) lookupPending(taskID, approvalID string) (*pending, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	waiter, ok := b.pending[approvalID]
+	if !ok {
+		return nil, ErrNotPending
+	}
+	if waiter.record.TaskID != taskID {
+		return nil, ErrMismatch
+	}
+	return waiter, nil
 }
 
 func (b *Broker) appendDecisionEvent(ctx context.Context, event task.Event) error {
@@ -381,6 +438,9 @@ func validateRequest(request Request) error {
 		strings.TrimSpace(request.Summary) == "" || len(request.Summary) > maxSummary {
 		return ErrInvalidRequest
 	}
+	if request.Binding != (Binding{}) && !request.Binding.Valid() {
+		return ErrInvalidRequest
+	}
 	return nil
 }
 
@@ -409,13 +469,15 @@ func truncateRunes(value string, limit int) string {
 }
 
 type requestPayload struct {
-	ProviderRequestID string `json:"provider_request_id"`
-	ChatID            int64  `json:"chat_id"`
-	Summary           string `json:"summary"`
+	ProviderRequestID string  `json:"provider_request_id"`
+	ChatID            int64   `json:"chat_id"`
+	Summary           string  `json:"summary"`
+	Binding           Binding `json:"binding,omitempty"`
 }
 
 type decisionPayload struct {
-	Approved bool   `json:"approved"`
-	UserID   string `json:"user_id,omitempty"`
-	Reason   string `json:"reason"`
+	Approved      bool   `json:"approved"`
+	UserID        string `json:"user_id,omitempty"`
+	Reason        string `json:"reason"`
+	BindingDigest string `json:"binding_digest,omitempty"`
 }

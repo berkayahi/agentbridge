@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 )
@@ -83,7 +84,7 @@ func fingerprintFor(canonicalPath string, info os.FileInfo, identity fileIdentit
 // Fingerprint returns a stable, opaque identity for a repository directory.
 // The returned value does not contain the local path.
 func Fingerprint(path string) (string, error) {
-	canonical, err := os.EvalSymlinks(path)
+	canonical, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		return "", fmt.Errorf("fingerprint repository root: %w", err)
 	}

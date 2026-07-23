@@ -28,6 +28,15 @@ const (
 	EffectUpdate           Effect = "update"
 )
 
+func (e Effect) Valid() bool {
+	switch e {
+	case EffectSecrets, EffectGitPublication, EffectProviderRecovery, EffectUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
 var ErrInvalidPolicy = errors.New("policy: invalid policy")
 
 // Layer uses nil slices to mean unconstrained and non-nil empty slices to mean

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/controlsocket"
+	"github.com/berkayahi/agentbridge/internal/policy"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -35,6 +36,8 @@ type Scope struct {
 	Provider        string
 	Capability      []byte
 	ApprovalTimeout time.Duration
+	Policy          policy.Snapshot
+	NativeApproval  policy.ApprovalMode
 }
 
 type ApprovalInput struct {
@@ -82,6 +85,14 @@ func New(caller Caller, scope Scope) *mcp.Server {
 			if input.Kind == "" || input.Summary == "" || len(input.Kind) > 128 || len(input.Summary) > maxSummaryBytes {
 				return nil, ApprovalOutput{}, errors.New("invalid bounded approval request")
 			}
+			if err := authorize(scope, policy.Request{CommandClass: "approval"}); err != nil {
+				return nil, ApprovalOutput{}, err
+			}
+			if scope.Policy.Digest != "" {
+				if _, err := policy.NativeApproval(scope.Policy, scope.NativeApproval); err != nil {
+					return nil, ApprovalOutput{}, err
+				}
+			}
 			approvalCtx, cancel := context.WithTimeout(ctx, scope.ApprovalTimeout)
 			defer cancel()
 			var output ApprovalOutput
@@ -96,6 +107,9 @@ func New(caller Caller, scope Scope) *mcp.Server {
 			if input.Message == "" || len(input.Message) > maxMessageBytes {
 				return nil, NotifyOutput{}, errors.New("invalid bounded notification")
 			}
+			if err := authorize(scope, policy.Request{CommandClass: "notification"}); err != nil {
+				return nil, NotifyOutput{}, err
+			}
 			var output NotifyOutput
 			return nil, output, call(ctx, caller, scope, "notify_telegram", input, &output)
 		})
@@ -104,15 +118,28 @@ func New(caller Caller, scope Scope) *mcp.Server {
 			if !filepath.IsAbs(input.Path) || len(input.Path)+len(input.Name) > maxArtifactBytes {
 				return nil, ArtifactOutput{}, errors.New("invalid bounded artifact")
 			}
+			if err := authorize(scope, policy.Request{CommandClass: "artifact", FilesystemScope: input.Path}); err != nil {
+				return nil, ArtifactOutput{}, err
+			}
 			var output ArtifactOutput
 			return nil, output, call(ctx, caller, scope, "send_artifact", input, &output)
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: "get_task_context", Description: "Read the current task's safe execution context."},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input ContextInput) (*mcp.CallToolResult, ContextOutput, error) {
 			var output ContextOutput
+			if err := authorize(scope, policy.Request{CommandClass: "context"}); err != nil {
+				return nil, ContextOutput{}, err
+			}
 			return nil, output, call(ctx, caller, scope, "get_task_context", input, &output)
 		})
 	return server
+}
+
+func authorize(scope Scope, request policy.Request) error {
+	if scope.Policy.Digest == "" {
+		return nil
+	}
+	return policy.Require(scope.Policy, request)
 }
 
 func call(ctx context.Context, caller Caller, scope Scope, tool string, input, output any) error {

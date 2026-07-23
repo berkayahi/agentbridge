@@ -186,7 +186,7 @@ func (h Handle) Validate() error {
 	if err != nil || !sameIdentity(h.entry.rootIdentity, identity) {
 		return ErrRootChanged
 	}
-	canonical, err := os.EvalSymlinks(h.entry.root)
+	canonical, err := filepath.EvalSymlinks(h.entry.root)
 	if err != nil || !samePath(canonical, h.entry.canonicalRoot) {
 		return ErrRootChanged
 	}
@@ -250,7 +250,7 @@ func (w Worktree) Validate() error {
 	if err != nil || !sameIdentity(w.identity, identity) {
 		return ErrRootChanged
 	}
-	canonical, err := os.EvalSymlinks(w.path)
+	canonical, err := filepath.EvalSymlinks(w.path)
 	if err != nil || !samePath(canonical, w.path) || !isWithin(w.handle.entry.canonicalWorktree, canonical) {
 		return ErrOutsideRoot
 	}
@@ -269,7 +269,7 @@ func approvedRoot(path string) (string, string, os.FileInfo, fileIdentity, error
 	if lstat.Mode()&os.ModeSymlink != 0 {
 		return "", "", nil, fileIdentity{}, ErrSymlink
 	}
-	canonical, err := os.EvalSymlinks(clean)
+	canonical, err := filepath.EvalSymlinks(clean)
 	if err != nil {
 		return "", "", nil, fileIdentity{}, fmt.Errorf("resolve repository root: %w", err)
 	}
@@ -299,7 +299,7 @@ func approvedAnchor(path string) (string, error) {
 		if !info.IsDir() {
 			return "", errors.New("repository: worktree root must be a directory")
 		}
-		return os.EvalSymlinks(clean)
+		return filepath.EvalSymlinks(clean)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
@@ -307,7 +307,7 @@ func approvedAnchor(path string) (string, error) {
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", fmt.Errorf("prepare worktree root: %w", err)
 	}
-	canonicalParent, err := os.EvalSymlinks(parent)
+	canonicalParent, err := filepath.EvalSymlinks(parent)
 	if err != nil {
 		return "", fmt.Errorf("resolve worktree root parent: %w", err)
 	}
@@ -316,7 +316,7 @@ func approvedAnchor(path string) (string, error) {
 
 func canonicalCandidate(path string) (string, error) {
 	if _, err := os.Lstat(path); err == nil {
-		canonical, err := os.EvalSymlinks(path)
+		canonical, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			return "", fmt.Errorf("resolve repository path: %w", err)
 		}
@@ -328,7 +328,7 @@ func canonicalCandidate(path string) (string, error) {
 	current := path
 	for {
 		if _, err := os.Lstat(current); err == nil {
-			canonical, err := os.EvalSymlinks(current)
+			canonical, err := filepath.EvalSymlinks(current)
 			if err != nil {
 				return "", err
 			}

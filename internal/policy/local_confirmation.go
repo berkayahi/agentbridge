@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,14 +24,17 @@ type Confirmation struct {
 	Used         bool
 }
 
-type LocalConfirmation struct{ used map[string]struct{} }
+type LocalConfirmation struct {
+	mu   sync.Mutex
+	used map[string]struct{}
+}
 
 func NewLocalConfirmation() *LocalConfirmation {
 	return &LocalConfirmation{used: make(map[string]struct{})}
 }
 
 func (c *LocalConfirmation) Issue(executionID string, effect Effect, digest string, origin string, expiresAt time.Time) (Confirmation, error) {
-	if executionID == "" || effect == "" || digest == "" || origin == "" || expiresAt.IsZero() {
+	if strings.TrimSpace(executionID) == "" || !effect.Valid() || strings.TrimSpace(digest) == "" || !localOrigin(origin) || expiresAt.IsZero() {
 		return Confirmation{}, ErrConfirmationInvalid
 	}
 	buffer := make([]byte, 16)
@@ -40,9 +45,11 @@ func (c *LocalConfirmation) Issue(executionID string, effect Effect, digest stri
 }
 
 func (c *LocalConfirmation) Consume(value Confirmation, executionID string, effect Effect, digest string, now time.Time) error {
-	if value.Used || value.ExecutionID != executionID || value.Effect != effect || value.PolicyDigest != digest || value.ExpiresAt.IsZero() || !now.Before(value.ExpiresAt) || !localOrigin(value.Origin) {
+	if value.Used || value.ExecutionID != executionID || value.Effect != effect || value.PolicyDigest != digest || value.ExpiresAt.IsZero() || !now.Before(value.ExpiresAt) || !localOrigin(value.Origin) || strings.TrimSpace(value.Nonce) == "" {
 		return ErrConfirmationInvalid
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if _, exists := c.used[value.Nonce]; exists {
 		return ErrConfirmationReplay
 	}

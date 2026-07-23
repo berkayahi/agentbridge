@@ -45,6 +45,8 @@ type ForkExecution struct {
 
 type ApprovalDecision struct {
 	CommandID, ExecutionID, TaskID, RuntimeID, ApprovalID string
+	OperationDigest, PolicyDigest, AuthEvidenceRef, Nonce string
+	Effect                                                string
 	Allow                                                 bool
 }
 

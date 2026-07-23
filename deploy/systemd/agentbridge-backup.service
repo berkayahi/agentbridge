@@ -7,7 +7,7 @@ Type=oneshot
 UMask=0077
 Environment=AGENTBRIDGE_DATA_DIR=%h/.local/share/agentbridge
 EnvironmentFile=-%h/.config/agentbridge/backup.env
-ExecStart=%h/.local/lib/agentbridge/scripts/backup.sh
+ExecStart=%h/.local/bin/agentbridge backup --database %h/.local/share/agentbridge/agentbridge.db --output %h/.local/share/agentbridge/backups
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

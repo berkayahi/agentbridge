@@ -28,6 +28,17 @@ operation or travel. Pin the versions validated by the acceptance suite.
 Do not run database migrations against the only copy of a database. The
 verified pre-cutover backup and restore check must pass before service start.
 
+The v2 operational boundary is explicit and schema-aware:
+
+```sh
+agentbridge doctor --database /path/to/agentbridge.db --json
+agentbridge backup --database /path/to/agentbridge.db --output /path/to/backups
+agentbridge restore-check --backup /path/to/backups --work-dir /path/to/restore-check
+```
+
+Maintenance shell scripts delegate to these commands and do not query SQLite
+tables directly.
+
 ## Rollback
 
 Stop the service, atomically restore `agentbridge.previous`, and restart. If an

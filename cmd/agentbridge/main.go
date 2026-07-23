@@ -84,6 +84,19 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	if len(args) == 3 && args[0] == "doctor" && args[1] == "--config" && strings.TrimSpace(args[2]) != "" {
 		return runDoctor(args[2], stdout, stderr)
 	}
+	if len(args) >= 2 && args[0] == "doctor" {
+		for _, arg := range args[1:] {
+			if arg == "--database" {
+				return runDatabaseDoctor(ctx, args[1:], stdout, stderr)
+			}
+		}
+	}
+	if len(args) > 0 && args[0] == "backup" {
+		return runBackupCommand(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "restore-check" {
+		return runRestoreCheckCommand(ctx, args[1:], stdout, stderr)
+	}
 	if len(args) == 4 && args[0] == "pair" && args[1] == "telegram" && args[2] == "--config" && strings.TrimSpace(args[3]) != "" {
 		if pairing == nil {
 			if deps.newPairer == nil {
@@ -146,7 +159,7 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 

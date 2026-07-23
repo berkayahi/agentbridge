@@ -81,12 +81,15 @@ List one task ID per line in
 artifact retention. Active task states are always exempt. Override durations
 in `$HOME/.config/agentbridge/backup.env` with positive integer day counts.
 
-Run a backup and non-destructive restore check:
+Run the supported v2 backup and non-destructive restore check commands:
 
 ```sh
 systemctl --user start agentbridge-backup.service
-$HOME/.local/lib/agentbridge/scripts/restore-check.sh \
-  "$HOME/.local/share/agentbridge/backups/<backup-file>.db"
+$HOME/.local/bin/agentbridge doctor \
+  --database "$HOME/.local/share/agentbridge/agentbridge.db" --json
+$HOME/.local/bin/agentbridge restore-check \
+  --backup "$HOME/.local/share/agentbridge/backups" \
+  --work-dir "$HOME/.cache/agentbridge/restore-check"
 ```
 
 Copy encrypted backups to a separate device or storage account according to

@@ -72,6 +72,37 @@ type RepositoryProfile struct {
 	Verification  []VerificationCommand `yaml:"verification"`
 	DeploymentURL string                `yaml:"deployment_url,omitempty"`
 	Delivery      DeliveryPolicy        `yaml:"delivery,omitempty"`
+	Isolation     IsolationProfile      `yaml:"isolation,omitempty"`
+}
+
+type IsolationProfile struct {
+	Tier          string                 `yaml:"tier,omitempty"`
+	WorktreeRoot  string                 `yaml:"worktree_root,omitempty"`
+	WritablePaths []string               `yaml:"writable_paths,omitempty"`
+	Network       IsolationNetworkPolicy `yaml:"network,omitempty"`
+	Limits        IsolationLimits        `yaml:"limits,omitempty"`
+	Automation    IsolationAutomation    `yaml:"automation,omitempty"`
+}
+
+type IsolationNetworkPolicy struct {
+	Mode     string   `yaml:"mode,omitempty"`
+	Provider []string `yaml:"provider,omitempty"`
+	Package  []string `yaml:"package,omitempty"`
+	Test     []string `yaml:"test,omitempty"`
+}
+
+type IsolationLimits struct {
+	CPUSeconds    uint64 `yaml:"cpu_seconds,omitempty"`
+	MemoryBytes   uint64 `yaml:"memory_bytes,omitempty"`
+	FileSizeBytes uint64 `yaml:"file_size_bytes,omitempty"`
+	OpenFiles     uint64 `yaml:"open_files,omitempty"`
+	Processes     uint64 `yaml:"processes,omitempty"`
+}
+
+type IsolationAutomation struct {
+	Secrets     bool `yaml:"secrets,omitempty"`
+	Network     bool `yaml:"network,omitempty"`
+	Publication bool `yaml:"publication,omitempty"`
 }
 
 type VerificationCommand struct {

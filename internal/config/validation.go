@@ -142,7 +142,52 @@ func (r RepositoryProfile) validate() error {
 	if err := validateDeploymentURL(r.DeploymentURL); err != nil {
 		return err
 	}
+	if err := r.Isolation.validate(); err != nil {
+		return err
+	}
 	return r.Delivery.validate()
+}
+
+func (i IsolationProfile) validate() error {
+	if i.Tier != "" && i.Tier != "strong" && i.Tier != "standard" && i.Tier != "weak" {
+		return errors.New("isolation tier must be strong, standard, or weak")
+	}
+	if i.WorktreeRoot != "" && !filepath.IsAbs(i.WorktreeRoot) {
+		return errors.New("isolation worktree_root must be absolute")
+	}
+	for _, path := range i.WritablePaths {
+		if path == "" || !filepath.IsAbs(path) {
+			return errors.New("isolation writable_paths must contain absolute paths")
+		}
+	}
+	if i.Network.Mode != "" && i.Network.Mode != "deny" && i.Network.Mode != "allowlist" {
+		return errors.New("isolation network mode must be deny or allowlist")
+	}
+	if i.Network.Mode == "allowlist" && len(i.Network.Provider)+len(i.Network.Package)+len(i.Network.Test) == 0 {
+		return errors.New("isolation network allowlist must not be empty")
+	}
+	for _, host := range append(append(append([]string(nil), i.Network.Provider...), i.Network.Package...), i.Network.Test...) {
+		if err := validateIsolationHost(host); err != nil {
+			return err
+		}
+	}
+	if i.Tier == "weak" && (i.Automation.Secrets || i.Automation.Network || i.Automation.Publication) {
+		return errors.New("weak isolation cannot enable automatic secrets, network, or publication")
+	}
+	return nil
+}
+
+func validateIsolationHost(host string) error {
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	if host == "" || strings.ContainsAny(host, "/\\:@") || strings.Contains(host, "..") {
+		return errors.New("isolation network destination is invalid")
+	}
+	for _, value := range host {
+		if !(value == '-' || value == '_' || value == '.' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9') {
+			return errors.New("isolation network destination is invalid")
+		}
+	}
+	return nil
 }
 
 func (v VerificationCommand) validate() error {

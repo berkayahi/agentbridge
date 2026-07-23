@@ -5,10 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/egressguard"
+	"github.com/berkayahi/agentbridge/internal/isolation"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/security"
 )
@@ -16,9 +19,12 @@ import (
 const maxStderrBytes = 64 * 1024
 
 type ProcessConfig struct {
-	Executable string
-	Args       []string
-	Env        []string
+	Executable  string
+	Args        []string
+	Env         []string
+	Dir         string
+	Isolation   *isolation.Policy
+	EgressGuard *egressguard.Guard
 }
 
 type Process struct {
@@ -31,6 +37,7 @@ type Process struct {
 	wait      chan struct{}
 	closeOnce sync.Once
 	closeErr  error
+	egress    *egressguard.Guard
 }
 
 func AppServerArgs() []string { return []string{"app-server", "--listen", "stdio://"} }
@@ -47,8 +54,18 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		cfg.Args = AppServerArgs()
 	}
 	cmd := exec.Command(cfg.Executable, cfg.Args...)
-	cmd.Env = cfg.Env
+	cmd.Dir = cfg.Dir
+	baseEnvironment := cfg.Env
+	if baseEnvironment == nil {
+		baseEnvironment = os.Environ()
+	}
+	cmd.Env = isolation.FilterEnvironment(baseEnvironment, isolation.EnvironmentPolicy{})
 	provider.ConfigureProcessGroup(cmd)
+	if cfg.Isolation != nil {
+		if err := isolation.PrepareCommand(cmd, *cfg.Isolation); err != nil {
+			return nil, fmt.Errorf("codex isolation: %w", err)
+		}
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("codex stdin: %w", err)
@@ -64,7 +81,14 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start codex app server: %w", err)
 	}
-	p := &Process{cmd: cmd, stdin: stdin, wait: make(chan struct{})}
+	if cfg.Isolation != nil {
+		if err := isolation.ApplyStartedProcess(cmd.Process, *cfg.Isolation); err != nil {
+			_ = provider.SweepProcessGroup(cmd.Process)
+			_, _ = cmd.Process.Wait()
+			return nil, fmt.Errorf("codex isolation limits: %w", err)
+		}
+	}
+	p := &Process{cmd: cmd, stdin: stdin, wait: make(chan struct{}), egress: cfg.EgressGuard}
 	p.Client = NewClient(stdout, stdin, ClientOptions{})
 	go p.captureStderr(stderr)
 	go func() {
@@ -114,6 +138,11 @@ func (p *Process) Close() error {
 func (p *Process) captureStderr(reader io.Reader) {
 	data, _ := io.ReadAll(io.LimitReader(reader, maxStderrBytes+1))
 	redacted := security.NewRedactor(security.Config{MaxPayloadRunes: maxStderrBytes}).RedactBytes(data)
+	if p.egress != nil {
+		if guarded, _ := p.egress.Check(egressguard.ClassTerminalOutput, redacted); guarded != nil {
+			redacted = guarded
+		}
+	}
 	p.stderrMu.Lock()
 	defer p.stderrMu.Unlock()
 	_, _ = p.stderr.Write(redacted)

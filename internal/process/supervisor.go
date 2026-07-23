@@ -10,6 +10,9 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/berkayahi/agentbridge/internal/egressguard"
+	"github.com/berkayahi/agentbridge/internal/isolation"
 )
 
 var ErrStart = errors.New("process: start")
@@ -30,14 +33,17 @@ const (
 )
 
 type Command struct {
-	Argv []string
-	Dir  string
-	Env  map[string]string
+	Argv        []string
+	Dir         string
+	Env         map[string]string
+	Isolation   *isolation.Policy
+	EgressGuard *egressguard.Guard
 }
 type Event struct {
-	Stream    Stream
-	Line      string
-	Truncated bool
+	Stream      Stream
+	Line        string
+	Truncated   bool
+	Quarantined bool
 }
 type Result struct {
 	Class    ExitClass
@@ -72,6 +78,11 @@ func (s Supervisor) Run(ctx context.Context, command Command) (Result, error) {
 	cmd.Dir = command.Dir
 	cmd.Env = s.environment(command.Env)
 	configureProcessGroup(cmd)
+	if command.Isolation != nil {
+		if err := isolation.PrepareCommand(cmd, *command.Isolation); err != nil {
+			return Result{}, fmt.Errorf("%w: isolation: %v", ErrStart, err)
+		}
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: stdout: %v", ErrStart, err)
@@ -83,10 +94,22 @@ func (s Supervisor) Run(ctx context.Context, command Command) (Result, error) {
 	if err := cmd.Start(); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrStart, err)
 	}
+	if command.Isolation != nil {
+		if err := isolation.ApplyStartedProcess(cmd.Process, *command.Isolation); err != nil {
+			_ = killProcessGroup(cmd.Process)
+			_, _ = cmd.Process.Wait()
+			return Result{}, fmt.Errorf("%w: isolation limits: %v", ErrStart, err)
+		}
+	}
 
 	var mu sync.Mutex
 	events := make([]Event, 0)
 	appendEvent := func(event Event) {
+		if command.EgressGuard != nil {
+			data, err := command.EgressGuard.Check(egressguard.ClassTerminalOutput, []byte(event.Line))
+			event.Line = string(data)
+			event.Quarantined = err != nil
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		if len(events) < maxEvents {
@@ -142,11 +165,15 @@ func (s Supervisor) environment(values map[string]string) []string {
 		}
 	}
 	sort.Strings(keys)
-	env := make([]string, 0, len(keys))
+	filtered := make([]string, 0, len(keys))
 	for _, key := range keys {
-		env = append(env, key+"="+values[key])
+		filtered = append(filtered, key+"="+values[key])
 	}
-	return env
+	allowed := s.AllowedEnvironment
+	if allowed == nil {
+		allowed = map[string]struct{}{}
+	}
+	return isolation.FilterEnvironment(filtered, isolation.EnvironmentPolicy{Allowed: allowed})
 }
 
 func readLines(r io.Reader, stream Stream, limit int, emit func(Event)) {

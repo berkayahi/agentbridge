@@ -39,3 +39,14 @@ repositories:
     delivery:
       # Delivery is opt-in. Enabling it also requires one exact allowed_ref.
       enabled: false
+    # Task-scoped isolation is declared here but is not activated by the 1.x
+    # daemon. A standard/strong policy is accepted only when the host reports
+    # the matching OS sandbox capability at task launch.
+    # isolation:
+    #   tier: standard
+    #   worktree_root: /srv/agentbridge/worktrees/sample-app
+    #   network:
+    #     mode: allowlist
+    #     provider: [api.anthropic.com, chatgpt.com]
+    #     package: [proxy.golang.org]
+    #     test: [staging.example.invalid]

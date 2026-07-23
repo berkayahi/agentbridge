@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/egressguard"
+	"github.com/berkayahi/agentbridge/internal/isolation"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/security"
 )
@@ -33,6 +35,9 @@ type ProcessConfig struct {
 	ControlSocket   string
 	Capability      []byte
 	Environment     []string
+	Dir             string
+	Isolation       *isolation.Policy
+	EgressGuard     *egressguard.Guard
 	ResumeSession   string
 	InitialInput    provider.Input
 	TaskID          provider.ID
@@ -76,24 +81,12 @@ func CommandArgs(mcpConfigPath, resumeSession, model string) []string {
 }
 
 func ChildEnvironment(base []string, configDir, taskID, controlSocket string) []string {
-	blocked := map[string]bool{
-		"OPENAI_API_KEY": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true,
-		"CLAUDE_CODE_OAUTH_TOKEN": true, "CLAUDE_CONFIG_DIR": true,
-	}
-	env := make([]string, 0, len(base)+4)
-	for _, entry := range base {
-		name, _, _ := strings.Cut(entry, "=")
-		if !blocked[name] && !strings.HasPrefix(name, "AGENTBRIDGE_") {
-			env = append(env, entry)
-		}
-	}
-	env = append(env,
-		"CLAUDE_CONFIG_DIR="+configDir,
-		"AGENTBRIDGE_CONTROL_SOCKET="+controlSocket,
-		"AGENTBRIDGE_TASK_ID="+taskID,
-		"AGENTBRIDGE_PROVIDER=claude",
-	)
-	return env
+	return isolation.FilterEnvironment(base, isolation.EnvironmentPolicy{Extra: map[string]string{
+		"CLAUDE_CONFIG_DIR":          configDir,
+		"AGENTBRIDGE_CONTROL_SOCKET": controlSocket,
+		"AGENTBRIDGE_TASK_ID":        taskID,
+		"AGENTBRIDGE_PROVIDER":       "claude",
+	}})
 }
 
 func WriteMCPConfig(dir, executable string) (string, error) {
@@ -158,6 +151,7 @@ type Process struct {
 	closeOnce sync.Once
 	stderrMu  sync.Mutex
 	stderr    string
+	egress    *egressguard.Guard
 }
 
 func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
@@ -175,8 +169,17 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		cfg.Environment = os.Environ()
 	}
 	cmd := exec.Command(cfg.Executable, args...)
+	if cfg.Environment == nil {
+		cfg.Environment = os.Environ()
+	}
+	cmd.Dir = cfg.Dir
 	cmd.Env = ChildEnvironment(cfg.Environment, cfg.ClaudeConfigDir, cfg.TaskID.String(), cfg.ControlSocket)
 	provider.ConfigureProcessGroup(cmd)
+	if cfg.Isolation != nil {
+		if err := isolation.PrepareCommand(cmd, *cfg.Isolation); err != nil {
+			return nil, fmt.Errorf("Claude isolation: %w", err)
+		}
+	}
 	capabilityFile, err := capabilityFile(cfg.Capability)
 	if err != nil {
 		return nil, err
@@ -201,8 +204,15 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		_ = capabilityFile.Close()
 		return nil, fmt.Errorf("start Claude Code: %w", err)
 	}
+	if cfg.Isolation != nil {
+		if err := isolation.ApplyStartedProcess(cmd.Process, *cfg.Isolation); err != nil {
+			_ = provider.SweepProcessGroup(cmd.Process)
+			_, _ = cmd.Process.Wait()
+			return nil, fmt.Errorf("Claude isolation limits: %w", err)
+		}
+	}
 	_ = capabilityFile.Close()
-	p := &Process{cmd: cmd, stdin: stdin, events: make(chan provider.Event, processEventBuffer), ready: make(chan string, 1), done: make(chan struct{}), taskID: cfg.TaskID}
+	p := &Process{cmd: cmd, stdin: stdin, events: make(chan provider.Event, processEventBuffer), ready: make(chan string, 1), done: make(chan struct{}), taskID: cfg.TaskID, egress: cfg.EgressGuard}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -230,6 +240,11 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		data, _ := io.ReadAll(io.LimitReader(stderr, maxProcessStderr+1))
 		p.stderrMu.Lock()
 		p.stderr = security.NewRedactor(security.Config{MaxPayloadRunes: maxProcessStderr}).RedactString(string(data))
+		if p.egress != nil {
+			if guarded, _ := p.egress.Check(egressguard.ClassTerminalOutput, []byte(p.stderr)); guarded != nil {
+				p.stderr = string(guarded)
+			}
+		}
 		p.stderrMu.Unlock()
 	}()
 	go func() {
@@ -343,6 +358,22 @@ func (p *Process) setSession(sessionID string) {
 }
 
 func (p *Process) emit(event provider.Event) {
+	if p.egress != nil {
+		if guarded, err := p.egress.Check(egressguard.ClassStructuredMessage, []byte(event.Message)); guarded != nil {
+			event.Message = string(guarded)
+			if err != nil && event.Path != "" {
+				event.Path = "[QUARANTINED]"
+			}
+		}
+		if event.Path != "" {
+			if guarded, err := p.egress.Check(egressguard.ClassStructuredMessage, []byte(event.Path)); guarded != nil {
+				event.Path = string(guarded)
+				if err != nil {
+					event.Path = "[QUARANTINED]"
+				}
+			}
+		}
+	}
 	select {
 	case p.events <- event:
 	default:

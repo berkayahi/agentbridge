@@ -1,7 +1,10 @@
 package artifactclient
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -22,6 +25,8 @@ type memoryObject struct {
 	chunks     map[int64][]byte
 	nextOffset int64
 	final      bool
+	finalized  bool
+	receipt    Receipt
 }
 
 func NewMemoryStore() *MemoryStore { return &MemoryStore{objects: make(map[string]*memoryObject)} }
@@ -36,7 +41,7 @@ func (s *MemoryStore) Begin(ctx context.Context, value EncryptedArtifact) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.objects[value.ObjectKey]; ok {
-		if existing.value.EnvelopeDigest != value.EnvelopeDigest {
+		if existing.value.EnvelopeDigest != value.EnvelopeDigest || existing.value.ArtifactID != value.ArtifactID || existing.value.SizeBytes != value.SizeBytes {
 			return ErrConflict
 		}
 		return nil
@@ -55,7 +60,7 @@ func (s *MemoryStore) PutChunk(ctx context.Context, chunk Chunk) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.objects[chunk.ObjectKey]
-	if !ok || value.value.ArtifactID != chunk.ArtifactID || value.final {
+	if !ok || value.value.ArtifactID != chunk.ArtifactID {
 		return ErrChunkOrder
 	}
 	if existing, exists := value.chunks[chunk.Offset]; exists {
@@ -64,12 +69,20 @@ func (s *MemoryStore) PutChunk(ctx context.Context, chunk Chunk) error {
 		}
 		return nil
 	}
+	if value.final {
+		return ErrChunkOrder
+	}
 	if chunk.Offset != value.nextOffset {
 		return ErrChunkOrder
 	}
 	value.chunks[chunk.Offset] = append([]byte(nil), chunk.Payload...)
 	value.nextOffset += int64(len(chunk.Payload))
 	if chunk.Final {
+		if value.nextOffset != int64(len(value.value.Ciphertext)) {
+			delete(value.chunks, chunk.Offset)
+			value.nextOffset -= int64(len(chunk.Payload))
+			return ErrChunkOrder
+		}
 		value.final = true
 	}
 	return nil
@@ -88,16 +101,40 @@ func (s *MemoryStore) Finalize(ctx context.Context, objectKey, envelopeDigest st
 	if value.value.EnvelopeDigest != envelopeDigest {
 		return Receipt{}, ErrConflict
 	}
-	if !value.final {
+	if value.finalized {
+		value.receipt.Duplicate = true
+		return value.receipt, nil
+	}
+	if !value.final || value.nextOffset != int64(len(value.value.Ciphertext)) {
 		return Receipt{}, ErrChunkOrder
 	}
-	return Receipt{ArtifactID: value.value.ArtifactID, ObjectKey: objectKey, EnvelopeDigest: envelopeDigest, StoredBytes: int64(len(value.value.Ciphertext)), FinalizedAt: now}, nil
+	assembled := make([]int64, 0, len(value.chunks))
+	for offset := range value.chunks {
+		assembled = append(assembled, offset)
+	}
+	sort.Slice(assembled, func(i, j int) bool { return assembled[i] < assembled[j] })
+	var ciphertext bytes.Buffer
+	for _, offset := range assembled {
+		if offset != int64(ciphertext.Len()) {
+			return Receipt{}, ErrChunkOrder
+		}
+		_, _ = ciphertext.Write(value.chunks[offset])
+	}
+	if !bytes.Equal(ciphertext.Bytes(), value.value.Ciphertext) {
+		return Receipt{}, fmt.Errorf("%w: ciphertext digest mismatch", ErrChunkOrder)
+	}
+	receipt := Receipt{ArtifactID: value.value.ArtifactID, ObjectKey: objectKey, EnvelopeDigest: envelopeDigest, StoredBytes: int64(ciphertext.Len()), FinalizedAt: now}
+	value.finalized, value.receipt = true, receipt
+	return receipt, nil
 }
 
 type Service struct {
 	store    UploadStore
 	verifier GrantVerifier
 	now      func() time.Time
+	mu       sync.Mutex
+	active   map[string]struct{}
+	complete map[string]Receipt
 }
 
 func NewService(store UploadStore, now func() time.Time) (*Service, error) {
@@ -118,7 +155,7 @@ func newService(store UploadStore, verifier GrantVerifier, now func() time.Time)
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, verifier: verifier, now: now}
+	return &Service{store: store, verifier: verifier, now: now, active: make(map[string]struct{}), complete: make(map[string]Receipt)}
 }
 
 func (s *Service) Upload(ctx context.Context, grant Grant, key []byte, plaintext []byte) (Receipt, error) {
@@ -131,6 +168,27 @@ func (s *Service) Upload(ctx context.Context, grant Grant, key []byte, plaintext
 	if err := grant.Verify(s.now().UTC(), s.verifier); err != nil {
 		return Receipt{}, err
 	}
+	nonceKey := grant.UsedNonceKey()
+	s.mu.Lock()
+	if _, ok := s.complete[nonceKey]; ok {
+		s.mu.Unlock()
+		return Receipt{}, ErrGrantReplay
+	}
+	if _, ok := s.active[nonceKey]; ok {
+		s.mu.Unlock()
+		return Receipt{}, ErrGrantReplay
+	}
+	s.active[nonceKey] = struct{}{}
+	s.mu.Unlock()
+	completed := false
+	defer func() {
+		s.mu.Lock()
+		delete(s.active, nonceKey)
+		if completed {
+			s.complete[nonceKey] = Receipt{ArtifactID: grant.ArtifactID, ObjectKey: grant.ObjectKey}
+		}
+		s.mu.Unlock()
+	}()
 	value, err := Encrypt(grant, key, plaintext, s.now().UTC())
 	if err != nil {
 		return Receipt{}, err
@@ -141,5 +199,10 @@ func (s *Service) Upload(ctx context.Context, grant Grant, key []byte, plaintext
 	if err := s.store.PutChunk(ctx, Chunk{ArtifactID: value.ArtifactID, ObjectKey: value.ObjectKey, Payload: value.Ciphertext, Final: true}); err != nil {
 		return Receipt{}, err
 	}
-	return s.store.Finalize(ctx, value.ObjectKey, value.EnvelopeDigest, s.now().UTC())
+	receipt, err := s.store.Finalize(ctx, value.ObjectKey, value.EnvelopeDigest, s.now().UTC())
+	if err != nil {
+		return Receipt{}, err
+	}
+	completed = true
+	return receipt, nil
 }

@@ -12,6 +12,7 @@ import (
 var (
 	ErrInvalidGrant = errors.New("artifact: invalid grant")
 	ErrGrantExpired = errors.New("artifact: grant expired")
+	ErrGrantReplay  = errors.New("artifact: grant nonce already used")
 	ErrConflict     = errors.New("artifact: immutable object conflict")
 	ErrChunkOrder   = errors.New("artifact: chunk order or digest mismatch")
 )
@@ -56,7 +57,10 @@ type EncryptedArtifact struct {
 }
 
 func (a EncryptedArtifact) Validate() error {
-	if !valid(a.ArtifactID) || !valid(a.ObjectKey) || a.Algorithm != "AES-256-GCM" || !valid(a.KeyID) || len(a.Nonce) == 0 || len(a.Ciphertext) == 0 || !validHex(a.PlaintextDigest, 64) || !validHex(a.EnvelopeDigest, 64) || a.SizeBytes < 0 {
+	if !valid(a.ArtifactID) || !valid(a.ObjectKey) || a.Algorithm != "AES-256-GCM" || !valid(a.KeyID) || len(a.Nonce) != 12 || len(a.Ciphertext) == 0 || !validHex(a.PlaintextDigest, 64) || !validHex(a.EnvelopeDigest, 64) || a.SizeBytes < 0 || int64(len(a.Ciphertext)) != a.SizeBytes+16 {
+		return ErrInvalidGrant
+	}
+	if digestBytes(append(append([]byte(nil), a.Nonce...), a.Ciphertext...)) != a.EnvelopeDigest {
 		return ErrInvalidGrant
 	}
 	return nil

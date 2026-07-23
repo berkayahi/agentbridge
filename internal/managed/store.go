@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	ErrInvalidState = errors.New("managed: invalid persistent state")
-	ErrInboxFull    = errors.New("managed: persistent inbox is full")
+	ErrInvalidState   = errors.New("managed: invalid persistent state")
+	ErrInboxFull      = errors.New("managed: persistent inbox is full")
+	ErrCursorRollback = errors.New("managed: cursor rollback")
 )
 
 const maxInboxEntries = 4096
@@ -36,10 +37,11 @@ type AtomicAcceptStore interface {
 }
 
 type fileState struct {
-	Version int              `json:"version"`
-	Cursor  Cursor           `json:"cursor"`
-	Inbox   map[string]Frame `json:"inbox"`
-	Trust   TrustSet         `json:"trust"`
+	Version              int              `json:"version"`
+	Cursor               Cursor           `json:"cursor"`
+	LocalConnectionEpoch uint64           `json:"local_connection_epoch"`
+	Inbox                map[string]Frame `json:"inbox"`
+	Trust                TrustSet         `json:"trust"`
 }
 
 type FileStateStore struct {
@@ -77,8 +79,34 @@ func (s *FileStateStore) Save(ctx context.Context, cursor Cursor) error {
 	if err != nil {
 		return err
 	}
+	if cursorRegresses(state.Cursor, cursor) {
+		return ErrCursorRollback
+	}
 	state.Cursor = cursor
 	return s.saveLocked(state)
+}
+
+// NextConnectionEpoch provides a crash-safe epoch for a new outbound managed
+// connection. It is separate from the inbound command cursor so reconnects
+// cannot make accepted command history appear to rewind.
+func (s *FileStateStore) NextConnectionEpoch(ctx context.Context) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, err := s.loadLocked()
+	if err != nil {
+		return 0, err
+	}
+	if state.LocalConnectionEpoch == ^uint64(0) {
+		return 0, ErrCursorRollback
+	}
+	state.LocalConnectionEpoch++
+	if err := s.saveLocked(state); err != nil {
+		return 0, err
+	}
+	return state.LocalConnectionEpoch, nil
 }
 
 func (s *FileStateStore) LoadTrust(ctx context.Context) (TrustSet, error) {
@@ -141,6 +169,9 @@ func (s *FileStateStore) Accept(ctx context.Context, frame Frame, cursor Cursor)
 	duplicate, err := admitFrame(&state, frame)
 	if err != nil || duplicate {
 		return duplicate, err
+	}
+	if cursorRegresses(state.Cursor, cursor) {
+		return false, ErrCursorRollback
 	}
 	state.Cursor = cursor
 	return false, s.saveLocked(state)
@@ -245,4 +276,17 @@ func pruneExpired(state *fileState, now time.Time) {
 
 func cloneTrust(value TrustSet) TrustSet {
 	return TrustSet{Active: cloneKeys(value.Active), Next: cloneKeys(value.Next), HighestEpoch: value.HighestEpoch, Revoked: value.Revoked}
+}
+
+func cursorRegresses(current, next Cursor) bool {
+	if current.ControllerEpoch == 0 && current.ConnectionEpoch == 0 && current.MessageID == 0 && current.Sequence == 0 {
+		return false
+	}
+	if next.ControllerEpoch < current.ControllerEpoch || next.ConnectionEpoch < current.ConnectionEpoch {
+		return true
+	}
+	if next.ConnectionEpoch == current.ConnectionEpoch && (next.MessageID < current.MessageID || next.Sequence < current.Sequence) {
+		return true
+	}
+	return false
 }

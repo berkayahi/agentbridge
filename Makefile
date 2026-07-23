@@ -10,7 +10,7 @@ LDFLAGS := -s -w \
 	-X github.com/berkayahi/agentbridge/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/berkayahi/agentbridge/internal/buildinfo.Date=$(BUILD_DATE)
 
-.PHONY: build test lint
+.PHONY: build test lint verify
 
 build:
 	GOTOOLCHAIN=$(GOTOOLCHAIN) $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o bin/agentbridge ./cmd/agentbridge
@@ -21,3 +21,6 @@ test:
 lint:
 	@test -z "$$($(GOFMT) -l .)" || { $(GOFMT) -d .; exit 1; }
 	GOTOOLCHAIN=$(GOTOOLCHAIN) $(GO) vet ./...
+
+verify:
+	bash scripts/verify.sh

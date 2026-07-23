@@ -389,23 +389,11 @@ func (a *App) renameTask(ctx context.Context, id, title string, chatID int64) er
 }
 
 func (a *App) createTask(ctx context.Context, message *telegram.IncomingMessage, command telegram.Command) (string, error) {
-	if _, ok := a.deps.Providers[command.Provider]; !ok {
-		return "", ErrUnknownProvider
-	}
-	at := a.deps.Clock().UTC()
-	id := a.nextID()
-	value := task.Task{ID: id, RepoProfileID: a.config.DefaultRepository, Title: task.Title(command.Argument, task.DefaultTitleRunes), Prompt: command.Argument, State: task.Queued, Provider: command.Provider, TelegramChatID: message.Chat.ID, CreatedAt: at, UpdatedAt: at}
-	event := a.event(id, task.EventTaskCreated, task.VisibilityUser, map[string]any{"title": value.Title})
-	if err := a.deps.Store.CreateTask(ctx, value, event); err != nil {
+	value, err := a.createTaskRecord(ctx, command.Provider, command.Argument, message.Chat.ID, true)
+	if err != nil {
 		return "", err
 	}
-	if err := a.publish(ctx, event); err != nil {
-		a.deps.Logger.Warn("could not publish task event", "task", id)
-	}
-	if err := a.project(ctx, value, "queued", true); err != nil {
-		a.pause(value, "initial status delivery failed; manual retry required")
-		return "", err
-	}
+	id := value.ID
 	if message.Attachment != nil {
 		if a.deps.Attachments == nil {
 			return "", errors.New("app: attachment service is unavailable")
@@ -420,6 +408,29 @@ func (a *App) createTask(ctx context.Context, message *telegram.IncomingMessage,
 		return "", err
 	}
 	return id, nil
+}
+
+func (a *App) createTaskRecord(ctx context.Context, providerName task.Provider, prompt string, chatID int64, project bool) (task.Task, error) {
+	if _, ok := a.deps.Providers[providerName]; !ok {
+		return task.Task{}, ErrUnknownProvider
+	}
+	at := a.deps.Clock().UTC()
+	id := a.nextID()
+	value := task.Task{ID: id, RepoProfileID: a.config.DefaultRepository, Title: task.Title(prompt, task.DefaultTitleRunes), Prompt: prompt, State: task.Queued, Provider: providerName, TelegramChatID: chatID, CreatedAt: at, UpdatedAt: at}
+	event := a.event(id, task.EventTaskCreated, task.VisibilityUser, map[string]any{"title": value.Title})
+	if err := a.deps.Store.CreateTask(ctx, value, event); err != nil {
+		return task.Task{}, err
+	}
+	if err := a.publish(ctx, event); err != nil {
+		a.deps.Logger.Warn("could not publish task event", "task", id)
+	}
+	if project {
+		if err := a.project(ctx, value, "queued", true); err != nil {
+			a.pause(value, "initial status delivery failed; manual retry required")
+			return task.Task{}, err
+		}
+	}
+	return value, nil
 }
 
 func (a *App) chooseSession(ctx context.Context, message *telegram.IncomingMessage, command telegram.Command) (string, error) {
@@ -768,9 +779,6 @@ Operator task:
 }
 
 func (a *App) requestApproval(ctx context.Context, value *task.Task, observed provider.Event) error {
-	if a.deps.Signer == nil {
-		return errors.New("app: approval signer is unavailable")
-	}
 	id := observed.RequestID.String()
 	if id == "" {
 		id = a.nextID()
@@ -786,6 +794,12 @@ func (a *App) requestApproval(ctx context.Context, value *task.Task, observed pr
 	if !a.transition(ctx, value, task.AwaitingApproval, "operator approval required") {
 		return errors.Join(store.ErrInvalidTransition, a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
 	}
+	if value.TelegramChatID == 0 {
+		return nil
+	}
+	if a.deps.Signer == nil {
+		return errors.Join(errors.New("app: approval signer is unavailable"), a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
+	}
 	keyboard, err := telegram.ApprovalKeyboard(a.deps.Signer, value.ID, id, 10*time.Minute)
 	if err != nil {
 		return errors.Join(err, a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
@@ -800,77 +814,14 @@ func (a *App) resolveApproval(ctx context.Context, update telegram.Update, comma
 	if update.Callback == nil {
 		return errors.New("app: approval callback is missing")
 	}
-	pending, err := a.deps.Store.PendingApprovals(ctx)
+	err := a.DecideApproval(ctx, ApprovalDecisionRequest{
+		TaskID:     command.TaskID,
+		ApprovalID: command.ApprovalID,
+		UserID:     fmt.Sprint(update.Callback.From.ID),
+		Allow:      command.Kind == telegram.KindApprove,
+	})
 	if err != nil {
 		return err
-	}
-	var record task.Approval
-	for _, value := range pending {
-		if value.ID == command.ApprovalID && value.TaskID == command.TaskID {
-			record = value
-			break
-		}
-	}
-	if record.ID == "" {
-		return store.ErrNotFound
-	}
-	allow := command.Kind == telegram.KindApprove
-	userID := fmt.Sprint(update.Callback.From.ID)
-	if a.deps.Approvals != nil {
-		err := a.deps.Approvals.HandleDecision(ctx, command.TaskID, command.ApprovalID, userID, allow)
-		if err == nil {
-			if err := a.deps.Messenger.AnswerCallback(ctx, command.CallbackID, "Decision recorded"); err != nil {
-				return err
-			}
-			event := a.event(command.TaskID, task.EventApprovalResolved, task.VisibilityUser, map[string]any{"approved": allow})
-			_ = a.deps.Store.AppendEvent(ctx, event)
-			_ = a.publish(ctx, event)
-			return nil
-		}
-		if !errors.Is(err, approval.ErrNotPending) {
-			return err
-		}
-	}
-	value, err := a.deps.Store.Task(ctx, command.TaskID)
-	if err != nil {
-		return err
-	}
-	a.mu.Lock()
-	active, ok := a.active[value.ID]
-	a.mu.Unlock()
-	if !ok {
-		return errors.New("app: provider session is not active")
-	}
-	requestID, err := provider.NewID(record.ID)
-	if err != nil {
-		return err
-	}
-	taskID, err := provider.NewID(value.ID)
-	if err != nil {
-		return err
-	}
-	decision := provider.ApprovalDecision{RequestID: requestID, TaskID: taskID, UserID: userID, Allow: allow, DecidedAt: a.deps.Clock().UTC()}
-	status := task.ApprovalRejected
-	if allow {
-		status = task.ApprovalApproved
-	}
-	if err := a.finishApproval(ctx, &record, status, allow, ""); err != nil {
-		return err
-	}
-	if err := active.provider.ResolveApproval(ctx, decision); err != nil {
-		compensationErr := a.finishApproval(ctx, &record, task.ApprovalRejected, false, "provider_release_failed")
-		a.fail(value, err)
-		return errors.Join(err, compensationErr)
-	}
-	event := a.event(value.ID, task.EventApprovalResolved, task.VisibilityUser, map[string]any{"approved": allow})
-	_ = a.deps.Store.AppendEvent(ctx, event)
-	_ = a.publish(ctx, event)
-	if allow {
-		if !a.transition(ctx, &value, task.Running, "approval granted") {
-			return store.ErrInvalidTransition
-		}
-	} else {
-		a.fail(value, errors.New("operator rejected approval"))
 	}
 	return a.deps.Messenger.AnswerCallback(ctx, command.CallbackID, "Decision recorded")
 }
@@ -1126,6 +1077,9 @@ func renderUsage(name task.Provider, usage provider.Usage) string {
 }
 
 func (a *App) project(ctx context.Context, value task.Task, action string, important bool) error {
+	if value.TelegramChatID == 0 {
+		return nil
+	}
 	status := telegram.TaskStatus{TaskID: value.ID, ChatID: value.TelegramChatID, State: value.State, CurrentAction: action, RepoProfile: value.RepoProfileID, DeliveryRef: value.PushRef, Important: important}
 	if value.StartedAt != nil {
 		status.StartedAt = *value.StartedAt

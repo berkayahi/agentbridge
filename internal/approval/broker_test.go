@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
 )
@@ -111,6 +112,127 @@ func TestBrokerRejectsMismatchesUnauthorizedUsersAndReplays(t *testing.T) {
 	}
 }
 
+func TestBrokerDoesNotReleaseBeforeDurableDecisionEvent(t *testing.T) {
+	store := &recordingStore{eventErr: errors.New("event write failed")}
+	messenger := newRecordingMessenger(store)
+	broker := mustBroker(t, Config{
+		Store: store, Messenger: messenger, NewID: func() string { return "approve-5" },
+		AuthorizeUser: func(userID string) bool { return userID == "42" },
+	})
+	resultCh := make(chan requestResult, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			TaskID: "task-event", ChatID: 100, ProviderRequestID: "provider-event",
+			Kind: "write", Summary: "edit file",
+		})
+		resultCh <- requestResult{result: result, err: err}
+	}()
+	messenger.next(t)
+
+	if err := broker.HandleDecision(context.Background(), "task-event", "approve-5", "42", true); err == nil {
+		t.Fatal("decision succeeded without durable resolution event")
+	}
+	select {
+	case result := <-resultCh:
+		t.Fatalf("provider released before event persistence: %#v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	store.setEventError(nil)
+	if err := broker.HandleDecision(context.Background(), "task-event", "approve-5", "42", true); err != nil {
+		t.Fatal(err)
+	}
+	completed := <-resultCh
+	if completed.err != nil || !completed.result.Approved {
+		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
+	}
+}
+
+func TestBrokerRetriesAfterAmbiguousDecisionEventWrite(t *testing.T) {
+	store := &recordingStore{eventErrAfterAppend: errors.New("ambiguous event write")}
+	messenger := newRecordingMessenger(store)
+	broker := mustBroker(t, Config{
+		Store: store, Messenger: messenger, NewID: func() string { return "approve-6" },
+		AuthorizeUser: func(userID string) bool { return userID == "42" },
+	})
+	resultCh := make(chan requestResult, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			TaskID: "task-6", ChatID: 100, ProviderRequestID: "provider-ambiguous",
+			Kind: "write", Summary: "edit file",
+		})
+		resultCh <- requestResult{result: result, err: err}
+	}()
+	select {
+	case <-messenger.sent:
+	case result := <-resultCh:
+		t.Fatalf("request failed before sending approval: result=%#v error=%v", result.result, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("Telegram message was not sent")
+	}
+
+	if err := broker.HandleDecision(context.Background(), "task-6", "approve-6", "42", true); err == nil {
+		t.Fatal("ambiguous event write unexpectedly succeeded")
+	}
+	select {
+	case result := <-resultCh:
+		t.Fatalf("provider released after ambiguous event write: %#v", result)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := broker.HandleDecision(context.Background(), "task-6", "approve-6", "42", true); err != nil {
+		t.Fatalf("idempotent retry failed: %v", err)
+	}
+	completed := <-resultCh
+	if completed.err != nil || !completed.result.Approved {
+		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
+	}
+}
+
+func TestBrokerDecisionClaimWinsConcurrentTimeout(t *testing.T) {
+	decisionStarted := make(chan struct{})
+	decisionRelease := make(chan struct{})
+	store := &recordingStore{
+		decisionStarted: decisionStarted,
+		decisionRelease: decisionRelease,
+	}
+	messenger := newRecordingMessenger(store)
+	broker := mustBroker(t, Config{
+		Store: store, Messenger: messenger, NewID: func() string { return "approve-7" },
+		Timeout:       20 * time.Millisecond,
+		AuthorizeUser: func(userID string) bool { return userID == "42" },
+	})
+	resultCh := make(chan requestResult, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{
+			TaskID: "task-7", ChatID: 100, ProviderRequestID: "provider-race",
+			Kind: "write", Summary: "edit file",
+		})
+		resultCh <- requestResult{result: result, err: err}
+	}()
+	messenger.next(t)
+
+	decisionErrCh := make(chan error, 1)
+	go func() {
+		decisionErrCh <- broker.HandleDecision(context.Background(), "task-7", "approve-7", "42", true)
+	}()
+	<-decisionStarted
+	time.Sleep(30 * time.Millisecond)
+	close(decisionRelease)
+
+	if err := <-decisionErrCh; err != nil {
+		t.Fatalf("claimed decision lost to timeout: %v", err)
+	}
+	completed := <-resultCh
+	if completed.err != nil || !completed.result.Approved {
+		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
+	}
+	for _, record := range store.all() {
+		if record.Status == task.ApprovalExpired {
+			t.Fatalf("claimed approval was persisted expired: %#v", record)
+		}
+	}
+}
+
 func TestBrokerTimeoutDeniesAndExpiresApproval(t *testing.T) {
 	store := &recordingStore{}
 	messenger := newRecordingMessenger(store)
@@ -166,17 +288,71 @@ type requestResult struct {
 }
 
 type recordingStore struct {
-	mu      sync.Mutex
-	records []task.Approval
-	ops     []string
+	mu       sync.Mutex
+	records  []task.Approval
+	events   []task.Event
+	ops      []string
+	eventErr error
+
+	eventErrAfterAppend error
+	decisionStarted     chan struct{}
+	decisionRelease     chan struct{}
+	decisionOnce        sync.Once
 }
 
 func (s *recordingStore) UpsertApproval(_ context.Context, value task.Approval) error {
+	if value.Status == task.ApprovalApproved || value.Status == task.ApprovalRejected {
+		if s.decisionStarted != nil {
+			s.decisionOnce.Do(func() { close(s.decisionStarted) })
+		}
+		if s.decisionRelease != nil {
+			<-s.decisionRelease
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.records = append(s.records, value)
 	s.ops = append(s.ops, "persist:"+string(value.Status))
 	return nil
+}
+
+func (s *recordingStore) AppendEvent(_ context.Context, value task.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.eventErr != nil {
+		return s.eventErr
+	}
+	for _, existing := range s.events {
+		if existing.ID == value.ID {
+			return store.ErrDuplicateEvent
+		}
+	}
+	s.events = append(s.events, value)
+	s.ops = append(s.ops, "event:"+string(value.Type))
+	if s.eventErrAfterAppend != nil {
+		err := s.eventErrAfterAppend
+		s.eventErrAfterAppend = nil
+		return err
+	}
+	return nil
+}
+
+func (s *recordingStore) Events(_ context.Context, taskID string) ([]task.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var values []task.Event
+	for _, value := range s.events {
+		if value.TaskID == taskID {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+
+func (s *recordingStore) setEventError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.eventErr = err
 }
 
 func (s *recordingStore) latest() task.Approval {

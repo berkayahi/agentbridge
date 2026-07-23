@@ -15,3 +15,11 @@ CLI paths remain runtime-configurable so operators can upgrade independently.
 3. Compare methods and required fields against the small contracts and sanitized fixtures in this repository.
 4. Run provider race tests and a subscription-authenticated smoke test without API-key environment variables.
 5. Update this table only after the checks pass. AgentBridge does not pin or install CLI binaries.
+
+## Continuous verification
+
+Run `make verify` before submitting a change. The verification entry point runs
+the race-enabled Go suite, formatting and vet checks, Linux AMD64 and ARM64
+builds, a macOS ARM64 build, and the public-repository boundary check. Focused
+test commands use `scripts/test-required.sh` so a misspelled or skipped required
+test cannot produce a false green result.

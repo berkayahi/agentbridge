@@ -580,6 +580,10 @@ func (s *approvalStore) UpsertApproval(_ context.Context, value task.Approval) e
 	return nil
 }
 
+func (*approvalStore) AppendEvent(context.Context, task.Event) error { return nil }
+
+func (*approvalStore) Events(context.Context, string) ([]task.Event, error) { return nil, nil }
+
 func (f *fakeDaemonRuntime) Start(context.Context) error {
 	f.record("start")
 	return f.startErr

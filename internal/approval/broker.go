@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/security"
+	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
 )
@@ -36,6 +37,8 @@ var (
 
 type Store interface {
 	UpsertApproval(context.Context, task.Approval) error
+	AppendEvent(context.Context, task.Event) error
+	Events(context.Context, string) ([]task.Event, error)
 }
 
 type Messenger interface {
@@ -190,6 +193,11 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 	if err != nil {
 		return err
 	}
+	waiter.mu.Lock()
+	if waiter.canceled || waiter.finished {
+		waiter.mu.Unlock()
+		return ErrNotPending
+	}
 
 	now := b.clock().UTC()
 	value := waiter.record
@@ -202,20 +210,61 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 	value.ResolvedAt = &now
 	value.DecisionPayload, _ = json.Marshal(decisionPayload{Approved: allow, UserID: userID, Reason: reason})
 	if err := b.store.UpsertApproval(ctx, value); err != nil {
-		b.finish(waiter, Result{Reason: "approval could not be recorded"})
+		b.restore(approvalID, waiter)
+		waiter.mu.Unlock()
 		return fmt.Errorf("approval: persist decision: %w", err)
 	}
-
-	waiter.mu.Lock()
-	if waiter.canceled {
-		waiter.mu.Unlock()
-		_ = b.persistExpiredDetached(ctx, waiter, "approval expired before decision completed")
-		return ErrNotPending
+	eventPayload, _ := json.Marshal(map[string]any{"approved": allow})
+	event := task.Event{
+		ID: approvalID + "-resolved", TaskID: taskID,
+		Type: task.EventApprovalResolved, Visibility: task.VisibilityUser,
+		Payload: eventPayload, CreatedAt: now,
 	}
+	if err := b.appendDecisionEvent(ctx, event); err != nil {
+		restoreErr := b.store.UpsertApproval(ctx, waiter.record)
+		b.restore(approvalID, waiter)
+		waiter.mu.Unlock()
+		return errors.Join(fmt.Errorf("approval: persist decision event: %w", err), restoreErr)
+	}
+
 	waiter.finished = true
 	waiter.result <- Result{Approved: allow, Reason: reason}
 	waiter.mu.Unlock()
 	return nil
+}
+
+func (b *Broker) appendDecisionEvent(ctx context.Context, event task.Event) error {
+	err := b.store.AppendEvent(ctx, event)
+	if err == nil || !errors.Is(err, store.ErrDuplicateEvent) {
+		return err
+	}
+	events, readErr := b.store.Events(ctx, event.TaskID)
+	if readErr != nil {
+		return errors.Join(err, fmt.Errorf("approval: verify duplicate decision event: %w", readErr))
+	}
+	for _, existing := range events {
+		if existing.ID != event.ID {
+			continue
+		}
+		if existing.TaskID == event.TaskID &&
+			existing.Type == event.Type &&
+			existing.Visibility == event.Visibility &&
+			existing.ProviderEventID == event.ProviderEventID &&
+			string(existing.Payload) == string(event.Payload) {
+			return nil
+		}
+		return errors.Join(err, errors.New("approval: duplicate decision event conflicts with persisted event"))
+	}
+	return errors.Join(err, errors.New("approval: duplicate decision event is not readable"))
+}
+
+// Owns reports whether this broker currently owns the exact pending approval.
+// It performs no user authorization and does not consume the decision.
+func (b *Broker) Owns(taskID, approvalID string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	waiter, ok := b.pending[approvalID]
+	return ok && waiter.record.TaskID == taskID
 }
 
 func (b *Broker) newApproval(taskID string) (string, telegram.InlineKeyboard, error) {
@@ -264,6 +313,14 @@ func (b *Broker) remove(id string, waiter *pending) {
 	defer b.mu.Unlock()
 	if b.pending[id] == waiter {
 		delete(b.pending, id)
+	}
+}
+
+func (b *Broker) restore(id string, waiter *pending) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if _, exists := b.pending[id]; !exists {
+		b.pending[id] = waiter
 	}
 }
 

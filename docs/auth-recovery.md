@@ -27,9 +27,7 @@ credentials, Telegram messages, logs, or backups.
 
 The supervised recovery command is:
 
-```sh
-codex login --device-auth
-```
+    codex login --device-auth
 
 Complete the device authorization in the browser, then confirm the CLI reports
 a valid ChatGPT subscription session. A successful login does not automatically
@@ -39,9 +37,7 @@ resume or deliver any paused repository task.
 
 The supervised recovery command is:
 
-```sh
-claude auth login --claudeai
-```
+    claude auth login --claudeai
 
 Complete the Claude subscription authorization in the browser, then confirm
 the official CLI authentication status. A successful login does not
@@ -61,3 +57,25 @@ Confirm that the dashboard remains loopback-only, the Tailscale identity policy
 and Telegram numeric allowlist are unchanged, no provider API-key credentials
 are present, and a provider usage/status command succeeds without a model turn.
 Record the recovery time and provider version, never authentication material.
+
+## Signed recovery boundary
+
+Provider authentication incidents persist only provider, safe classification,
+affected execution/task identifiers, and timestamps. Provider output,
+credentials, recovery codes, and PTY transcripts are not part of a durable
+event or notification.
+
+The recovery protocol binds a device-signed ephemeral exchange to organization,
+device, provider, browser session, request, challenge, key confirmation,
+expiry, and the enrollment-pinned device fingerprint. Encryption is supplied
+by the reviewed standard HPKE profile; the transcript type does not implement
+a custom cipher.
+
+An honest-but-observing relay cannot read an encrypted recovery payload. A
+control plane that can replace browser JavaScript can still impersonate the
+browser; users needing that boundary must use a pinned/local client surface
+and compare the device fingerprint or short authentication string.
+
+Successful recovery never resumes work implicitly. Each paused execution must
+be explicitly selected and revalidated against its session, fencing epoch, and
+compiled policy before resumption.

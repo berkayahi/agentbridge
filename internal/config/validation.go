@@ -37,6 +37,9 @@ func (c Config) Validate() error {
 		if !namePattern.MatchString(name) {
 			return errors.New("provider name is invalid")
 		}
+		if name != "codex" && name != "claude" {
+			return errors.New("provider runtime must be explicitly codex or claude")
+		}
 		if !filepath.IsAbs(provider.Executable) {
 			return errors.New("provider executable must be absolute")
 		}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -35,7 +36,7 @@ type Grant struct {
 }
 
 func (g Grant) Validate(now time.Time) error {
-	if !valid(g.OrganizationID) || !valid(g.DeviceID) || !valid(g.ExecutionID) || !valid(g.ArtifactID) || !valid(g.ObjectKey) || !valid(g.KeyID) || !valid(g.PolicyDigest) || strings.TrimSpace(g.MediaType) == "" || g.SizeBytes < 0 || !validHex(g.PlaintextDigest, 64) || g.Algorithm != "AES-256-GCM" || strings.TrimSpace(g.Nonce) == "" || g.ExpiresAt.IsZero() {
+	if !valid(g.OrganizationID) || !valid(g.DeviceID) || !valid(g.ExecutionID) || !valid(g.ArtifactID) || !validObjectKey(g.ObjectKey) || !valid(g.KeyID) || !valid(g.PolicyDigest) || strings.TrimSpace(g.MediaType) == "" || g.SizeBytes < 0 || !validHex(g.PlaintextDigest, 64) || g.Algorithm != "AES-256-GCM" || !valid(g.Nonce) || g.ExpiresAt.IsZero() {
 		return ErrInvalidGrant
 	}
 	if !now.Before(g.ExpiresAt) {
@@ -47,6 +48,8 @@ func (g Grant) Validate(now time.Time) error {
 type EncryptedArtifact struct {
 	ArtifactID      string
 	ObjectKey       string
+	GrantNonce      string
+	GrantDigest     string
 	Algorithm       string
 	KeyID           string
 	Nonce           []byte
@@ -57,7 +60,7 @@ type EncryptedArtifact struct {
 }
 
 func (a EncryptedArtifact) Validate() error {
-	if !valid(a.ArtifactID) || !valid(a.ObjectKey) || a.Algorithm != "AES-256-GCM" || !valid(a.KeyID) || len(a.Nonce) != 12 || len(a.Ciphertext) == 0 || !validHex(a.PlaintextDigest, 64) || !validHex(a.EnvelopeDigest, 64) || a.SizeBytes < 0 || int64(len(a.Ciphertext)) != a.SizeBytes+16 {
+	if !valid(a.ArtifactID) || !validObjectKey(a.ObjectKey) || !valid(a.GrantNonce) || !validHex(a.GrantDigest, 64) || a.Algorithm != "AES-256-GCM" || !valid(a.KeyID) || len(a.Nonce) != 12 || len(a.Ciphertext) == 0 || !validHex(a.PlaintextDigest, 64) || !validHex(a.EnvelopeDigest, 64) || a.SizeBytes < 0 || int64(len(a.Ciphertext)) != a.SizeBytes+16 {
 		return ErrInvalidGrant
 	}
 	if digestBytes(append(append([]byte(nil), a.Nonce...), a.Ciphertext...)) != a.EnvelopeDigest {
@@ -90,6 +93,18 @@ func digestBytes(value []byte) string {
 
 func valid(value string) bool {
 	return strings.TrimSpace(value) != "" && len(value) <= 512 && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validObjectKey(value string) bool {
+	if !valid(value) || filepath.IsAbs(value) || strings.Contains(value, "\\") || strings.Contains(value, "//") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validHex(value string, length int) bool {

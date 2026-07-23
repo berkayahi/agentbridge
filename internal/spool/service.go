@@ -2,6 +2,7 @@ package spool
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -55,6 +56,25 @@ func (s *Service) Append(ctx context.Context, event Event) (AppendResult, error)
 
 func (s *Service) Enqueue(ctx context.Context, event Event) (AppendResult, error) {
 	return s.Append(ctx, event)
+}
+
+// AppendArtifactMetadata records only structured artifact facts. The method
+// deliberately has no plaintext or key parameter, making it impossible for a
+// normal spool event to become an artifact exfiltration path by accident.
+func (s *Service) AppendArtifactMetadata(ctx context.Context, metadata ArtifactMetadata) (AppendResult, error) {
+	now := time.Now().UTC()
+	if s != nil && s.clock != nil {
+		now = s.clock().UTC()
+	}
+	value, err := metadata.Normalize(now)
+	if err != nil {
+		return AppendResult{}, err
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return AppendResult{}, err
+	}
+	return s.Append(ctx, Event{ExecutionID: value.ExecutionID, Type: "artifact_finalized", Lane: LaneCritical, Payload: payload, CreatedAt: value.CreatedAt})
 }
 
 func (s *Service) Replay(ctx context.Context, afterMessageID uint64, limit int) ([]Message, error) {

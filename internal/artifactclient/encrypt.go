@@ -40,7 +40,12 @@ func Encrypt(grant Grant, key []byte, plaintext []byte, now time.Time) (Encrypte
 		return EncryptedArtifact{}, err
 	}
 	ciphertext := gcm.Seal(nil, nonce, plaintext, associatedData)
-	return EncryptedArtifact{ArtifactID: grant.ArtifactID, ObjectKey: grant.ObjectKey, Algorithm: grant.Algorithm, KeyID: grant.KeyID, Nonce: nonce, Ciphertext: ciphertext, PlaintextDigest: grant.PlaintextDigest, EnvelopeDigest: digestBytes(append(nonce, ciphertext...)), SizeBytes: int64(len(plaintext))}, nil
+	grantDigest, err := grant.Digest()
+	if err != nil {
+		return EncryptedArtifact{}, err
+	}
+	envelope := append(append([]byte(nil), nonce...), ciphertext...)
+	return EncryptedArtifact{ArtifactID: grant.ArtifactID, ObjectKey: grant.ObjectKey, GrantNonce: grant.Nonce, GrantDigest: grantDigest, Algorithm: grant.Algorithm, KeyID: grant.KeyID, Nonce: nonce, Ciphertext: ciphertext, PlaintextDigest: grant.PlaintextDigest, EnvelopeDigest: digestBytes(envelope), SizeBytes: int64(len(plaintext))}, nil
 }
 
 func clearBytes(value []byte) {

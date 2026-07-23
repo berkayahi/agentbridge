@@ -80,6 +80,37 @@ func TestUploadRejectsOneUseGrantReplay(t *testing.T) {
 	}
 }
 
+func TestUploadRejectsOneUseGrantReplayAfterClientRestart(t *testing.T) {
+	now := time.Unix(3_000, 0).UTC()
+	payload := []byte("artifact payload")
+	grant := testGrant(now, payload)
+	store := NewMemoryStore()
+	verifier := GrantVerifierFunc(func(string, []byte, []byte) error { return nil })
+	first, err := NewServiceWithVerifier(store, verifier, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Upload(context.Background(), grant, make([]byte, 32), payload); err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewServiceWithVerifier(store, verifier, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Upload(context.Background(), grant, make([]byte, 32), payload); !errors.Is(err, ErrGrantReplay) {
+		t.Fatalf("replayed upload after restart error = %v, want ErrGrantReplay", err)
+	}
+}
+
+func TestGrantRejectsPathTraversalObjectKey(t *testing.T) {
+	now := time.Unix(3_000, 0).UTC()
+	grant := testGrant(now, []byte("payload"))
+	grant.ObjectKey = "objects/../escape"
+	if err := grant.Validate(now); !errors.Is(err, ErrInvalidGrant) {
+		t.Fatalf("path traversal error = %v, want ErrInvalidGrant", err)
+	}
+}
+
 func testGrant(now time.Time, payload []byte) Grant {
 	return Grant{
 		OrganizationID: "org-1", DeviceID: "device-1", ExecutionID: "execution-1", ArtifactID: "artifact-1",

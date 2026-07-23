@@ -48,6 +48,24 @@ func TestTerminalUploadRequiresQuotaExpiryAndEgressClearance(t *testing.T) {
 	}
 }
 
+func TestTerminalUploadCannotOutliveItsPolicy(t *testing.T) {
+	now := time.Unix(1_000, 0).UTC()
+	payload := []byte("safe output")
+	grant := artifactclient.Grant{
+		OrganizationID: "org-1", DeviceID: "device-1", ExecutionID: "execution-1", ArtifactID: "artifact-1",
+		ObjectKey: "objects/artifact-1", Algorithm: "AES-256-GCM", KeyID: "key-1", PolicyDigest: "policy-1",
+		MediaType: "text/plain", SizeBytes: int64(len(payload)), PlaintextDigest: digest(payload), ExpiresAt: now.Add(2 * time.Minute), Nonce: "nonce-1",
+	}
+	service, err := NewService(&recordingUploader{}, egressguard.New(egressguard.Config{}), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Upload(context.Background(), Request{Policy: Policy{Enabled: true, MaxBytes: int64(len(payload)), ExpiresAt: now.Add(time.Minute)}, Grant: grant, Payload: payload})
+	if !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatalf("longer grant error = %v, want ErrInvalidPolicy", err)
+	}
+}
+
 type recordingUploader struct{ called bool }
 
 func (u *recordingUploader) Upload(context.Context, artifactclient.Grant, []byte, []byte) (artifactclient.Receipt, error) {

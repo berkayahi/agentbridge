@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -213,6 +214,72 @@ type Usage struct {
 	WarningWatermark    int64
 	CriticalWatermark   int64
 	AcknowledgedThrough uint64
+}
+
+// ArtifactMetadata is the only artifact shape that belongs in the ordinary
+// event spool. It contains ciphertext/object facts and never accepts
+// plaintext, encryption keys, grant signatures, or replay nonces.
+type ArtifactMetadata struct {
+	ExecutionID     string
+	ArtifactID      string
+	ObjectKey       string
+	Algorithm       string
+	KeyID           string
+	PolicyDigest    string
+	MediaType       string
+	SizeBytes       int64
+	PlaintextDigest string
+	EnvelopeDigest  string
+	Status          string
+	CreatedAt       time.Time
+}
+
+func (m ArtifactMetadata) Normalize(now time.Time) (ArtifactMetadata, error) {
+	m.ExecutionID = strings.TrimSpace(m.ExecutionID)
+	m.ArtifactID = strings.TrimSpace(m.ArtifactID)
+	m.ObjectKey = strings.TrimSpace(m.ObjectKey)
+	m.Algorithm = strings.TrimSpace(m.Algorithm)
+	m.KeyID = strings.TrimSpace(m.KeyID)
+	m.PolicyDigest = strings.TrimSpace(m.PolicyDigest)
+	m.MediaType = strings.TrimSpace(m.MediaType)
+	m.PlaintextDigest = strings.TrimSpace(m.PlaintextDigest)
+	m.EnvelopeDigest = strings.TrimSpace(m.EnvelopeDigest)
+	m.Status = strings.TrimSpace(m.Status)
+	if m.ExecutionID == "" || m.ArtifactID == "" || m.ObjectKey == "" || m.Algorithm != "AES-256-GCM" || m.KeyID == "" || m.PolicyDigest == "" || m.MediaType == "" || m.SizeBytes < 0 || !validDigest(m.PlaintextDigest) || !validDigest(m.EnvelopeDigest) || m.Status == "" {
+		return ArtifactMetadata{}, ErrInvalid
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = now
+	}
+	m.CreatedAt = m.CreatedAt.UTC()
+	return m, nil
+}
+
+func validDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func (m ArtifactMetadata) MarshalJSON() ([]byte, error) {
+	type safeArtifactMetadata struct {
+		ExecutionID, ArtifactID, ObjectKey, Algorithm, KeyID, PolicyDigest, MediaType string
+		SizeBytes                                                                     int64
+		PlaintextDigest, EnvelopeDigest, Status                                       string
+		CreatedAt                                                                     time.Time
+	}
+	return json.Marshal(safeArtifactMetadata{
+		ExecutionID: m.ExecutionID, ArtifactID: m.ArtifactID, ObjectKey: m.ObjectKey,
+		Algorithm: m.Algorithm, KeyID: m.KeyID, PolicyDigest: m.PolicyDigest,
+		MediaType: m.MediaType, SizeBytes: m.SizeBytes, PlaintextDigest: m.PlaintextDigest,
+		EnvelopeDigest: m.EnvelopeDigest, Status: m.Status, CreatedAt: m.CreatedAt,
+	})
 }
 
 // Store is implemented by a durable backend. Append owns quota admission and

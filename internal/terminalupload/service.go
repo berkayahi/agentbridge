@@ -67,6 +67,9 @@ func (s *Service) Upload(ctx context.Context, request Request) (artifactclient.R
 	if !now.Before(request.Policy.ExpiresAt) {
 		return artifactclient.Receipt{}, ErrInvalidPolicy
 	}
+	if request.Grant.ExpiresAt.IsZero() || request.Grant.ExpiresAt.After(request.Policy.ExpiresAt) {
+		return artifactclient.Receipt{}, ErrInvalidPolicy
+	}
 	if int64(len(request.Payload)) > request.Policy.MaxBytes {
 		return artifactclient.Receipt{}, ErrQuota
 	}

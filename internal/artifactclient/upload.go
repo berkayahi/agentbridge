@@ -41,7 +41,13 @@ func (s *MemoryStore) Begin(ctx context.Context, value EncryptedArtifact) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.objects[value.ObjectKey]; ok {
+		if existing.value.GrantNonce == value.GrantNonce && existing.value.GrantDigest == value.GrantDigest && existing.finalized {
+			return ErrGrantReplay
+		}
 		if existing.value.EnvelopeDigest != value.EnvelopeDigest || existing.value.ArtifactID != value.ArtifactID || existing.value.SizeBytes != value.SizeBytes {
+			return ErrConflict
+		}
+		if existing.value.GrantNonce != value.GrantNonce || existing.value.GrantDigest != value.GrantDigest {
 			return ErrConflict
 		}
 		return nil

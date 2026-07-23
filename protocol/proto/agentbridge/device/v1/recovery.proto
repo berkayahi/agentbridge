@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message RecoveryMessage {
+  oneof body {
+    RecoveryRequest request = 1;
+    RecoveryResponse response = 2;
+    RevocationNotice revocation = 3;
+  }
+}
+
+message RecoveryRequest { string request_id = 1; string provider = 2; bytes challenge = 3; }
+message RecoveryResponse { string request_id = 1; bytes hpke_ciphertext = 2; bytes evidence_digest = 3; }
+message RevocationNotice { string device_id = 1; string reason = 2; uint64 controller_epoch = 3; }

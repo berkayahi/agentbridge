@@ -1,0 +1,7 @@
+{
+  "canonical_remote": "github.com/berkayahi/agentbridge",
+  "allowed_tag_prefixes": ["protocol/v"],
+  "bootstrap_tag": "protocol/v1.0.0-rc.1",
+  "allow_force_update": false,
+  "allow_delete": false
+}

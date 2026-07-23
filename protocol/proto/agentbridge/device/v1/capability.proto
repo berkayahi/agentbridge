@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message CapabilityMessage {
+  string capability_id = 1;
+  repeated string command_types = 2;
+  repeated string event_types = 3;
+  repeated string runtimes = 4;
+  uint32 protocol_minor = 5;
+  bytes digest = 6;
+}

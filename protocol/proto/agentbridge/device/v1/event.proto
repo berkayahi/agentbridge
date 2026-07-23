@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message EventMessage {
+  oneof body {
+    ExecutionEvent execution = 1;
+    ProviderEvent provider = 2;
+    ApprovalEvent approval = 3;
+    UsageEvent usage = 4;
+    GitEvent git = 5;
+    DiagnosticEvent diagnostic = 6;
+  }
+}
+
+message ExecutionEvent { string state = 1; string detail = 2; bytes result_digest = 3; }
+message ProviderEvent { string provider_event_id = 1; string type = 2; bytes redacted_payload = 3; }
+message ApprovalEvent { string approval_id = 1; string decision = 2; string actor = 3; }
+message UsageEvent { string provider = 1; int64 remaining = 2; int64 reset_unix_nano = 3; }
+message GitEvent { string operation_id = 1; string kind = 2; string before_sha = 3; string after_sha = 4; bytes receipt = 5; }
+message DiagnosticEvent { string stream = 1; bytes chunk = 2; bool truncated = 3; }

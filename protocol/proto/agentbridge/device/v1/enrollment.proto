@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message EnrollmentMessage {
+  oneof body {
+    EnrollmentRequest request = 1;
+    EnrollmentChallenge challenge = 2;
+    EnrollmentProof proof = 3;
+    TrustSetUpdate trust_set = 4;
+  }
+}
+
+message EnrollmentRequest {
+  string claim_id = 1;
+  string organization_id = 2;
+  string device_id = 3;
+  bytes device_public_key = 4;
+  string browser_fingerprint = 5;
+  bytes nonce = 6;
+  int64 expires_unix_nano = 7;
+}
+
+message EnrollmentChallenge {
+  string claim_id = 1;
+  bytes nonce = 2;
+  bytes platform_command_trust_digest = 3;
+  int64 expires_unix_nano = 4;
+}
+
+message EnrollmentProof {
+  string claim_id = 1;
+  bytes nonce = 2;
+  bytes signature = 3;
+  bytes device_public_key = 4;
+  bytes trust_set_digest = 5;
+}
+
+message TrustSetUpdate {
+  string active_set_id = 1;
+  string next_set_id = 2;
+  repeated bytes command_signer_fingerprints = 3;
+  uint64 highest_controller_epoch = 4;
+  bytes signature = 5;
+}

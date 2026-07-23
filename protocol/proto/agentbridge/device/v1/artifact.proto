@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message ArtifactMessage {
+  oneof body {
+    ArtifactManifest manifest = 1;
+    ArtifactChunk chunk = 2;
+    ArtifactReceipt receipt = 3;
+  }
+}
+
+message ArtifactManifest {
+  string artifact_id = 1;
+  string media_type = 2;
+  uint64 size_bytes = 3;
+  bytes plaintext_digest = 4;
+  bytes envelope_digest = 5;
+  string encryption_profile = 6;
+}
+
+message ArtifactChunk { string artifact_id = 1; uint64 offset = 2; bytes ciphertext = 3; bool final = 4; }
+message ArtifactReceipt { string artifact_id = 1; bytes envelope_digest = 2; uint64 stored_bytes = 3; }

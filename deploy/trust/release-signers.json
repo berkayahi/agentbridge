@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "threshold": 1,
+  "roles": {
+    "protocol-rc-bootstrap": {
+      "signers": [],
+      "allow_bootstrap": true
+    },
+    "protocol-stable": {
+      "signers": [],
+      "allow_bootstrap": false
+    },
+    "product": {
+      "signers": [],
+      "allow_bootstrap": false
+    }
+  }
+}

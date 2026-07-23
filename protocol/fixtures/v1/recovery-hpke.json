@@ -1,0 +1,9 @@
+{
+  "profile": "agentbridge-recovery-hpke-v1",
+  "kem": "DHKEM(X25519, HKDF-SHA256)",
+  "kdf": "HKDF-SHA256",
+  "aead": "ChaCha20Poly1305",
+  "request_id": "fixture-recovery-request-1",
+  "ciphertext_base64": "",
+  "evidence_digest_hex": ""
+}

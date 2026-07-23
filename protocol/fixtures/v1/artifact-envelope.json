@@ -1,0 +1,8 @@
+{
+  "profile": "agentbridge-artifact-envelope-v1",
+  "artifact_id": "fixture-artifact-1",
+  "media_type": "application/octet-stream",
+  "size_bytes": 0,
+  "plaintext_digest_hex": "",
+  "envelope_digest_hex": ""
+}

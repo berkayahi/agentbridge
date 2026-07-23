@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+import "agentbridge/device/v1/artifact.proto";
+import "agentbridge/device/v1/capability.proto";
+import "agentbridge/device/v1/command.proto";
+import "agentbridge/device/v1/enrollment.proto";
+import "agentbridge/device/v1/event.proto";
+import "agentbridge/device/v1/recovery.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+}
+
+message Envelope {
+  ProtocolVersion protocol = 1;
+  string organization_id = 2;
+  string device_id = 3;
+  uint64 connection_epoch = 4;
+  uint64 controller_epoch = 5;
+  uint64 message_id = 6;
+  string command_id = 7;
+  string execution_id = 8;
+  string session_id = 9;
+  string resource_id = 10;
+  string causation_id = 11;
+  string correlation_id = 12;
+  uint64 sequence = 13;
+  google.protobuf.Timestamp issued_at = 14;
+  google.protobuf.Timestamp expires_at = 15;
+  string payload_type = 16;
+  bytes payload_digest = 17;
+  string signing_key_id = 18;
+  bytes signature = 19;
+
+  oneof payload {
+    EnrollmentMessage enrollment = 20;
+    CommandMessage command = 21;
+    EventMessage event = 22;
+    CapabilityMessage capability = 23;
+    RecoveryMessage recovery = 24;
+    ArtifactMessage artifact = 25;
+  }
+}

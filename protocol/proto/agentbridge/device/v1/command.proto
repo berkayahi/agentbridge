@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package agentbridge.device.v1;
+
+option go_package = "github.com/berkayahi/agentbridge/protocol/gen/go/agentbridge/device/v1;devicev1";
+
+message CommandMessage {
+  oneof body {
+    StartCommand start = 1;
+    ResumeCommand resume = 2;
+    SteerCommand steer = 3;
+    InterruptCommand interrupt = 4;
+    CloseCommand close = 5;
+    ForkCommand fork = 6;
+    ApprovalDecisionCommand approval = 7;
+    RecoveryCommand recovery = 8;
+    UsageCommand usage = 9;
+    ArtifactCommand artifact = 10;
+    UpdateCommand update = 11;
+  }
+}
+
+message StartCommand {
+  string task_id = 1;
+  string session_id = 2;
+  string repository_id = 3;
+  string runtime_id = 4;
+  string model = 5;
+  bytes policy_snapshot = 6;
+  bytes input = 7;
+  uint64 fencing_epoch = 8;
+}
+
+message ResumeCommand { bytes input = 1; }
+message SteerCommand { bytes input = 1; }
+message InterruptCommand { string reason = 1; }
+message CloseCommand { string reason = 1; }
+message ForkCommand { string successor_task_id = 1; bytes input = 2; }
+
+message ApprovalDecisionCommand {
+  string approval_id = 1;
+  string operation_digest = 2;
+  string policy_digest = 3;
+  string effect = 4;
+  string auth_evidence_ref = 5;
+  string nonce = 6;
+  bool allow = 7;
+}
+
+message RecoveryCommand { string provider = 1; string action = 2; bytes evidence = 3; }
+message UsageCommand { string provider = 1; }
+message ArtifactCommand { string artifact_id = 1; bytes manifest = 2; }
+message UpdateCommand { string release = 1; bytes manifest = 2; }

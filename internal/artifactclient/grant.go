@@ -31,7 +31,7 @@ func (g Grant) CanonicalBytes() ([]byte, error) {
 }
 
 func (g Grant) Verify(now time.Time, verifier GrantVerifier) error {
-	if verifier == nil {
+	if verifier == nil || len(g.Signature) == 0 {
 		return ErrGrantSignature
 	}
 	if err := g.Validate(now); err != nil {

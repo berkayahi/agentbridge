@@ -95,23 +95,41 @@ func (s *MemoryStore) Finalize(ctx context.Context, objectKey, envelopeDigest st
 }
 
 type Service struct {
-	store UploadStore
-	now   func() time.Time
+	store    UploadStore
+	verifier GrantVerifier
+	now      func() time.Time
 }
 
 func NewService(store UploadStore, now func() time.Time) (*Service, error) {
 	if store == nil {
 		return nil, ErrChunkOrder
 	}
+	return newService(store, nil, now), nil
+}
+
+func NewServiceWithVerifier(store UploadStore, verifier GrantVerifier, now func() time.Time) (*Service, error) {
+	if store == nil || verifier == nil {
+		return nil, ErrGrantSignature
+	}
+	return newService(store, verifier, now), nil
+}
+
+func newService(store UploadStore, verifier GrantVerifier, now func() time.Time) *Service {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, now: now}, nil
+	return &Service{store: store, verifier: verifier, now: now}
 }
 
 func (s *Service) Upload(ctx context.Context, grant Grant, key []byte, plaintext []byte) (Receipt, error) {
 	if s == nil || s.store == nil {
 		return Receipt{}, ErrChunkOrder
+	}
+	if s.verifier == nil {
+		return Receipt{}, ErrGrantSignature
+	}
+	if err := grant.Verify(s.now().UTC(), s.verifier); err != nil {
+		return Receipt{}, err
 	}
 	value, err := Encrypt(grant, key, plaintext, s.now().UTC())
 	if err != nil {

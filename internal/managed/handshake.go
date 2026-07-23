@@ -1,11 +1,19 @@
 package managed
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+	"time"
 )
 
-var ErrIncompatibleProtocol = errors.New("managed: incompatible protocol")
+var (
+	ErrIncompatibleProtocol = errors.New("managed: incompatible protocol")
+	ErrHandshakeRequired    = errors.New("managed: signed handshake required")
+)
 
 type Handshake struct {
 	Major           uint32
@@ -15,10 +23,41 @@ type Handshake struct {
 	ConnectionEpoch uint64
 	ControllerEpoch uint64
 	Capabilities    []string
+	SigningKeyID    string
+	Signature       []byte
+}
+
+type HandshakeTransport interface {
+	PerformHandshake(context.Context, Handshake) (Handshake, error)
+}
+
+type ConnectionOptions struct {
+	LocalHandshake   Handshake
+	RequireHandshake bool
+	Clock            func() time.Time
+}
+
+func (h Handshake) CanonicalSigningBytes() ([]byte, error) {
+	capabilities := append([]string(nil), h.Capabilities...)
+	sort.Strings(capabilities)
+	return json.Marshal(struct {
+		Major, Minor                     uint32
+		OrganizationID, DeviceID         string
+		ConnectionEpoch, ControllerEpoch uint64
+		Capabilities                     []string
+		SigningKeyID                     string
+	}{
+		Major: h.Major, Minor: h.Minor, OrganizationID: h.OrganizationID, DeviceID: h.DeviceID,
+		ConnectionEpoch: h.ConnectionEpoch, ControllerEpoch: h.ControllerEpoch,
+		Capabilities: capabilities, SigningKeyID: h.SigningKeyID,
+	})
 }
 
 func Negotiate(local, remote Handshake) (Handshake, error) {
-	if local.Major == 0 || local.Major != remote.Major {
+	if err := validateHandshake(local); err != nil || validateHandshake(remote) != nil {
+		return Handshake{}, ErrHandshakeRequired
+	}
+	if local.Major != remote.Major {
 		return Handshake{}, ErrIncompatibleProtocol
 	}
 	if local.OrganizationID == "" || local.OrganizationID != remote.OrganizationID || local.DeviceID == "" || remote.DeviceID != local.DeviceID {
@@ -50,4 +89,11 @@ func intersectStrings(left, right []string) []string {
 		}
 	}
 	return result
+}
+
+func validateHandshake(h Handshake) error {
+	if h.Major == 0 || strings.TrimSpace(h.OrganizationID) == "" || strings.TrimSpace(h.DeviceID) == "" || h.ConnectionEpoch == 0 || h.ControllerEpoch == 0 || strings.TrimSpace(h.SigningKeyID) == "" || len(h.Signature) == 0 {
+		return ErrHandshakeRequired
+	}
+	return nil
 }

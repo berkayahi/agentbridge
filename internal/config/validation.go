@@ -11,6 +11,12 @@ import (
 )
 
 func (c Config) Validate() error {
+	if c.Mode != "standalone" && c.Mode != "managed" {
+		return errors.New("mode must be standalone or managed")
+	}
+	if err := c.Managed.validate(c.Mode); err != nil {
+		return err
+	}
 	if err := validateListen(c.Server.Listen); err != nil {
 		return fmt.Errorf("server listen: %w", err)
 	}
@@ -66,6 +72,27 @@ func (c Config) Validate() error {
 	}
 	if _, ok := c.Repositories[c.DefaultRepository]; !ok {
 		return errors.New("default_repository must name a configured repository")
+	}
+	return nil
+}
+
+func (m ManagedConfig) validate(mode string) error {
+	if mode != "managed" {
+		return nil
+	}
+	parsed, err := url.ParseRequestURI(strings.TrimSpace(m.GatewayURL))
+	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || parsed.User != nil {
+		return errors.New("managed gateway_url must be a WSS URL without user info")
+	}
+	for name, value := range map[string]string{"organization_id": m.OrganizationID, "device_id": m.DeviceID} {
+		if value == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\x00\r\n") || len(value) > 128 {
+			return fmt.Errorf("managed %s must be a trimmed nonempty identifier", name)
+		}
+	}
+	for name, path := range map[string]string{"identity_path": m.IdentityPath, "record_path": m.RecordPath, "state_path": m.StatePath} {
+		if path != "" && !filepath.IsAbs(path) {
+			return fmt.Errorf("managed %s must be absolute", name)
+		}
 	}
 	return nil
 }

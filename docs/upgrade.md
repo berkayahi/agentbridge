@@ -28,6 +28,11 @@ operation or travel. Pin the versions validated by the acceptance suite.
 Do not run database migrations against the only copy of a database. The
 verified pre-cutover backup and restore check must pass before service start.
 
+The backup manifest also records managed-mode identity facts and the durable
+controller cursor. Those facts are diagnostic and cannot restore a private
+device key or lower the accepted controller epoch. A cross-machine restore
+must complete enrollment again before managed replay is enabled.
+
 The v2 operational boundary is explicit and schema-aware:
 
 ```sh

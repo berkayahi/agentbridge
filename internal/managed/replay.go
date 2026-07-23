@@ -4,6 +4,7 @@ package managed
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -52,23 +53,9 @@ func (s *MemoryCursorStore) Save(ctx context.Context, value Cursor) error {
 	return nil
 }
 
-type Frame struct {
-	OrganizationID  string
-	DeviceID        string
-	ConnectionEpoch uint64
-	ControllerEpoch uint64
-	MessageID       uint64
-	Sequence        uint64
-	CommandID       string
-	PayloadType     string
-	Payload         []byte
-	Signature       []byte
-	SigningKeyID    string
-	ExpiresAt       time.Time
-}
-
 type ReplayGuard struct {
 	store        CursorStore
+	inbox        InboxStore
 	organization string
 	device       string
 	mu           sync.Mutex
@@ -81,12 +68,28 @@ func NewReplayGuard(store CursorStore, organization, device string) (*ReplayGuar
 	return &ReplayGuard{store: store, organization: organization, device: device}, nil
 }
 
+func NewReplayGuardWithInbox(store CursorStore, organization, device string) (*ReplayGuard, error) {
+	inbox, ok := store.(InboxStore)
+	if !ok {
+		return nil, ErrInvalidFrame
+	}
+	guard, err := NewReplayGuard(store, organization, device)
+	if err != nil {
+		return nil, err
+	}
+	guard.inbox = inbox
+	return guard, nil
+}
+
 // Accept persists the cursor before the caller dispatches the payload. A
 // restart therefore cannot accept a frame whose side effect was already
 // admitted by this device.
 func (g *ReplayGuard) Accept(ctx context.Context, frame Frame, now time.Time) error {
-	if g == nil || frame.OrganizationID != g.organization || frame.DeviceID != g.device || frame.ConnectionEpoch == 0 || frame.ControllerEpoch == 0 || frame.MessageID == 0 || frame.Sequence == 0 || strings.TrimSpace(frame.PayloadType) == "" || frame.ExpiresAt.IsZero() || !now.Before(frame.ExpiresAt) {
+	if g == nil || frame.OrganizationID != g.organization || frame.DeviceID != g.device {
 		return ErrInvalidFrame
+	}
+	if err := frame.Validate(now); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidFrame, err)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -100,5 +103,25 @@ func (g *ReplayGuard) Accept(ctx context.Context, frame Frame, now time.Time) er
 	if frame.ConnectionEpoch == current.ConnectionEpoch && (frame.MessageID <= current.MessageID || frame.Sequence <= current.Sequence) {
 		return ErrReplay
 	}
-	return g.store.Save(ctx, Cursor{MessageID: frame.MessageID, Sequence: frame.Sequence, ConnectionEpoch: frame.ConnectionEpoch, ControllerEpoch: frame.ControllerEpoch})
+	next := Cursor{MessageID: frame.MessageID, Sequence: frame.Sequence, ConnectionEpoch: frame.ConnectionEpoch, ControllerEpoch: frame.ControllerEpoch}
+	if atomic, ok := g.store.(AtomicAcceptStore); ok {
+		duplicate, err := atomic.Accept(ctx, frame, next)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return ErrReplay
+		}
+		return nil
+	}
+	if g.inbox != nil {
+		duplicate, err := g.inbox.Persist(ctx, frame)
+		if err != nil {
+			return err
+		}
+		if duplicate {
+			return ErrReplay
+		}
+	}
+	return g.store.Save(ctx, next)
 }

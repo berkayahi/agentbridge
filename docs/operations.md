@@ -53,6 +53,33 @@ the bot in a private Telegram chat; the command then prints only
 `telegram_user_id` and `telegram_chat_id`. Put those numeric values in
 `allowed_user_ids` and `paired_chat_id`, then run `agentbridge doctor` again.
 
+## Managed enrollment and mode
+
+Enrollment is an explicit two-step exchange. The first command creates (or
+loads) an owner-only Ed25519 device key and prints a public claim request; it
+never prints the private key:
+
+```sh
+agentbridge enroll --data-dir "$HOME/.local/share/agentbridge" \
+  --claim-id <claim> --organization-id <organization> --device-id <device> \
+  --browser-fingerprint <confirmed-fingerprint> --output /path/to/request.json
+```
+
+After the controller returns its signed challenge, produce the proof and
+persist the public enrollment record:
+
+```sh
+agentbridge enroll --data-dir "$HOME/.local/share/agentbridge" \
+  --claim-id <claim> --organization-id <organization> --device-id <device> \
+  --browser-fingerprint <confirmed-fingerprint> --challenge /path/to/challenge.json
+```
+
+Set `mode: managed` and the `managed.gateway_url`, organization, and device
+fields in the private configuration before starting the daemon. `mode:
+standalone` remains the default. A durable mode switch is rejected while an
+execution is active; a missing, mismatched, revoked, or quarantined identity
+fails managed startup and requires explicit re-enrollment.
+
 Use `loginctl enable-linger "$USER"` only if the service must survive logout.
 Review that choice against the security policy of the host.
 
@@ -91,6 +118,13 @@ $HOME/.local/bin/agentbridge restore-check \
   --backup "$HOME/.local/share/agentbridge/backups" \
   --work-dir "$HOME/.cache/agentbridge/restore-check"
 ```
+
+Managed backups include the public device fingerprint, organization/device
+IDs, highest accepted controller epoch, mode, and managed cursor facts. They
+never include the device private key or provider/Git credentials. A restore on
+another machine reports `re-enrollment required`; an in-place restore may pass
+managed readiness only when the existing OS-protected key and enrollment
+record still match the backup facts.
 
 Copy encrypted backups to a separate device or storage account according to
 your own threat model. Never include credential files or CLI session homes in

@@ -17,23 +17,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/controller"
+	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/managed"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 	_ "modernc.org/sqlite"
 )
 
 type BackupOptions struct {
-	Database string
-	Output   string
-	Now      func() time.Time
+	Database         string
+	Output           string
+	IdentityPath     string
+	RecordPath       string
+	ModePath         string
+	ManagedStatePath string
+	Now              func() time.Time
 }
 
 type BackupManifest struct {
-	SourceSHA256      string           `json:"source_sha256"`
-	BackupSHA256      string           `json:"backup_sha256"`
-	SchemaFingerprint string           `json:"schema_fingerprint"`
-	ToolVersion       string           `json:"tool_version"`
-	CreatedAt         time.Time        `json:"created_at"`
-	Counts            map[string]int64 `json:"counts"`
+	SourceSHA256           string           `json:"source_sha256"`
+	BackupSHA256           string           `json:"backup_sha256"`
+	SchemaFingerprint      string           `json:"schema_fingerprint"`
+	ToolVersion            string           `json:"tool_version"`
+	CreatedAt              time.Time        `json:"created_at"`
+	Counts                 map[string]int64 `json:"counts"`
+	Mode                   string           `json:"mode"`
+	OrganizationID         string           `json:"organization_id,omitempty"`
+	DeviceID               string           `json:"device_id,omitempty"`
+	DeviceFingerprint      string           `json:"device_fingerprint,omitempty"`
+	HighestControllerEpoch uint64           `json:"highest_controller_epoch,omitempty"`
+	ManagedCursor          *managed.Cursor  `json:"managed_cursor,omitempty"`
+	ReEnrollmentRequired   bool             `json:"re_enrollment_required,omitempty"`
 }
 
 type BackupResult struct {
@@ -87,6 +101,10 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 		return BackupResult{}, fmt.Errorf("verify backup: %w", err)
 	}
 	manifest := BackupManifest{ToolVersion: "agentbridge-2.0", CreatedAt: now().UTC()}
+	if err := collectManagedFacts(ctx, options, &manifest); err != nil {
+		backup.Close()
+		return BackupResult{}, err
+	}
 	manifest.SourceSHA256, err = fileSHA256(options.Database)
 	if err != nil {
 		backup.Close()
@@ -121,6 +139,60 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 		return BackupResult{}, err
 	}
 	return BackupResult{Database: destination, Manifest: manifestPath}, nil
+}
+
+func collectManagedFacts(ctx context.Context, options BackupOptions, manifest *BackupManifest) error {
+	manifest.Mode = string(controller.ModeStandalone)
+	if options.ModePath != "" {
+		modeStore, err := controller.NewFileModeStore(options.ModePath)
+		if err != nil {
+			return err
+		}
+		state, err := modeStore.Load(ctx)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("read mode state: %w", err)
+			}
+		} else {
+			manifest.Mode = string(state.Mode)
+		}
+	}
+	if options.RecordPath != "" {
+		record, err := deviceidentity.LoadRecord(options.RecordPath)
+		if err == nil {
+			if options.IdentityPath != "" {
+				key, keyErr := deviceidentity.Load(options.IdentityPath)
+				if keyErr != nil || key.Fingerprint() != record.Fingerprint {
+					return errors.New("enrollment record does not match the device key")
+				}
+			}
+			manifest.OrganizationID = record.OrganizationID
+			manifest.DeviceID = record.DeviceID
+			manifest.DeviceFingerprint = record.Fingerprint
+			manifest.HighestControllerEpoch = record.HighestControllerEpoch
+			manifest.ReEnrollmentRequired = record.Revoked || record.Quarantined
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read enrollment facts: %w", err)
+		} else if manifest.Mode == string(controller.ModeManaged) {
+			manifest.ReEnrollmentRequired = true
+		}
+	}
+	if options.ManagedStatePath != "" {
+		state, err := managed.NewFileStateStore(options.ManagedStatePath)
+		if err != nil {
+			return err
+		}
+		cursor, err := state.Load(ctx)
+		if err == nil {
+			manifest.ManagedCursor = &cursor
+			if cursor.ControllerEpoch > manifest.HighestControllerEpoch {
+				manifest.HighestControllerEpoch = cursor.ControllerEpoch
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read managed cursor: %w", err)
+		}
+	}
+	return nil
 }
 
 func snapshot(ctx context.Context, db *sql.DB, destination string) error {

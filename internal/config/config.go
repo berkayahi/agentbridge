@@ -14,11 +14,22 @@ import (
 
 type Config struct {
 	DefaultRepository string                       `yaml:"default_repository,omitempty"`
+	Mode              string                       `yaml:"mode,omitempty"`
+	Managed           ManagedConfig                `yaml:"managed,omitempty"`
 	Server            ServerConfig                 `yaml:"server"`
 	Telegram          TelegramConfig               `yaml:"telegram"`
 	Providers         map[string]ProviderConfig    `yaml:"providers"`
 	Repositories      map[string]RepositoryProfile `yaml:"repositories"`
 	Spool             SpoolConfig                  `yaml:"spool"`
+}
+
+type ManagedConfig struct {
+	GatewayURL     string `yaml:"gateway_url,omitempty"`
+	OrganizationID string `yaml:"organization_id,omitempty"`
+	DeviceID       string `yaml:"device_id,omitempty"`
+	IdentityPath   string `yaml:"identity_path,omitempty"`
+	RecordPath     string `yaml:"record_path,omitempty"`
+	StatePath      string `yaml:"state_path,omitempty"`
 }
 
 type SpoolConfig struct {
@@ -138,6 +149,9 @@ func Load(path string) (Config, error) {
 		for name := range cfg.Repositories {
 			cfg.DefaultRepository = name
 		}
+	}
+	if cfg.Mode == "" {
+		cfg.Mode = "standalone"
 	}
 	cfg.Spool = cfg.Spool.Normalize()
 	if err := cfg.Spool.Domain().Validate(); err != nil {

@@ -15,6 +15,7 @@ type ClientConfig struct {
 	Dispatch         Dispatcher
 	Backoff          Backoff
 	Clock            func() time.Time
+	LocalHandshake   Handshake
 }
 
 type Client struct {
@@ -28,6 +29,9 @@ func NewClient(config ClientConfig) (*Client, error) {
 	if err := config.Trust.Validate(); err != nil {
 		return nil, err
 	}
+	if err := validateHandshake(config.LocalHandshake); err != nil {
+		return nil, err
+	}
 	if config.Clock == nil {
 		config.Clock = time.Now
 	}
@@ -39,7 +43,9 @@ func (c *Client) Run(ctx context.Context) error {
 	for {
 		transport, err := c.config.TransportFactory(ctx)
 		if err == nil {
-			connection, connectionErr := NewConnection(transport, c.config.Guard, c.config.Trust, c.config.Dispatch)
+			connection, connectionErr := NewConnectionWithOptions(transport, c.config.Guard, c.config.Trust, c.config.Dispatch, ConnectionOptions{
+				LocalHandshake: c.config.LocalHandshake, RequireHandshake: true, Clock: c.config.Clock,
+			})
 			if connectionErr == nil {
 				err = connection.Run(ctx)
 			} else {
@@ -50,7 +56,7 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if errors.Is(err, ErrRevoked) || errors.Is(err, ErrTrustRollback) || errors.Is(err, ErrUntrustedCommand) || errors.Is(err, ErrInvalidFrame) {
+		if errors.Is(err, ErrRevoked) || errors.Is(err, ErrTrustRollback) || errors.Is(err, ErrUntrustedCommand) || errors.Is(err, ErrInvalidFrame) || errors.Is(err, ErrHandshakeRequired) || errors.Is(err, ErrExpiredFrame) || errors.Is(err, ErrUnknownPayloadType) || errors.Is(err, ErrInvalidFramePayload) {
 			return err
 		}
 		attempt++

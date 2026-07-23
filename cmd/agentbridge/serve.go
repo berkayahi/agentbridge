@@ -10,6 +10,9 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/config"
+	"github.com/berkayahi/agentbridge/internal/controller"
+	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/managed"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 )
 
@@ -115,7 +118,15 @@ func serveDaemon(ctx context.Context, configPath string) error {
 	return serveDaemonWithBuilder(ctx, configPath, buildDaemon)
 }
 
+func serveDaemonWithMode(ctx context.Context, configPath, mode string) error {
+	return serveDaemonWithBuilderAndMode(ctx, configPath, mode, buildDaemon)
+}
+
 func serveDaemonWithBuilder(ctx context.Context, configPath string, builder daemonBuilder) error {
+	return serveDaemonWithBuilderAndMode(ctx, configPath, "", builder)
+}
+
+func serveDaemonWithBuilderAndMode(ctx context.Context, configPath, mode string, builder daemonBuilder) error {
 	if err := config.RejectAPIKeyEnvironment(); err != nil {
 		return err
 	}
@@ -123,11 +134,20 @@ func serveDaemonWithBuilder(ctx context.Context, configPath string, builder daem
 	if err != nil {
 		return err
 	}
+	if strings.TrimSpace(mode) != "" {
+		cfg.Mode = strings.TrimSpace(mode)
+		if err := cfg.Validate(); err != nil {
+			return err
+		}
+	}
 	paths, err := deriveRuntimePaths(os.Getenv("AGENTBRIDGE_DATA_DIR"))
 	if err != nil {
 		return err
 	}
 	if err := paths.prepare(); err != nil {
+		return err
+	}
+	if err := activateRuntimeMode(ctx, cfg, paths); err != nil {
 		return err
 	}
 	releaseDatabaseLock, err := sqlite.AcquireDatabaseRuntimeLock(paths.database)
@@ -144,4 +164,49 @@ func serveDaemonWithBuilder(ctx context.Context, configPath string, builder daem
 		return err
 	}
 	return runDaemonLifecycle(ctx, runtime)
+}
+
+func activateRuntimeMode(ctx context.Context, cfg config.Config, paths runtimePaths) error {
+	modeCtx := context.WithoutCancel(ctx)
+	modeStore, err := controller.NewFileModeStore(filepath.Join(paths.data, "mode.json"))
+	if err != nil {
+		return err
+	}
+	if _, err := controller.Activate(modeCtx, modeStore, controller.Mode(cfg.Mode)); err != nil {
+		return err
+	}
+	if cfg.Mode != string(controller.ModeManaged) {
+		return nil
+	}
+	identityPath := cfg.Managed.IdentityPath
+	if identityPath == "" {
+		identityPath = filepath.Join(paths.data, "device-key.json")
+	}
+	recordPath := cfg.Managed.RecordPath
+	if recordPath == "" {
+		recordPath = filepath.Join(paths.data, "enrollment.json")
+	}
+	key, err := deviceidentity.Load(identityPath)
+	if err != nil {
+		return fmt.Errorf("managed identity requires enrollment: %w", err)
+	}
+	record, err := deviceidentity.LoadRecord(recordPath)
+	if err != nil {
+		return fmt.Errorf("managed enrollment record unavailable: %w", err)
+	}
+	if record.OrganizationID != cfg.Managed.OrganizationID || record.DeviceID != cfg.Managed.DeviceID || record.Fingerprint != key.Fingerprint() || record.Revoked || record.Quarantined {
+		return errors.New("managed identity is not trusted for the configured device")
+	}
+	statePath := cfg.Managed.StatePath
+	if statePath == "" {
+		statePath = filepath.Join(paths.data, "managed-state.json")
+	}
+	state, err := managed.NewFileStateStore(statePath)
+	if err != nil {
+		return err
+	}
+	if _, err := state.Load(modeCtx); err != nil {
+		return fmt.Errorf("managed replay state unavailable: %w", err)
+	}
+	return nil
 }

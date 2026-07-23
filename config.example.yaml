@@ -1,6 +1,16 @@
 # Copy this file to an untracked, private location and replace every placeholder.
 # Never commit credentials. systemd credentials are loaded separately at runtime.
 default_repository: sample-app
+mode: standalone
+# Managed mode is explicit and requires a completed enrollment record:
+# mode: managed
+# managed:
+#   gateway_url: wss://controller.example.invalid/device
+#   organization_id: org-example
+#   device_id: device-example
+#   identity_path: /srv/agentbridge/device-key.json
+#   record_path: /srv/agentbridge/enrollment.json
+#   state_path: /srv/agentbridge/managed-state.json
 server:
   listen: 127.0.0.1:8787
   allowed_tailscale_identities:

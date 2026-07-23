@@ -44,6 +44,7 @@ type commandDeps struct {
 	runMCP         func(context.Context, mcpserver.RunOptions) error
 	runStatusline  func(context.Context, io.Reader, claude.StatuslineCaller, claude.StatuslineScope, func() time.Time) error
 	runServe       func(context.Context, string) error
+	runServeMode   func(context.Context, string, string) error
 	runMigrate     func(context.Context, string) error
 }
 
@@ -65,6 +66,7 @@ func defaultCommandDeps() commandDeps {
 		runMCP:        mcpserver.Run,
 		runStatusline: claude.CaptureStatusline,
 		runServe:      serveDaemon,
+		runServeMode:  serveDaemonWithMode,
 		runMigrate:    runMigrate,
 	}
 }
@@ -96,6 +98,9 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	}
 	if len(args) > 0 && args[0] == "restore-check" {
 		return runRestoreCheckCommand(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) > 0 && args[0] == "enroll" {
+		return runEnrollCommand(ctx, args[1:], stdout, stderr)
 	}
 	if len(args) == 4 && args[0] == "pair" && args[1] == "telegram" && args[2] == "--config" && strings.TrimSpace(args[3]) != "" {
 		if pairing == nil {
@@ -147,6 +152,17 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		}
 		return 0
 	}
+	if len(args) == 5 && args[0] == "serve" && args[1] == "--config" && strings.TrimSpace(args[2]) != "" && args[3] == "--mode" && strings.TrimSpace(args[4]) != "" {
+		if deps.runServeMode == nil {
+			fmt.Fprintln(stderr, "agentbridge: mode-aware daemon runtime is unavailable")
+			return 1
+		}
+		if err := deps.runServeMode(ctx, args[2], strings.TrimSpace(args[4])); err != nil {
+			fmt.Fprintln(stderr, "agentbridge: daemon stopped; inspect the service journal")
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 3 && args[0] == "migrate" && args[1] == "--database" && strings.TrimSpace(args[2]) != "" {
 		if deps.runMigrate == nil {
 			fmt.Fprintln(stderr, "agentbridge: migration is unavailable")
@@ -159,7 +175,7 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 

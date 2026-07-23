@@ -20,6 +20,7 @@ type ClientConfig struct {
 	Clock                 func() time.Time
 	LocalHandshake        Handshake
 	LocalHandshakeFactory HandshakeFactory
+	OnConnected           ConnectionReady
 }
 
 type Client struct {
@@ -64,7 +65,7 @@ func (c *Client) Run(ctx context.Context) error {
 		transport, err := c.config.TransportFactory(ctx)
 		if err == nil {
 			connection, connectionErr := NewConnectionWithOptions(transport, c.config.Guard, c.config.Trust, c.config.Dispatch, ConnectionOptions{
-				LocalHandshake: localHandshake, RequireHandshake: true, Clock: c.config.Clock,
+				LocalHandshake: localHandshake, RequireHandshake: true, Clock: c.config.Clock, OnReady: c.config.OnConnected,
 			})
 			if connectionErr == nil {
 				err = connection.Run(ctx)
@@ -139,6 +140,8 @@ type PersistentClientConfig struct {
 	Dispatch       Dispatcher
 	Backoff        Backoff
 	Clock          func() time.Time
+	Spool          *SpoolBridge
+	SpoolBatchSize int
 }
 
 // NewPersistentClient composes the durable replay/inbox state, enrolled
@@ -178,7 +181,7 @@ func NewPersistentClient(config PersistentClientConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(ClientConfig{
+	clientConfig := ClientConfig{
 		TransportFactory: func(ctx context.Context) (Transport, error) {
 			return NewWebSocketTransport(ctx, config.WebSocket)
 		},
@@ -194,5 +197,29 @@ func NewPersistentClient(config PersistentClientConfig) (*Client, error) {
 				Capabilities: append([]string(nil), config.Capabilities...),
 			}, config.Identity)
 		},
-	})
+	}
+	if config.Spool != nil {
+		batchSize := config.SpoolBatchSize
+		if batchSize <= 0 {
+			batchSize = 128
+		}
+		clientConfig.OnConnected = func(ctx context.Context, transport Transport, local, remote Handshake) error {
+			usage, err := config.Spool.Usage(ctx)
+			if err != nil {
+				return err
+			}
+			after := usage.AcknowledgedThrough
+			for {
+				last, count, replayErr := config.Spool.Replay(ctx, transport, local.ConnectionEpoch, remote.ControllerEpoch, after, batchSize)
+				if replayErr != nil {
+					return replayErr
+				}
+				if count < batchSize || last == after {
+					return nil
+				}
+				after = last
+			}
+		}
+	}
+	return NewClient(clientConfig)
 }

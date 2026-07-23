@@ -14,6 +14,8 @@ type Transport interface {
 	Close() error
 }
 
+type ConnectionReady func(context.Context, Transport, Handshake, Handshake) error
+
 type Connection struct {
 	transport Transport
 	guard     *ReplayGuard
@@ -59,6 +61,11 @@ func (c *Connection) Run(ctx context.Context) error {
 		}
 		if _, err := Negotiate(c.options.LocalHandshake, remote); err != nil {
 			return err
+		}
+		if c.options.OnReady != nil {
+			if err := c.options.OnReady(ctx, c.transport, c.options.LocalHandshake, remote); err != nil {
+				return err
+			}
 		}
 	}
 	for {

@@ -35,6 +35,7 @@ type ConnectionOptions struct {
 	LocalHandshake   Handshake
 	RequireHandshake bool
 	Clock            func() time.Time
+	OnReady          ConnectionReady
 }
 
 func (h Handshake) CanonicalSigningBytes() ([]byte, error) {

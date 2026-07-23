@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/approval"
 	"github.com/berkayahi/agentbridge/internal/provider"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestStandaloneContract(t *testing.T) {
@@ -21,7 +21,7 @@ func TestStandaloneContract(t *testing.T) {
 		{name: "rejects commands before startup", run: func(t *testing.T) {
 			fixture := newFixture(t, nil)
 			_, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "not started",
 			})
 			if !errors.Is(err, ErrNotStarted) {
@@ -37,29 +37,29 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "change the public runtime",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.Completed {
-				t.Fatalf("state = %s, want %s", got.State, task.Completed)
+			if got := fixture.wait(t, id); got.State != workmodel.Completed {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.Completed)
 			}
 			assertDurableEvents(t, fixture.store, id,
-				task.EventTaskCreated,
-				task.EventVerification,
-				task.EventCommitCreated,
-				task.EventPushCompleted,
+				workmodel.EventTaskCreated,
+				workmodel.EventVerification,
+				workmodel.EventCommitCreated,
+				workmodel.EventPushCompleted,
 			)
 
 			if err := fixture.app.ContinueTask(context.Background(), id, "verify the completed change again"); err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.Completed {
-				t.Fatalf("resumed state = %s, want %s", got.State, task.Completed)
+			if got := fixture.wait(t, id); got.State != workmodel.Completed {
+				t.Fatalf("resumed state = %s, want %s", got.State, workmodel.Completed)
 			}
-			assertDurableEvents(t, fixture.store, id, task.EventProviderMessage, task.EventPushCompleted)
+			assertDurableEvents(t, fixture.store, id, workmodel.EventProviderMessage, workmodel.EventPushCompleted)
 		}},
 
 		{name: "approval and cancellation", run: func(t *testing.T) {
@@ -69,14 +69,14 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "request approval",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
-				t.Fatalf("state = %s, want %s", got.State, task.AwaitingApproval)
+			if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.AwaitingApproval)
 			}
 			if err := fixture.app.DecideApproval(context.Background(), ApprovalDecisionRequest{
 				TaskID: id, ApprovalID: "appr-req", UserID: "local-operator", Allow: true,
@@ -86,13 +86,13 @@ func TestStandaloneContract(t *testing.T) {
 			if err := fixture.app.CancelTask(context.Background(), id); err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.Canceled {
-				t.Fatalf("state = %s, want %s", got.State, task.Canceled)
+			if got := fixture.wait(t, id); got.State != workmodel.Canceled {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.Canceled)
 			}
 			assertDurableEvents(t, fixture.store, id,
-				task.EventApprovalRequested,
-				task.EventApprovalResolved,
-				task.EventStateTransitioned,
+				workmodel.EventApprovalRequested,
+				workmodel.EventApprovalResolved,
+				workmodel.EventStateTransitioned,
 			)
 		}},
 
@@ -103,14 +103,14 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "standalone approval",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
-				t.Fatalf("state = %s, want %s", got.State, task.AwaitingApproval)
+			if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.AwaitingApproval)
 			}
 		}},
 
@@ -129,14 +129,14 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "native approval with production broker",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
-				t.Fatalf("state = %s, want %s", got.State, task.AwaitingApproval)
+			if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.AwaitingApproval)
 			}
 			if err := fixture.app.DecideApproval(context.Background(), ApprovalDecisionRequest{
 				TaskID: id, ApprovalID: "appr-req", UserID: "local-operator", Allow: true,
@@ -167,14 +167,14 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "provider and broker approval",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
-				t.Fatalf("state = %s, want %s", got.State, task.AwaitingApproval)
+			if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.AwaitingApproval)
 			}
 
 			requestCtx, cancelRequest := context.WithCancel(context.Background())
@@ -221,14 +221,14 @@ func TestStandaloneContract(t *testing.T) {
 			fixture.start(t)
 
 			id, err := fixture.app.CreateTask(context.Background(), CreateTaskRequest{
-				Provider: task.ProviderCodex,
+				Provider: workmodel.CodexSubscription,
 				Prompt:   "approval evidence failure",
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
-				t.Fatalf("state = %s, want %s", got.State, task.AwaitingApproval)
+			if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
+				t.Fatalf("state = %s, want %s", got.State, workmodel.AwaitingApproval)
 			}
 			err = fixture.app.DecideApproval(context.Background(), ApprovalDecisionRequest{
 				TaskID: id, ApprovalID: "appr-req", UserID: "local-operator", Allow: true,
@@ -239,11 +239,11 @@ func TestStandaloneContract(t *testing.T) {
 			if providerPort.resolveCount() != 0 {
 				t.Fatalf("provider releases = %d, want 0", providerPort.resolveCount())
 			}
-			if got, getErr := fixture.store.Task(context.Background(), id); getErr != nil || got.State != task.AwaitingApproval {
+			if got, getErr := fixture.store.Task(context.Background(), id); getErr != nil || got.State != workmodel.AwaitingApproval {
 				t.Fatalf("task = %#v, error = %v", got, getErr)
 			}
-			if got := fixture.store.approval("appr-req"); got.Status != task.ApprovalPending {
-				t.Fatalf("approval status = %s, want %s", got.Status, task.ApprovalPending)
+			if got := fixture.store.approval("appr-req"); got.Status != workmodel.ApprovalPending {
+				t.Fatalf("approval status = %s, want %s", got.Status, workmodel.ApprovalPending)
 			}
 		}},
 	}
@@ -264,7 +264,7 @@ func waitForApproval(t *testing.T, values *memoryStore, id string) {
 	t.Fatalf("approval %s was not persisted", id)
 }
 
-func assertDurableEvents(t *testing.T, values *memoryStore, id string, required ...task.EventType) {
+func assertDurableEvents(t *testing.T, values *memoryStore, id string, required ...workmodel.EventType) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -321,8 +321,8 @@ type approvalEventFailureStore struct {
 	*memoryStore
 }
 
-func (s *approvalEventFailureStore) AppendEvent(ctx context.Context, value task.Event) error {
-	if value.Type == task.EventApprovalResolved {
+func (s *approvalEventFailureStore) AppendEvent(ctx context.Context, value workmodel.Event) error {
+	if value.Type == workmodel.EventApprovalResolved {
 		return errors.New("approval event write failed")
 	}
 	return s.memoryStore.AppendEvent(ctx, value)

@@ -12,7 +12,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/store"
 	storesqlite "github.com/berkayahi/agentbridge/internal/store/sqlite"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	_ "modernc.org/sqlite"
 )
 
@@ -39,7 +39,7 @@ func TestOpenMigratesAndReopensWithPragmas(t *testing.T) {
 		t.Fatalf("journal_mode = %q, want wal", journalMode)
 	}
 
-	badAttachment := task.Attachment{ID: "missing-a", TaskID: "missing", CreatedAt: time.Now()}
+	badAttachment := workmodel.Attachment{ID: "missing-a", TaskID: "missing", CreatedAt: time.Now()}
 	if err := db.SaveAttachment(ctx, badAttachment); err == nil {
 		t.Fatal("SaveAttachment() without parent task succeeded; foreign keys are disabled")
 	}
@@ -51,8 +51,8 @@ func TestCreateTaskEventsAndDuplicateProviderEvent(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	created := time.Date(2026, time.July, 14, 5, 0, 0, 123, time.FixedZone("TRT", 3*60*60))
-	want := newTask("task-1", task.Queued, created)
-	initial := newEvent("event-1", want.ID, task.EventTaskCreated, "provider-1", created)
+	want := newTask("task-1", workmodel.Queued, created)
+	initial := newEvent("event-1", want.ID, workmodel.EventTaskCreated, "provider-1", created)
 	if err := db.CreateTask(ctx, want, initial); err != nil {
 		t.Fatalf("CreateTask(): %v", err)
 	}
@@ -61,14 +61,14 @@ func TestCreateTaskEventsAndDuplicateProviderEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Task(): %v", err)
 	}
-	if got.ID != want.ID || got.State != task.Queued || got.Provider != task.ProviderCodex {
+	if got.ID != want.ID || got.State != workmodel.Queued || got.Provider != workmodel.CodexSubscription {
 		t.Fatalf("Task() = %#v", got)
 	}
 	if got.CreatedAt.Location() != time.UTC || !got.CreatedAt.Equal(created) {
 		t.Fatalf("CreatedAt = %v, want same instant in UTC", got.CreatedAt)
 	}
 
-	second := newEvent("event-2", want.ID, task.EventProviderMessage, "provider-2", created.Add(time.Second))
+	second := newEvent("event-2", want.ID, workmodel.EventProviderMessage, "provider-2", created.Add(time.Second))
 	if err := db.AppendEvent(ctx, second); err != nil {
 		t.Fatalf("AppendEvent(): %v", err)
 	}
@@ -80,7 +80,7 @@ func TestCreateTaskEventsAndDuplicateProviderEvent(t *testing.T) {
 		t.Fatalf("Events() order = %#v", events)
 	}
 
-	duplicate := newEvent("event-3", want.ID, task.EventProviderMessage, "provider-2", created.Add(2*time.Second))
+	duplicate := newEvent("event-3", want.ID, workmodel.EventProviderMessage, "provider-2", created.Add(2*time.Second))
 	if err := db.AppendEvent(ctx, duplicate); !errors.Is(err, store.ErrDuplicateEvent) {
 		t.Fatalf("AppendEvent(duplicate) = %v, want ErrDuplicateEvent", err)
 	}
@@ -91,14 +91,14 @@ func TestTransitionIsAtomic(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "transition.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	created := time.Now().UTC()
-	seedTask(t, db, newTask("task-1", task.Queued, created))
+	seedTask(t, db, newTask("task-1", workmodel.Queued, created))
 
-	event := newEvent("event-2", "task-1", task.EventStateTransitioned, "", created.Add(time.Second))
-	if err := db.Transition(ctx, "task-1", task.Preparing, event); err != nil {
+	event := newEvent("event-2", "task-1", workmodel.EventStateTransitioned, "", created.Add(time.Second))
+	if err := db.Transition(ctx, "task-1", workmodel.Preparing, event); err != nil {
 		t.Fatalf("Transition(valid): %v", err)
 	}
-	invalid := newEvent("event-3", "task-1", task.EventStateTransitioned, "", created.Add(2*time.Second))
-	if err := db.Transition(ctx, "task-1", task.Pushing, invalid); !errors.Is(err, store.ErrInvalidTransition) {
+	invalid := newEvent("event-3", "task-1", workmodel.EventStateTransitioned, "", created.Add(2*time.Second))
+	if err := db.Transition(ctx, "task-1", workmodel.Pushing, invalid); !errors.Is(err, store.ErrInvalidTransition) {
 		t.Fatalf("Transition(invalid) = %v, want ErrInvalidTransition", err)
 	}
 
@@ -106,7 +106,7 @@ func TestTransitionIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != task.Preparing {
+	if got.State != workmodel.Preparing {
 		t.Fatalf("state = %q, want preparing", got.State)
 	}
 	events, err := db.Events(ctx, "task-1")
@@ -120,21 +120,21 @@ func TestTransitionPersistsLifecycleTimestamps(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "lifecycle-times.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	created := time.Date(2026, time.July, 14, 8, 0, 0, 0, time.UTC)
-	seedTask(t, db, newTask("task-1", task.Queued, created))
+	seedTask(t, db, newTask("task-1", workmodel.Queued, created))
 
 	transitions := []struct {
-		to task.State
+		to workmodel.State
 		at time.Time
 	}{
-		{to: task.Preparing, at: created.Add(time.Minute)},
-		{to: task.Running, at: created.Add(2 * time.Minute)},
-		{to: task.Verifying, at: created.Add(3 * time.Minute)},
-		{to: task.Committing, at: created.Add(4 * time.Minute)},
-		{to: task.Pushing, at: created.Add(5 * time.Minute)},
-		{to: task.Completed, at: created.Add(6 * time.Minute)},
+		{to: workmodel.Preparing, at: created.Add(time.Minute)},
+		{to: workmodel.Running, at: created.Add(2 * time.Minute)},
+		{to: workmodel.Verifying, at: created.Add(3 * time.Minute)},
+		{to: workmodel.Committing, at: created.Add(4 * time.Minute)},
+		{to: workmodel.Pushing, at: created.Add(5 * time.Minute)},
+		{to: workmodel.Completed, at: created.Add(6 * time.Minute)},
 	}
 	for index, transition := range transitions {
-		event := newEvent(fmt.Sprintf("transition-%d", index), "task-1", task.EventStateTransitioned, "", transition.at)
+		event := newEvent(fmt.Sprintf("transition-%d", index), "task-1", workmodel.EventStateTransitioned, "", transition.at)
 		if err := db.Transition(ctx, "task-1", transition.to, event); err != nil {
 			t.Fatalf("Transition(%s): %v", transition.to, err)
 		}
@@ -160,9 +160,9 @@ func TestEventOrderingHandlesFractionalSeconds(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "fractional-order.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	base := time.Date(2026, time.July, 14, 8, 0, 0, 0, time.UTC)
-	value := newTask("task-1", task.Queued, base)
+	value := newTask("task-1", workmodel.Queued, base)
 	seedTask(t, db, value)
-	later := newEvent("later", value.ID, task.EventProviderMessage, "later", base.Add(100*time.Millisecond))
+	later := newEvent("later", value.ID, workmodel.EventProviderMessage, "later", base.Add(100*time.Millisecond))
 	if err := db.AppendEvent(ctx, later); err != nil {
 		t.Fatal(err)
 	}
@@ -181,15 +181,15 @@ func TestConcurrentTransitionReturnsStableConflict(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "concurrent-transition.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	created := time.Now().UTC()
-	seedTask(t, db, newTask("task-1", task.Queued, created))
+	seedTask(t, db, newTask("task-1", workmodel.Queued, created))
 
 	start := make(chan struct{})
 	errorsCh := make(chan error, 2)
 	for i := range 2 {
 		go func(index int) {
 			<-start
-			event := newEvent(fmt.Sprintf("event-%d", index), "task-1", task.EventStateTransitioned, "", created.Add(time.Duration(index+1)*time.Nanosecond))
-			errorsCh <- db.Transition(ctx, "task-1", task.Preparing, event)
+			event := newEvent(fmt.Sprintf("event-%d", index), "task-1", workmodel.EventStateTransitioned, "", created.Add(time.Duration(index+1)*time.Nanosecond))
+			errorsCh <- db.Transition(ctx, "task-1", workmodel.Preparing, event)
 		}(i)
 	}
 	close(start)
@@ -210,8 +210,8 @@ func TestCreateTaskAndInitialEventAreAtomic(t *testing.T) {
 	ctx := context.Background()
 	db := openStore(t, filepath.Join(t.TempDir(), "create-atomic.db"))
 	t.Cleanup(func() { _ = db.Close() })
-	value := newTask("task-1", task.Queued, time.Now())
-	invalidEvent := newEvent("event-1", value.ID, task.EventTaskCreated, "", value.CreatedAt)
+	value := newTask("task-1", workmodel.Queued, time.Now())
+	invalidEvent := newEvent("event-1", value.ID, workmodel.EventTaskCreated, "", value.CreatedAt)
 	invalidEvent.Visibility = "invalid"
 
 	if err := db.CreateTask(ctx, value, invalidEvent); err == nil {
@@ -227,10 +227,10 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "restart.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	now := time.Now().UTC()
-	seedTask(t, db, newTask("active", task.Running, now))
-	seedTask(t, db, newTask("done", task.Completed, now))
+	seedTask(t, db, newTask("active", workmodel.Running, now))
+	seedTask(t, db, newTask("done", workmodel.Completed, now))
 
-	session := task.Session{ID: "session-1", TaskID: "active", Provider: task.ProviderClaude, ProviderSessionID: "claude-1", Status: "active", Resumable: true, CreatedAt: now, UpdatedAt: now}
+	session := workmodel.Session{ID: "session-1", TaskID: "active", Provider: workmodel.ClaudeSubscription, ProviderSessionID: "claude-1", Status: "active", Resumable: true, CreatedAt: now, UpdatedAt: now}
 	if err := db.UpsertSession(ctx, session); err != nil {
 		t.Fatalf("UpsertSession(): %v", err)
 	}
@@ -241,11 +241,11 @@ func TestRelatedRecordsAndRestartQueries(t *testing.T) {
 	}
 
 	expires := now.Add(time.Hour)
-	approval := task.Approval{ID: "approval-1", TaskID: "active", Kind: "shell", Status: task.ApprovalPending, RequestPayload: []byte(`{"command":"git status"}`), RequestedAt: now, ExpiresAt: &expires}
+	approval := workmodel.Approval{ID: "approval-1", TaskID: "active", Kind: "shell", Status: workmodel.ApprovalPending, RequestPayload: []byte(`{"command":"git status"}`), RequestedAt: now, ExpiresAt: &expires}
 	if err := db.UpsertApproval(ctx, approval); err != nil {
 		t.Fatalf("UpsertApproval(): %v", err)
 	}
-	attachment := task.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, SHA256: "abc123", CreatedAt: now}
+	attachment := workmodel.Attachment{ID: "attachment-1", TaskID: "active", Kind: "image", Name: "screen.png", MediaType: "image/png", StoragePath: "attachments/screen.png", SizeBytes: 42, SHA256: "abc123", CreatedAt: now}
 	if err := db.SaveAttachment(ctx, attachment); err != nil {
 		t.Fatalf("SaveAttachment(): %v", err)
 	}
@@ -273,7 +273,7 @@ func TestTaskProjectionsPersistOrchestrationResults(t *testing.T) {
 	db := openStore(t, filepath.Join(t.TempDir(), "projections.db"))
 	t.Cleanup(func() { _ = db.Close() })
 	now := time.Date(2026, time.July, 14, 12, 0, 0, 123, time.UTC)
-	seedTask(t, db, newTask("task-1", task.Running, now))
+	seedTask(t, db, newTask("task-1", workmodel.Running, now))
 
 	if err := db.SaveWorkspace(ctx, "task-1", "base-456", "/tmp/worktree-456"); err != nil {
 		t.Fatalf("SaveWorkspace(): %v", err)
@@ -281,10 +281,10 @@ func TestTaskProjectionsPersistOrchestrationResults(t *testing.T) {
 	if err := db.SaveTelegramMessage(ctx, "task-1", 9876); err != nil {
 		t.Fatalf("SaveTelegramMessage(): %v", err)
 	}
-	session := task.Session{
+	session := workmodel.Session{
 		ID:                "session-1",
 		TaskID:            "task-1",
-		Provider:          task.ProviderCodex,
+		Provider:          workmodel.CodexSubscription,
 		ProviderSessionID: "provider-session-1",
 		ProviderThreadID:  "thread-1",
 		Status:            "active",
@@ -347,8 +347,8 @@ func TestTaskProjectionRejectsMissingTaskAndMismatchedSession(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	seedTask(t, db, newTask("task-1", task.Running, now))
-	session := task.Session{ID: "session-1", TaskID: "another-task", Provider: task.ProviderCodex, CreatedAt: now, UpdatedAt: now}
+	seedTask(t, db, newTask("task-1", workmodel.Running, now))
+	session := workmodel.Session{ID: "session-1", TaskID: "another-task", Provider: workmodel.CodexSubscription, CreatedAt: now, UpdatedAt: now}
 	if err := db.SaveProviderSession(ctx, "task-1", session); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("SaveProviderSession(mismatch) = %v, want ErrConflict", err)
 	}
@@ -394,13 +394,13 @@ func TestErrorsFiltersAndCanceledContext(t *testing.T) {
 		t.Fatalf("Task(missing) = %v, want ErrNotFound", err)
 	}
 	now := time.Now().UTC()
-	one := newTask("one", task.Queued, now)
+	one := newTask("one", workmodel.Queued, now)
 	one.RepoProfileID = "repo-a"
-	two := newTask("two", task.Running, now.Add(time.Second))
+	two := newTask("two", workmodel.Running, now.Add(time.Second))
 	two.RepoProfileID = "repo-b"
 	seedTask(t, db, one)
 	seedTask(t, db, two)
-	got, err := db.ListTasks(ctx, store.ListFilter{RepoProfileID: "repo-a", States: []task.State{task.Queued}, Limit: 10})
+	got, err := db.ListTasks(ctx, store.ListFilter{RepoProfileID: "repo-a", States: []workmodel.State{workmodel.Queued}, Limit: 10})
 	if err != nil || len(got) != 1 || got[0].ID != "one" {
 		t.Fatalf("ListTasks() = %#v, %v", got, err)
 	}
@@ -468,21 +468,21 @@ func openStore(t *testing.T, path string) *storesqlite.Store {
 	return db
 }
 
-func newTask(id string, state task.State, created time.Time) task.Task {
-	return task.Task{ID: id, RepoProfileID: "repo-1", Title: "Görev", Prompt: "Do work", State: state, Provider: task.ProviderCodex, TelegramChatID: 42, TelegramMessageID: 7, BaseSHA: "abc123", WorktreePath: "/tmp/worktree", CreatedAt: created, UpdatedAt: created}
+func newTask(id string, state workmodel.State, created time.Time) workmodel.Task {
+	return workmodel.Task{ID: id, RepoProfileID: "repo-1", Title: "Görev", Prompt: "Do work", State: state, Provider: workmodel.CodexSubscription, TelegramChatID: 42, TelegramMessageID: 7, BaseSHA: "abc123", WorktreePath: "/tmp/worktree", CreatedAt: created, UpdatedAt: created}
 }
 
-func newEvent(id, taskID string, eventType task.EventType, providerID string, created time.Time) task.Event {
-	return task.Event{ID: id, TaskID: taskID, Type: eventType, Visibility: task.VisibilityInternal, ProviderEventID: providerID, Payload: []byte(`{"redacted":true}`), CreatedAt: created}
+func newEvent(id, taskID string, eventType workmodel.EventType, providerID string, created time.Time) workmodel.Event {
+	return workmodel.Event{ID: id, TaskID: taskID, Type: eventType, Visibility: workmodel.VisibilityInternal, ProviderEventID: providerID, Payload: []byte(`{"redacted":true}`), CreatedAt: created}
 }
 
 type taskStore interface {
-	CreateTask(context.Context, task.Task, task.Event) error
+	CreateTask(context.Context, workmodel.Task, workmodel.Event) error
 }
 
-func seedTask(t *testing.T, db taskStore, value task.Task) {
+func seedTask(t *testing.T, db taskStore, value workmodel.Task) {
 	t.Helper()
-	event := newEvent("created-"+value.ID, value.ID, task.EventTaskCreated, "", value.CreatedAt)
+	event := newEvent("created-"+value.ID, value.ID, workmodel.EventTaskCreated, "", value.CreatedAt)
 	if err := db.CreateTask(context.Background(), value, event); err != nil {
 		t.Fatalf("seed task %s: %v", value.ID, err)
 	}

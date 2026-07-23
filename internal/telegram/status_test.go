@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestStatusProjectorSendsOnceThenThrottlesCoalescesAndSuppressesUnchanged(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	messenger := &recordingMessenger{}
 	p := NewStatusProjector(messenger, time.Minute, func() time.Time { return now })
-	status := TaskStatus{TaskID: "task-1", ChatID: 100, State: task.Running, CurrentAction: "testing", StartedAt: now.Add(-65 * time.Second), RepoProfile: "sample"}
+	status := TaskStatus{TaskID: "task-1", ChatID: 100, State: workmodel.Running, CurrentAction: "testing", StartedAt: now.Add(-65 * time.Second), RepoProfile: "sample"}
 	if err := p.Project(context.Background(), status); err != nil {
 		t.Fatal(err)
 	}
@@ -41,16 +41,16 @@ func TestStatusProjectorDeliversImportantAndFinalTransitionsImmediately(t *testi
 	now := time.Unix(1_000, 0)
 	messenger := &recordingMessenger{}
 	p := NewStatusProjector(messenger, time.Hour, func() time.Time { return now })
-	base := TaskStatus{TaskID: "task-1", ChatID: 100, State: task.Running, StartedAt: now.Add(-time.Second), RepoProfile: "sample"}
+	base := TaskStatus{TaskID: "task-1", ChatID: 100, State: workmodel.Running, StartedAt: now.Add(-time.Second), RepoProfile: "sample"}
 	if err := p.Project(context.Background(), base); err != nil {
 		t.Fatal(err)
 	}
-	base.State = task.AwaitingApproval
+	base.State = workmodel.AwaitingApproval
 	base.Important = true
 	if err := p.Project(context.Background(), base); err != nil {
 		t.Fatal(err)
 	}
-	base.State = task.Completed
+	base.State = workmodel.Completed
 	base.Important = false
 	base.DeliveryRef = "refs/heads/staging"
 	if err := p.Project(context.Background(), base); err != nil {
@@ -110,13 +110,13 @@ func TestStatusProjectorDoesNotBlockOtherTasksOnSlowNetwork(t *testing.T) {
 	p := NewStatusProjector(messenger, time.Minute, time.Now)
 	doneFirst := make(chan struct{})
 	go func() {
-		_ = p.Project(context.Background(), TaskStatus{TaskID: "slow", ChatID: 1, State: task.Running, RepoProfile: "one"})
+		_ = p.Project(context.Background(), TaskStatus{TaskID: "slow", ChatID: 1, State: workmodel.Running, RepoProfile: "one"})
 		close(doneFirst)
 	}()
 	<-messenger.started
 	doneSecond := make(chan struct{})
 	go func() {
-		_ = p.Project(context.Background(), TaskStatus{TaskID: "fast", ChatID: 2, State: task.Running, RepoProfile: "two"})
+		_ = p.Project(context.Background(), TaskStatus{TaskID: "fast", ChatID: 2, State: workmodel.Running, RepoProfile: "two"})
 		close(doneSecond)
 	}()
 	select {

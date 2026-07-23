@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -7,29 +7,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestReconcileQueuesOnlySafeResumptions(t *testing.T) {
 	fixture := newFixture(t, nil)
-	queued := seededTask("queued", task.Queued)
-	running := seededTask("running", task.Running)
+	queued := seededTask("queued", workmodel.Queued)
+	running := seededTask("running", workmodel.Running)
 	running.WorktreePath, running.BaseSHA, running.ProviderSessionID = "/work/running", "base", "session"
-	unsafe := seededTask("pushing", task.Pushing)
+	unsafe := seededTask("pushing", workmodel.Pushing)
 	unsafe.WorktreePath, unsafe.BaseSHA = "/work/pushing", "base"
-	for _, value := range []task.Task{queued, running, unsafe} {
-		if err := fixture.store.CreateTask(context.Background(), value, task.Event{ID: value.ID + "-created", TaskID: value.ID, Type: task.EventTaskCreated, Visibility: task.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
+	for _, value := range []workmodel.Task{queued, running, unsafe} {
+		if err := fixture.store.CreateTask(context.Background(), value, workmodel.Event{ID: value.ID + "-created", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	fixture.store.sessions["session"] = task.Session{ID: "session", TaskID: running.ID, Provider: running.Provider, ProviderSessionID: "session", Resumable: true}
+	fixture.store.sessions["session"] = workmodel.Session{ID: "session", TaskID: running.ID, Provider: running.Provider, ProviderSessionID: "session", Resumable: true}
 	fixture.workspace.result = Workspace{BaseSHA: "base", Path: "/work/running"}
 	fixture.start(t)
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		value, _ := fixture.store.Task(context.Background(), unsafe.ID)
-		if value.State == task.Paused {
+		if value.State == workmodel.Paused {
 			if value.FailureReason == "" {
 				t.Fatal("paused task has no durable explanation")
 			}
@@ -42,16 +42,16 @@ func TestReconcileQueuesOnlySafeResumptions(t *testing.T) {
 
 func TestReconcilePausesRunningTaskWhenWorkspaceInvariantChanged(t *testing.T) {
 	fixture := newFixture(t, nil)
-	value := seededTask("running", task.Running)
+	value := seededTask("running", workmodel.Running)
 	value.WorktreePath, value.BaseSHA, value.ProviderSessionID = "/work/running", "base", "session"
-	if err := fixture.store.CreateTask(context.Background(), value, task.Event{ID: "created", TaskID: value.ID, Type: task.EventTaskCreated, Visibility: task.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
+	if err := fixture.store.CreateTask(context.Background(), value, workmodel.Event{ID: "created", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
 		t.Fatal(err)
 	}
-	fixture.store.sessions["session"] = task.Session{ID: "session", TaskID: value.ID, ProviderSessionID: "session", Resumable: true}
+	fixture.store.sessions["session"] = workmodel.Session{ID: "session", TaskID: value.ID, ProviderSessionID: "session", Resumable: true}
 	fixture.workspace.result = Workspace{}
 	fixture.start(t)
 	got := fixture.wait(t, value.ID)
-	if got.State != task.Paused || got.FailureReason == "" {
+	if got.State != workmodel.Paused || got.FailureReason == "" {
 		t.Fatalf("task = %#v", got)
 	}
 }
@@ -60,8 +60,8 @@ func TestStartDoesNotDeadlockWhenReconciliationExceedsQueueCapacity(t *testing.T
 	fixture := newFixture(t, nil)
 	fixture.app.config.QueueSize = 1
 	for index := range 8 {
-		value := seededTask(fmt.Sprintf("queued-%d", index), task.Queued)
-		if err := fixture.store.CreateTask(context.Background(), value, task.Event{ID: value.ID + "-created", TaskID: value.ID, Type: task.EventTaskCreated, Visibility: task.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
+		value := seededTask(fmt.Sprintf("queued-%d", index), workmodel.Queued)
+		if err := fixture.store.CreateTask(context.Background(), value, workmodel.Event{ID: value.ID + "-created", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -101,7 +101,7 @@ func TestStartRollsBackWorkersWhenReconciliationFails(t *testing.T) {
 	}
 }
 
-func seededTask(id string, state task.State) task.Task {
+func seededTask(id string, state workmodel.State) workmodel.Task {
 	at := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
-	return task.Task{ID: id, RepoProfileID: "sample", Title: id, Prompt: id, State: state, Provider: task.ProviderCodex, TelegramChatID: 100, CreatedAt: at, UpdatedAt: at}
+	return workmodel.Task{ID: id, RepoProfileID: "sample", Title: id, Prompt: id, State: state, Provider: workmodel.CodexSubscription, TelegramChatID: 100, CreatedAt: at, UpdatedAt: at}
 }

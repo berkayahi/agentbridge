@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -62,7 +62,7 @@ func NewAdapter(cfg AdapterConfig) *Adapter {
 	return &Adapter{spawn: cfg.Spawn, process: cfg.Process, sessions: cfg.Sessions, usage: cfg.Usage, auth: cfg.Auth, scope: cfg.Scope, runners: make(map[string]runnerState)}
 }
 
-func (a *Adapter) Name() task.Provider { return task.ProviderClaude }
+func (a *Adapter) Name() workmodel.Provider { return workmodel.ClaudeSubscription }
 
 func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	return a.start(ctx, request.TaskID, request.Input, "")
@@ -107,7 +107,7 @@ func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.
 		revoke()
 		return provider.Session{}, nil, err
 	}
-	session := provider.Session{ID: id, TaskID: taskID, ExternalID: runner.SessionID(), Provider: task.ProviderClaude}
+	session := provider.Session{ID: id, TaskID: taskID, ExternalID: runner.SessionID(), Provider: workmodel.ClaudeSubscription}
 	if a.sessions != nil {
 		if err := a.sessions.SaveSession(ctx, session); err != nil {
 			_ = runner.Close()

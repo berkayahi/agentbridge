@@ -6,13 +6,13 @@ import (
 	"testing"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestStoreTaskLocatorResolvesExplicitCaptionAndStatusReplyWithinChat(t *testing.T) {
-	lookup := &fakeTaskLookup{tasks: []task.Task{
-		{ID: "task-1", TelegramChatID: 100, TelegramMessageID: 77, State: task.Running},
-		{ID: "task-2", TelegramChatID: 200, TelegramMessageID: 77, State: task.Running},
+	lookup := &fakeTaskLookup{tasks: []workmodel.Task{
+		{ID: "task-1", TelegramChatID: 100, TelegramMessageID: 77, State: workmodel.Running},
+		{ID: "task-2", TelegramChatID: 200, TelegramMessageID: 77, State: workmodel.Running},
 	}}
 	locator := NewStoreTaskLocator(lookup)
 
@@ -31,12 +31,12 @@ func TestStoreTaskLocatorResolvesExplicitCaptionAndStatusReplyWithinChat(t *test
 }
 
 func TestStoreTaskLocatorListsOnlyWorkflowActiveTasksInChat(t *testing.T) {
-	lookup := &fakeTaskLookup{tasks: []task.Task{
-		{ID: "running", TelegramChatID: 100, State: task.Running},
-		{ID: "approval", TelegramChatID: 100, State: task.AwaitingApproval},
-		{ID: "paused", TelegramChatID: 100, State: task.Paused},
-		{ID: "failed", TelegramChatID: 100, State: task.Failed},
-		{ID: "other-chat", TelegramChatID: 200, State: task.Running},
+	lookup := &fakeTaskLookup{tasks: []workmodel.Task{
+		{ID: "running", TelegramChatID: 100, State: workmodel.Running},
+		{ID: "approval", TelegramChatID: 100, State: workmodel.AwaitingApproval},
+		{ID: "paused", TelegramChatID: 100, State: workmodel.Paused},
+		{ID: "failed", TelegramChatID: 100, State: workmodel.Failed},
+		{ID: "other-chat", TelegramChatID: 200, State: workmodel.Running},
 	}}
 	got, err := NewStoreTaskLocator(lookup).ActiveTaskIDs(context.Background(), 100)
 	if err != nil {
@@ -48,7 +48,7 @@ func TestStoreTaskLocatorListsOnlyWorkflowActiveTasksInChat(t *testing.T) {
 }
 
 func TestStoreTaskLocatorNeverCrossesChatBoundaryOrSilentlyFallsBackFromExplicitRef(t *testing.T) {
-	lookup := &fakeTaskLookup{tasks: []task.Task{{ID: "task-1", TelegramChatID: 200, State: task.Running}}}
+	lookup := &fakeTaskLookup{tasks: []workmodel.Task{{ID: "task-1", TelegramChatID: 200, State: workmodel.Running}}}
 	locator := NewStoreTaskLocator(lookup)
 	if _, err := locator.TaskForCaption(context.Background(), 100, "task:task-1"); !errors.Is(err, ErrTaskReference) {
 		t.Fatalf("cross-chat caption error = %v", err)
@@ -67,22 +67,22 @@ func TestStoreTaskLocatorPropagatesCanceledExplicitLookup(t *testing.T) {
 }
 
 type fakeTaskLookup struct {
-	tasks   []task.Task
+	tasks   []workmodel.Task
 	taskErr error
 }
 
-func (f *fakeTaskLookup) Task(_ context.Context, id string) (task.Task, error) {
+func (f *fakeTaskLookup) Task(_ context.Context, id string) (workmodel.Task, error) {
 	if f.taskErr != nil {
-		return task.Task{}, f.taskErr
+		return workmodel.Task{}, f.taskErr
 	}
 	for _, value := range f.tasks {
 		if value.ID == id {
 			return value, nil
 		}
 	}
-	return task.Task{}, store.ErrNotFound
+	return workmodel.Task{}, store.ErrNotFound
 }
 
-func (f *fakeTaskLookup) NonterminalTasks(context.Context) ([]task.Task, error) {
-	return append([]task.Task(nil), f.tasks...), nil
+func (f *fakeTaskLookup) NonterminalTasks(context.Context) ([]workmodel.Task, error) {
+	return append([]workmodel.Task(nil), f.tasks...), nil
 }

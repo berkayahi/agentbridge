@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -65,9 +65,9 @@ func (s *Server) taskEvents(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	visible := make([]task.Event, 0, len(values))
+	visible := make([]workmodel.Event, 0, len(values))
 	for _, value := range values {
-		if value.Visibility == task.VisibilityUser {
+		if value.Visibility == workmodel.VisibilityUser {
 			visible = append(visible, value)
 		}
 	}
@@ -106,7 +106,7 @@ func (s *Server) taskAttachmentContent(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
-	var selected task.Attachment
+	var selected workmodel.Attachment
 	for _, value := range values {
 		if value.ID == c.Params("attachment") {
 			selected = value
@@ -204,15 +204,16 @@ func recoveryProvider(value string) (string, bool) {
 }
 
 type taskSummary struct {
-	ID         string        `json:"id"`
-	Title      string        `json:"title"`
-	Repository string        `json:"repository"`
-	Provider   task.Provider `json:"provider"`
-	State      task.State    `json:"state"`
-	ElapsedMS  int64         `json:"elapsed_ms"`
-	UpdatedAt  time.Time     `json:"updated_at"`
-	Deployment string        `json:"deployment_url,omitempty"`
-	Failure    string        `json:"failure_reason,omitempty"`
+	ID         string             `json:"id"`
+	Title      string             `json:"title"`
+	Repository string             `json:"repository"`
+	Provider   workmodel.Provider `json:"provider"`
+	State      workmodel.State    `json:"state"`
+	Revision   int64              `json:"revision"`
+	ElapsedMS  int64              `json:"elapsed_ms"`
+	UpdatedAt  time.Time          `json:"updated_at"`
+	Deployment string             `json:"deployment_url,omitempty"`
+	Failure    string             `json:"failure_reason,omitempty"`
 }
 
 type taskDetail struct {
@@ -223,13 +224,13 @@ type taskDetail struct {
 	Results   []resultView `json:"results"`
 }
 
-func summarizeTask(value task.Task, now time.Time) taskSummary {
-	return taskSummary{ID: value.ID, Title: value.Title, Repository: value.RepoProfileID, Provider: value.Provider, State: value.State, ElapsedMS: value.Elapsed(now).Milliseconds(), UpdatedAt: value.UpdatedAt, Deployment: value.DeploymentURL, Failure: value.FailureReason}
+func summarizeTask(value workmodel.Task, now time.Time) taskSummary {
+	return taskSummary{ID: value.ID, Title: value.Title, Repository: value.RepoProfileID, Provider: value.Provider, State: value.State, Revision: value.Revision, ElapsedMS: value.Elapsed(now).Milliseconds(), UpdatedAt: value.UpdatedAt, Deployment: value.DeploymentURL, Failure: value.FailureReason}
 }
-func detailTask(value task.Task, events []task.Event, now time.Time) taskDetail {
+func detailTask(value workmodel.Task, events []workmodel.Event, now time.Time) taskDetail {
 	results := make([]resultView, 0)
 	for _, event := range events {
-		if event.Visibility != task.VisibilityUser || !resultEvent(event.Type) || !json.Valid(event.Payload) {
+		if event.Visibility != workmodel.VisibilityUser || !resultEvent(event.Type) || !json.Valid(event.Payload) {
 			continue
 		}
 		results = append(results, resultView{Type: event.Type, Payload: append(json.RawMessage(nil), event.Payload...), CreatedAt: event.CreatedAt})
@@ -238,14 +239,14 @@ func detailTask(value task.Task, events []task.Event, now time.Time) taskDetail 
 }
 
 type resultView struct {
-	Type      task.EventType  `json:"type"`
-	Payload   json.RawMessage `json:"payload"`
-	CreatedAt time.Time       `json:"created_at"`
+	Type      workmodel.EventType `json:"type"`
+	Payload   json.RawMessage     `json:"payload"`
+	CreatedAt time.Time           `json:"created_at"`
 }
 
-func resultEvent(eventType task.EventType) bool {
+func resultEvent(eventType workmodel.EventType) bool {
 	switch eventType {
-	case task.EventDiffSummary, task.EventVerification, task.EventCommitCreated, task.EventPushCompleted, task.EventDeployment:
+	case workmodel.EventDiffSummary, workmodel.EventVerification, workmodel.EventCommitCreated, workmodel.EventPushCompleted, workmodel.EventDeployment:
 		return true
 	default:
 		return false
@@ -278,7 +279,7 @@ func decodeCursor(value string) string {
 	}
 	return string(decoded)
 }
-func afterTaskCursor(values []task.Task, cursor string) []task.Task {
+func afterTaskCursor(values []workmodel.Task, cursor string) []workmodel.Task {
 	id := decodeCursor(cursor)
 	if id == "" {
 		return values
@@ -290,7 +291,7 @@ func afterTaskCursor(values []task.Task, cursor string) []task.Task {
 	}
 	return nil
 }
-func afterEventCursor(values []task.Event, cursor string) []task.Event {
+func afterEventCursor(values []workmodel.Event, cursor string) []workmodel.Event {
 	id := decodeCursor(cursor)
 	if id == "" {
 		return values

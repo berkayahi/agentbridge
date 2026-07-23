@@ -10,17 +10,17 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/events"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/gofiber/fiber/v3"
 )
 
 const tailscaleLoginHeader = "Tailscale-User-Login"
 
 type ReadStore interface {
-	Task(context.Context, string) (task.Task, error)
-	ListTasks(context.Context, store.ListFilter) ([]task.Task, error)
-	Events(context.Context, string) ([]task.Event, error)
-	Attachments(context.Context, string) ([]task.Attachment, error)
+	Task(context.Context, string) (workmodel.Task, error)
+	ListTasks(context.Context, store.ListFilter) ([]workmodel.Task, error)
+	Events(context.Context, string) ([]workmodel.Event, error)
+	Attachments(context.Context, string) ([]workmodel.Attachment, error)
 }
 
 type Health struct {
@@ -47,7 +47,7 @@ type UsageSource interface {
 }
 
 type AttachmentContent interface {
-	Read(context.Context, task.Attachment) ([]byte, error)
+	Read(context.Context, workmodel.Attachment) ([]byte, error)
 }
 
 type RecoveryView struct {

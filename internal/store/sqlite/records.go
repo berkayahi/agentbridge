@@ -7,10 +7,10 @@ import (
 	"fmt"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
-func (s *Store) SaveAttachment(ctx context.Context, value task.Attachment) error {
+func (s *Store) SaveAttachment(ctx context.Context, value workmodel.Attachment) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO attachments (id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -22,7 +22,7 @@ func (s *Store) SaveAttachment(ctx context.Context, value task.Attachment) error
 	return nil
 }
 
-func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachment, error) {
+func (s *Store) Attachments(ctx context.Context, taskID string) ([]workmodel.Attachment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at
 		FROM attachments WHERE task_id = ? ORDER BY created_at, id`, taskID)
@@ -30,9 +30,9 @@ func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachme
 		return nil, fmt.Errorf("query attachments: %w", err)
 	}
 	defer rows.Close()
-	var values []task.Attachment
+	var values []workmodel.Attachment
 	for rows.Next() {
-		var value task.Attachment
+		var value workmodel.Attachment
 		var created string
 		if err := rows.Scan(&value.ID, &value.TaskID, &value.Kind, &value.Name, &value.MediaType, &value.StoragePath, &value.SizeBytes, &value.SHA256, &created); err != nil {
 			return nil, fmt.Errorf("scan attachment: %w", err)
@@ -46,14 +46,14 @@ func (s *Store) Attachments(ctx context.Context, taskID string) ([]task.Attachme
 	return values, rows.Err()
 }
 
-func (s *Store) UpsertSession(ctx context.Context, value task.Session) error {
+func (s *Store) UpsertSession(ctx context.Context, value workmodel.Session) error {
 	if err := upsertSession(ctx, s.db, value); err != nil {
 		return fmt.Errorf("upsert session: %w", err)
 	}
 	return nil
 }
 
-func upsertSession(ctx context.Context, db execer, value task.Session) error {
+func upsertSession(ctx context.Context, db execer, value workmodel.Session) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, task_id, provider, provider_session_id, provider_thread_id,
@@ -71,7 +71,7 @@ func upsertSession(ctx context.Context, db execer, value task.Session) error {
 	return err
 }
 
-func (s *Store) ResumableSessions(ctx context.Context) ([]task.Session, error) {
+func (s *Store) ResumableSessions(ctx context.Context) ([]workmodel.Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, provider, provider_session_id, provider_thread_id,
 		       status, resumable, created_at, updated_at
@@ -80,7 +80,7 @@ func (s *Store) ResumableSessions(ctx context.Context) ([]task.Session, error) {
 		return nil, fmt.Errorf("query resumable sessions: %w", err)
 	}
 	defer rows.Close()
-	var values []task.Session
+	var values []workmodel.Session
 	for rows.Next() {
 		value, err := scanSession(rows)
 		if err != nil {
@@ -91,26 +91,26 @@ func (s *Store) ResumableSessions(ctx context.Context) ([]task.Session, error) {
 	return values, rows.Err()
 }
 
-func scanSession(row scanner) (task.Session, error) {
-	var value task.Session
+func scanSession(row scanner) (workmodel.Session, error) {
+	var value workmodel.Session
 	var created, updated string
 	if err := row.Scan(
 		&value.ID, &value.TaskID, &value.Provider, &value.ProviderSessionID, &value.ProviderThreadID,
 		&value.Status, &value.Resumable, &created, &updated,
 	); err != nil {
-		return task.Session{}, fmt.Errorf("scan session: %w", err)
+		return workmodel.Session{}, fmt.Errorf("scan session: %w", err)
 	}
 	var err error
 	if value.CreatedAt, err = parseTimestamp(created); err != nil {
-		return task.Session{}, err
+		return workmodel.Session{}, err
 	}
 	if value.UpdatedAt, err = parseTimestamp(updated); err != nil {
-		return task.Session{}, err
+		return workmodel.Session{}, err
 	}
 	return value, nil
 }
 
-func (s *Store) UpsertApproval(ctx context.Context, value task.Approval) error {
+func (s *Store) UpsertApproval(ctx context.Context, value workmodel.Approval) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO approvals (
 			id, task_id, kind, status, request_payload, decision_payload,
@@ -130,16 +130,16 @@ func (s *Store) UpsertApproval(ctx context.Context, value task.Approval) error {
 	return nil
 }
 
-func (s *Store) PendingApprovals(ctx context.Context) ([]task.Approval, error) {
+func (s *Store) PendingApprovals(ctx context.Context) ([]workmodel.Approval, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, kind, status, request_payload, decision_payload,
 		       requested_at, expires_at, resolved_at
-		FROM approvals WHERE status = ? ORDER BY requested_at, id`, task.ApprovalPending)
+		FROM approvals WHERE status = ? ORDER BY requested_at, id`, workmodel.ApprovalPending)
 	if err != nil {
 		return nil, fmt.Errorf("query pending approvals: %w", err)
 	}
 	defer rows.Close()
-	var values []task.Approval
+	var values []workmodel.Approval
 	for rows.Next() {
 		value, err := scanApproval(rows)
 		if err != nil {
@@ -150,8 +150,8 @@ func (s *Store) PendingApprovals(ctx context.Context) ([]task.Approval, error) {
 	return values, rows.Err()
 }
 
-func scanApproval(row scanner) (task.Approval, error) {
-	var value task.Approval
+func scanApproval(row scanner) (workmodel.Approval, error) {
+	var value workmodel.Approval
 	var request []byte
 	var decision []byte
 	var requested string
@@ -160,19 +160,19 @@ func scanApproval(row scanner) (task.Approval, error) {
 		&value.ID, &value.TaskID, &value.Kind, &value.Status, &request, &decision,
 		&requested, &expires, &resolved,
 	); err != nil {
-		return task.Approval{}, fmt.Errorf("scan approval: %w", err)
+		return workmodel.Approval{}, fmt.Errorf("scan approval: %w", err)
 	}
 	value.RequestPayload = request
 	value.DecisionPayload = decision
 	var err error
 	if value.RequestedAt, err = parseTimestamp(requested); err != nil {
-		return task.Approval{}, err
+		return workmodel.Approval{}, err
 	}
 	if value.ExpiresAt, err = parseNullableTimestamp(expires); err != nil {
-		return task.Approval{}, err
+		return workmodel.Approval{}, err
 	}
 	if value.ResolvedAt, err = parseNullableTimestamp(resolved); err != nil {
-		return task.Approval{}, err
+		return workmodel.Approval{}, err
 	}
 	return value, nil
 }
@@ -184,7 +184,7 @@ func nullableBytes(value []byte) any {
 	return value
 }
 
-func (s *Store) UpsertAuthIncident(ctx context.Context, value task.AuthIncident) error {
+func (s *Store) UpsertAuthIncident(ctx context.Context, value workmodel.AuthIncident) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO auth_incidents (id, task_id, provider, status, redacted_detail, detected_at, resolved_at)
 		VALUES (?, NULL, ?, ?, ?, ?, ?)
@@ -200,8 +200,8 @@ func (s *Store) UpsertAuthIncident(ctx context.Context, value task.AuthIncident)
 	return nil
 }
 
-func (s *Store) OpenAuthIncident(ctx context.Context, provider task.Provider) (task.AuthIncident, error) {
-	var value task.AuthIncident
+func (s *Store) OpenAuthIncident(ctx context.Context, provider workmodel.Provider) (workmodel.AuthIncident, error) {
+	var value workmodel.AuthIncident
 	var detail []byte
 	var detected string
 	var resolved sql.NullString
@@ -212,17 +212,17 @@ func (s *Store) OpenAuthIncident(ctx context.Context, provider task.Provider) (t
 		ORDER BY detected_at DESC, id DESC
 		LIMIT 1`, provider).Scan(&value.ID, &value.Provider, &value.Status, &detail, &detected, &resolved)
 	if errors.Is(err, sql.ErrNoRows) {
-		return task.AuthIncident{}, store.ErrNotFound
+		return workmodel.AuthIncident{}, store.ErrNotFound
 	}
 	if err != nil {
-		return task.AuthIncident{}, fmt.Errorf("load open auth incident: %w", err)
+		return workmodel.AuthIncident{}, fmt.Errorf("load open auth incident: %w", err)
 	}
 	value.Detail = append([]byte(nil), detail...)
 	if value.DetectedAt, err = parseTimestamp(detected); err != nil {
-		return task.AuthIncident{}, err
+		return workmodel.AuthIncident{}, err
 	}
 	if value.ResolvedAt, err = parseNullableTimestamp(resolved); err != nil {
-		return task.AuthIncident{}, err
+		return workmodel.AuthIncident{}, err
 	}
 	return value, nil
 }

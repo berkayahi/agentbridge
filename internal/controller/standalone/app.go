@@ -1,5 +1,5 @@
-// Package app composes AgentBridge's durable task workflow.
-package app
+// Package standalone adapts local presentation transports to the durable workflow.
+package standalone
 
 import (
 	"context"
@@ -21,8 +21,8 @@ import (
 	"github.com/berkayahi/agentbridge/internal/scheduler"
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -42,7 +42,7 @@ type Config struct {
 	LeaseTTL          time.Duration
 	LeaseHeartbeat    time.Duration
 	NewID             func() string
-	Models            map[task.Provider]string
+	Models            map[workmodel.Provider]string
 	DeploymentURLs    map[string]string
 }
 
@@ -50,7 +50,7 @@ type Store interface {
 	store.Store
 	SaveWorkspace(context.Context, string, string, string) error
 	SaveTelegramMessage(context.Context, string, int64) error
-	SaveProviderSession(context.Context, string, task.Session) error
+	SaveProviderSession(context.Context, string, workmodel.Session) error
 	SaveDelivery(context.Context, string, string, string, string) error
 	SaveFailure(context.Context, string, string) error
 	Close() error
@@ -64,18 +64,18 @@ type WorkspaceInspection struct {
 }
 type WorkspacePort interface {
 	Prepare(context.Context, string, string) (Workspace, error)
-	Inspect(context.Context, task.Task) (WorkspaceInspection, error)
+	Inspect(context.Context, workmodel.Task) (WorkspaceInspection, error)
 }
 type DeliveryPort interface {
-	Changed(context.Context, task.Task, Workspace) (bool, error)
-	Verify(context.Context, task.Task, Workspace) error
-	Commit(context.Context, task.Task, Workspace) (string, error)
-	Push(context.Context, task.Task, Workspace, string) (string, error)
+	Changed(context.Context, workmodel.Task, Workspace) (bool, error)
+	Verify(context.Context, workmodel.Task, Workspace) error
+	Commit(context.Context, workmodel.Task, Workspace) (string, error)
+	Push(context.Context, workmodel.Task, Workspace, string) (string, error)
 }
 type Authorizer interface{ Authorize(telegram.Update) error }
 type AttachmentSaver interface {
-	Save(context.Context, attachment.IncomingFile) (task.Attachment, error)
-	SaveForTask(context.Context, string, attachment.IncomingFile) (task.Attachment, error)
+	Save(context.Context, attachment.IncomingFile) (workmodel.Attachment, error)
+	SaveForTask(context.Context, string, attachment.IncomingFile) (workmodel.Attachment, error)
 }
 type UpdateTransport interface {
 	Run(context.Context)
@@ -89,14 +89,14 @@ type HTTPServer interface {
 type Dependencies struct {
 	Store       Store
 	Messenger   telegram.Messenger
-	Providers   map[task.Provider]provider.Provider
+	Providers   map[workmodel.Provider]provider.Provider
 	Workspace   WorkspacePort
 	Delivery    DeliveryPort
 	Authorizer  Authorizer
 	Signer      *telegram.CallbackSigner
 	Attachments AttachmentSaver
 	Approvals   *approval.Broker
-	AuthFailure func(context.Context, task.Provider, error)
+	AuthFailure func(context.Context, workmodel.Provider, error)
 	// BeforeStoreClose stops every component that can still write to Store.
 	// It runs after task workers stop and before the live bus and Store close.
 	BeforeStoreClose func(context.Context) error
@@ -119,7 +119,7 @@ type queuedTask struct {
 	input  string
 }
 type pendingPrompt struct {
-	provider task.Provider
+	provider workmodel.Provider
 	prompt   string
 	expires  time.Time
 }
@@ -380,7 +380,7 @@ func (a *App) renameTask(ctx context.Context, id, title string, chatID int64) er
 	if !ok {
 		return errors.New("app: task rename is unavailable")
 	}
-	title = task.Title(title, task.DefaultTitleRunes)
+	title = workmodel.Title(title, workmodel.DefaultTitleRunes)
 	if err := renamer.RenameTask(ctx, id, title); err != nil {
 		return err
 	}
@@ -410,16 +410,16 @@ func (a *App) createTask(ctx context.Context, message *telegram.IncomingMessage,
 	return id, nil
 }
 
-func (a *App) createTaskRecord(ctx context.Context, providerName task.Provider, prompt string, chatID int64, project bool) (task.Task, error) {
+func (a *App) createTaskRecord(ctx context.Context, providerName workmodel.Provider, prompt string, chatID int64, project bool) (workmodel.Task, error) {
 	if _, ok := a.deps.Providers[providerName]; !ok {
-		return task.Task{}, ErrUnknownProvider
+		return workmodel.Task{}, ErrUnknownProvider
 	}
 	at := a.deps.Clock().UTC()
 	id := a.nextID()
-	value := task.Task{ID: id, RepoProfileID: a.config.DefaultRepository, Title: task.Title(prompt, task.DefaultTitleRunes), Prompt: prompt, State: task.Queued, Provider: providerName, TelegramChatID: chatID, CreatedAt: at, UpdatedAt: at}
-	event := a.event(id, task.EventTaskCreated, task.VisibilityUser, map[string]any{"title": value.Title})
+	value := workmodel.Task{ID: id, RepoProfileID: a.config.DefaultRepository, Title: workmodel.Title(prompt, workmodel.DefaultTitleRunes), Prompt: prompt, State: workmodel.Queued, Provider: providerName, TelegramChatID: chatID, CreatedAt: at, UpdatedAt: at}
+	event := a.event(id, workmodel.EventTaskCreated, workmodel.VisibilityUser, map[string]any{"title": value.Title})
 	if err := a.deps.Store.CreateTask(ctx, value, event); err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	if err := a.publish(ctx, event); err != nil {
 		a.deps.Logger.Warn("could not publish task event", "task", id)
@@ -427,7 +427,7 @@ func (a *App) createTaskRecord(ctx context.Context, providerName task.Provider, 
 	if project {
 		if err := a.project(ctx, value, "queued", true); err != nil {
 			a.pause(value, "initial status delivery failed; manual retry required")
-			return task.Task{}, err
+			return workmodel.Task{}, err
 		}
 	}
 	return value, nil
@@ -438,9 +438,9 @@ func (a *App) chooseSession(ctx context.Context, message *telegram.IncomingMessa
 	if err != nil {
 		return "", err
 	}
-	options := make([]task.Task, 0, 8)
+	options := make([]workmodel.Task, 0, 8)
 	for _, value := range tasks {
-		if value.Provider == command.Provider && value.TelegramChatID == message.Chat.ID && value.ProviderSessionID != "" && value.State != task.Failed && value.State != task.Canceled {
+		if value.Provider == command.Provider && value.TelegramChatID == message.Chat.ID && value.ProviderSessionID != "" && value.State != workmodel.Failed && value.State != workmodel.Canceled {
 			options = append(options, value)
 			if len(options) == 8 {
 				break
@@ -556,14 +556,14 @@ func (a *App) execute(job queuedTask) {
 		a.resume(ctx, value, cancel, job.input)
 		return
 	}
-	if value.State == task.Verifying {
+	if value.State == workmodel.Verifying {
 		a.deliver(ctx, value, Workspace{BaseSHA: value.BaseSHA, Path: value.WorktreePath})
 		return
 	}
-	if value.State != task.Queued && value.State != task.Preparing {
+	if value.State != workmodel.Queued && value.State != workmodel.Preparing {
 		return
 	}
-	if value.State == task.Queued && !a.transition(ctx, &value, task.Preparing, "preparing isolated worktree") {
+	if value.State == workmodel.Queued && !a.transition(ctx, &value, workmodel.Preparing, "preparing isolated worktree") {
 		return
 	}
 	workspace, err := a.deps.Workspace.Prepare(ctx, value.RepoProfileID, value.ID)
@@ -576,7 +576,7 @@ func (a *App) execute(job queuedTask) {
 		return
 	}
 	value.BaseSHA, value.WorktreePath = workspace.BaseSHA, workspace.Path
-	if !a.transition(ctx, &value, task.Running, "provider session started") {
+	if !a.transition(ctx, &value, workmodel.Running, "provider session started") {
 		return
 	}
 	p := a.deps.Providers[value.Provider]
@@ -638,7 +638,7 @@ func (a *App) requeueAfter(id string, resume bool) {
 	}()
 }
 
-func (a *App) resume(ctx context.Context, value task.Task, cancel context.CancelCauseFunc, input string) {
+func (a *App) resume(ctx context.Context, value workmodel.Task, cancel context.CancelCauseFunc, input string) {
 	p := a.deps.Providers[value.Provider]
 	taskID, err := provider.NewID(value.ID)
 	if err != nil {
@@ -678,7 +678,7 @@ func (a *App) resume(ctx context.Context, value task.Task, cancel context.Cancel
 	a.consume(ctx, value, Workspace{BaseSHA: value.BaseSHA, Path: value.WorktreePath}, stream)
 }
 
-func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace, stream <-chan provider.Event) {
+func (a *App) consume(ctx context.Context, value workmodel.Task, workspace Workspace, stream <-chan provider.Event) {
 	var assistant strings.Builder
 	for {
 		select {
@@ -690,7 +690,7 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 				a.executionFailure(ctx, value, context.Cause(ctx))
 				return
 			}
-			if current, err := a.deps.Store.Task(context.WithoutCancel(ctx), value.ID); err == nil && current.State != task.Canceled {
+			if current, err := a.deps.Store.Task(context.WithoutCancel(ctx), value.ID); err == nil && current.State != workmodel.Canceled {
 				a.pause(current, "daemon stopped while provider was active")
 			}
 			return
@@ -713,7 +713,7 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 				return
 			case provider.EventAuthRequired:
 				a.appendProviderEvent(ctx, value.ID, observed)
-				a.transition(ctx, &value, task.AwaitingAuth, "subscription authentication requires recovery")
+				a.transition(ctx, &value, workmodel.AwaitingAuth, "subscription authentication requires recovery")
 				if a.deps.AuthFailure != nil {
 					a.deps.AuthFailure(ctx, value.Provider, errors.New("subscription login required"))
 				}
@@ -747,7 +747,7 @@ func (a *App) consume(ctx context.Context, value task.Task, workspace Workspace,
 	}
 }
 
-func (a *App) providerInput(ctx context.Context, value task.Task, workspacePath string) (provider.Input, error) {
+func (a *App) providerInput(ctx context.Context, value workmodel.Task, workspacePath string) (provider.Input, error) {
 	records, err := a.deps.Store.Attachments(ctx, value.ID)
 	if err != nil {
 		return provider.Input{}, err
@@ -765,7 +765,7 @@ func (a *App) providerInput(ctx context.Context, value task.Task, workspacePath 
 	return input, input.Validate()
 }
 
-func agentContext(value task.Task, workspacePath, prompt string) string {
+func agentContext(value workmodel.Task, workspacePath, prompt string) string {
 	return fmt.Sprintf(`AgentBridge operating context:
 - You are the %s coding agent operating inside repository profile %q.
 - Current isolated workspace: %s
@@ -778,7 +778,7 @@ Operator task:
 %s`, value.Provider, value.RepoProfileID, workspacePath, prompt)
 }
 
-func (a *App) requestApproval(ctx context.Context, value *task.Task, observed provider.Event) error {
+func (a *App) requestApproval(ctx context.Context, value *workmodel.Task, observed provider.Event) error {
 	id := observed.RequestID.String()
 	if id == "" {
 		id = a.nextID()
@@ -787,25 +787,25 @@ func (a *App) requestApproval(ctx context.Context, value *task.Task, observed pr
 	expires := now.Add(10 * time.Minute)
 	summary := a.deps.Redactor.RedactString(observed.Message)
 	payload, _ := json.Marshal(map[string]string{"summary": summary})
-	record := task.Approval{ID: id, TaskID: value.ID, Kind: "provider", Status: task.ApprovalPending, RequestPayload: payload, RequestedAt: now, ExpiresAt: &expires}
+	record := workmodel.Approval{ID: id, TaskID: value.ID, Kind: "provider", Status: workmodel.ApprovalPending, RequestPayload: payload, RequestedAt: now, ExpiresAt: &expires}
 	if err := a.deps.Store.UpsertApproval(ctx, record); err != nil {
 		return err
 	}
-	if !a.transition(ctx, value, task.AwaitingApproval, "operator approval required") {
-		return errors.Join(store.ErrInvalidTransition, a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
+	if !a.transition(ctx, value, workmodel.AwaitingApproval, "operator approval required") {
+		return errors.Join(store.ErrInvalidTransition, a.finishApproval(ctx, &record, workmodel.ApprovalRejected, false, "publication_failed"))
 	}
 	if value.TelegramChatID == 0 {
 		return nil
 	}
 	if a.deps.Signer == nil {
-		return errors.Join(errors.New("app: approval signer is unavailable"), a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
+		return errors.Join(errors.New("app: approval signer is unavailable"), a.finishApproval(ctx, &record, workmodel.ApprovalRejected, false, "publication_failed"))
 	}
 	keyboard, err := telegram.ApprovalKeyboard(a.deps.Signer, value.ID, id, 10*time.Minute)
 	if err != nil {
-		return errors.Join(err, a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
+		return errors.Join(err, a.finishApproval(ctx, &record, workmodel.ApprovalRejected, false, "publication_failed"))
 	}
 	if _, err := a.deps.Messenger.Send(ctx, telegram.Message{ChatID: value.TelegramChatID, Text: "Approval required: " + summary, InlineKeyboard: keyboard}); err != nil {
-		return errors.Join(err, a.finishApproval(ctx, &record, task.ApprovalRejected, false, "publication_failed"))
+		return errors.Join(err, a.finishApproval(ctx, &record, workmodel.ApprovalRejected, false, "publication_failed"))
 	}
 	return nil
 }
@@ -826,7 +826,7 @@ func (a *App) resolveApproval(ctx context.Context, update telegram.Update, comma
 	return a.deps.Messenger.AnswerCallback(ctx, command.CallbackID, "Decision recorded")
 }
 
-func (a *App) finishApproval(ctx context.Context, record *task.Approval, status task.ApprovalStatus, approved bool, reason string) error {
+func (a *App) finishApproval(ctx context.Context, record *workmodel.Approval, status workmodel.ApprovalStatus, approved bool, reason string) error {
 	resolvedAt := a.deps.Clock().UTC()
 	payload := map[string]any{"approved": approved}
 	if reason != "" {
@@ -838,7 +838,7 @@ func (a *App) finishApproval(ctx context.Context, record *task.Approval, status 
 	return a.deps.Store.UpsertApproval(ctx, *record)
 }
 
-func (a *App) expireApproval(ctx context.Context, value task.Task, observed provider.Event) error {
+func (a *App) expireApproval(ctx context.Context, value workmodel.Task, observed provider.Event) error {
 	pending, err := a.deps.Store.PendingApprovals(ctx)
 	if err != nil {
 		return err
@@ -848,10 +848,10 @@ func (a *App) expireApproval(ctx context.Context, value task.Task, observed prov
 		if record.ID != observed.RequestID.String() || record.TaskID != value.ID {
 			continue
 		}
-		if err := a.finishApproval(ctx, record, task.ApprovalExpired, false, "expired"); err != nil {
+		if err := a.finishApproval(ctx, record, workmodel.ApprovalExpired, false, "expired"); err != nil {
 			return err
 		}
-		event := a.event(value.ID, task.EventApprovalResolved, task.VisibilityUser, map[string]any{"approved": false, "expired": true})
+		event := a.event(value.ID, workmodel.EventApprovalResolved, workmodel.VisibilityUser, map[string]any{"approved": false, "expired": true})
 		_ = a.deps.Store.AppendEvent(ctx, event)
 		_ = a.publish(ctx, event)
 		a.fail(value, errors.New("provider approval expired"))
@@ -860,27 +860,27 @@ func (a *App) expireApproval(ctx context.Context, value task.Task, observed prov
 	return nil
 }
 
-func (a *App) deliver(ctx context.Context, value task.Task, workspace Workspace) {
+func (a *App) deliver(ctx context.Context, value workmodel.Task, workspace Workspace) {
 	changed, err := a.deps.Delivery.Changed(ctx, value, workspace)
 	if err != nil {
 		a.executionFailure(ctx, value, err)
 		return
 	}
 	if !changed {
-		a.transition(ctx, &value, task.Completed, "provider completed without repository changes")
+		a.transition(ctx, &value, workmodel.Completed, "provider completed without repository changes")
 		return
 	}
-	if value.State == task.Running && !a.transition(ctx, &value, task.Verifying, "running configured verification") {
+	if value.State == workmodel.Running && !a.transition(ctx, &value, workmodel.Verifying, "running configured verification") {
 		return
 	}
 	if err := a.deps.Delivery.Verify(ctx, value, workspace); err != nil {
 		a.executionFailure(ctx, value, err)
 		return
 	}
-	verification := a.event(value.ID, task.EventVerification, task.VisibilityUser, map[string]any{"status": "passed"})
+	verification := a.event(value.ID, workmodel.EventVerification, workmodel.VisibilityUser, map[string]any{"status": "passed"})
 	_ = a.deps.Store.AppendEvent(ctx, verification)
 	_ = a.publish(ctx, verification)
-	if !a.transition(ctx, &value, task.Committing, "creating verified commit") {
+	if !a.transition(ctx, &value, workmodel.Committing, "creating verified commit") {
 		return
 	}
 	commit, err := a.deps.Delivery.Commit(ctx, value, workspace)
@@ -888,10 +888,10 @@ func (a *App) deliver(ctx context.Context, value task.Task, workspace Workspace)
 		a.executionFailure(ctx, value, err)
 		return
 	}
-	commitEvent := a.event(value.ID, task.EventCommitCreated, task.VisibilityUser, map[string]any{"commit": commit})
+	commitEvent := a.event(value.ID, workmodel.EventCommitCreated, workmodel.VisibilityUser, map[string]any{"commit": commit})
 	_ = a.deps.Store.AppendEvent(ctx, commitEvent)
 	_ = a.publish(ctx, commitEvent)
-	if !a.transition(ctx, &value, task.Pushing, "pushing exact configured ref") {
+	if !a.transition(ctx, &value, workmodel.Pushing, "pushing exact configured ref") {
 		return
 	}
 	ref, err := a.deps.Delivery.Push(ctx, value, workspace, commit)
@@ -903,15 +903,15 @@ func (a *App) deliver(ctx context.Context, value task.Task, workspace Workspace)
 		a.executionFailure(ctx, value, err)
 		return
 	}
-	push := a.event(value.ID, task.EventPushCompleted, task.VisibilityUser, map[string]any{"ref": ref})
+	push := a.event(value.ID, workmodel.EventPushCompleted, workmodel.VisibilityUser, map[string]any{"ref": ref})
 	_ = a.deps.Store.AppendEvent(ctx, push)
 	_ = a.publish(ctx, push)
-	a.transition(ctx, &value, task.Completed, "delivery completed")
+	a.transition(ctx, &value, workmodel.Completed, "delivery completed")
 }
 
-func (a *App) persistSession(ctx context.Context, value task.Task, session provider.Session) error {
+func (a *App) persistSession(ctx context.Context, value workmodel.Task, session provider.Session) error {
 	at := a.deps.Clock().UTC()
-	record := task.Session{ID: session.ID.String(), TaskID: value.ID, Provider: value.Provider, ProviderSessionID: session.ExternalID, ProviderThreadID: session.ThreadID, Status: "running", Resumable: true, CreatedAt: at, UpdatedAt: at}
+	record := workmodel.Session{ID: session.ID.String(), TaskID: value.ID, Provider: value.Provider, ProviderSessionID: session.ExternalID, ProviderThreadID: session.ThreadID, Status: "running", Resumable: true, CreatedAt: at, UpdatedAt: at}
 	if record.ProviderSessionID == "" {
 		record.ProviderSessionID = session.ID.String()
 	}
@@ -919,14 +919,14 @@ func (a *App) persistSession(ctx context.Context, value task.Task, session provi
 }
 
 func (a *App) appendProviderEvent(ctx context.Context, id string, observed provider.Event) {
-	typeOfEvent := task.EventProviderMessage
+	typeOfEvent := workmodel.EventProviderMessage
 	if observed.Type == provider.EventApprovalRequired {
-		typeOfEvent = task.EventApprovalRequested
+		typeOfEvent = workmodel.EventApprovalRequested
 	}
 	if observed.Type == provider.EventAuthRequired {
-		typeOfEvent = task.EventAuthRequired
+		typeOfEvent = workmodel.EventAuthRequired
 	}
-	event := a.event(id, typeOfEvent, task.VisibilityUser, map[string]any{
+	event := a.event(id, typeOfEvent, workmodel.VisibilityUser, map[string]any{
 		"type": observed.Type, "message": a.deps.Redactor.RedactString(observed.Message),
 		"tool": a.deps.Redactor.RedactString(observed.Tool), "path": a.deps.Redactor.RedactString(observed.Path),
 	})
@@ -936,8 +936,8 @@ func (a *App) appendProviderEvent(ctx context.Context, id string, observed provi
 	}
 }
 
-func (a *App) transition(ctx context.Context, value *task.Task, state task.State, action string) bool {
-	event := a.event(value.ID, task.EventStateTransitioned, task.VisibilityUser, map[string]any{"state": state, "action": action})
+func (a *App) transition(ctx context.Context, value *workmodel.Task, state workmodel.State, action string) bool {
+	event := a.event(value.ID, workmodel.EventStateTransitioned, workmodel.VisibilityUser, map[string]any{"state": state, "action": action})
 	if err := a.deps.Store.Transition(ctx, value.ID, state, event); err != nil {
 		a.deps.Logger.Error("task transition failed", "task", value.ID, "state", state)
 		return false
@@ -948,7 +948,7 @@ func (a *App) transition(ctx context.Context, value *task.Task, state task.State
 	return true
 }
 
-func (a *App) fail(value task.Task, cause error) {
+func (a *App) fail(value workmodel.Task, cause error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(a.ctx), 5*time.Second)
 	defer cancel()
 	reason := "task execution failed; inspect redacted events"
@@ -957,11 +957,11 @@ func (a *App) fail(value task.Task, cause error) {
 	if err == nil {
 		value = current
 	}
-	event := a.event(value.ID, task.EventFailure, task.VisibilityUser, map[string]any{"reason": reason})
-	if task.CanTransition(value.State, task.Failed) {
-		_ = a.deps.Store.Transition(ctx, value.ID, task.Failed, event)
+	event := a.event(value.ID, workmodel.EventFailure, workmodel.VisibilityUser, map[string]any{"reason": reason})
+	if workmodel.CanTransition(value.State, workmodel.Failed) {
+		_ = a.deps.Store.Transition(ctx, value.ID, workmodel.Failed, event)
 		_ = a.publish(ctx, event)
-		value.State = task.Failed
+		value.State = workmodel.Failed
 		_ = a.project(ctx, value, reason, true)
 	}
 	notification := fmt.Sprintf("Task failed: %s\nTitle: %s\nReason: %s\nUse /logs %s for redacted details.", value.ID, value.Title, reason, value.ID)
@@ -971,7 +971,7 @@ func (a *App) fail(value task.Task, cause error) {
 	a.deps.Logger.Error("task failed", "task", value.ID, "error_type", fmt.Sprintf("%T", cause))
 }
 
-func (a *App) executionFailure(ctx context.Context, value task.Task, cause error) {
+func (a *App) executionFailure(ctx context.Context, value workmodel.Task, cause error) {
 	switch {
 	case errors.Is(context.Cause(ctx), errAuthSuspended):
 		return
@@ -983,18 +983,18 @@ func (a *App) executionFailure(ctx context.Context, value task.Task, cause error
 	}
 }
 
-func (a *App) pause(value task.Task, reason string) {
+func (a *App) pause(value workmodel.Task, reason string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(a.ctx), 5*time.Second)
 	defer cancel()
 	_ = a.deps.Store.SaveFailure(ctx, value.ID, reason)
 	if current, err := a.deps.Store.Task(ctx, value.ID); err == nil {
 		value = current
 	}
-	event := a.event(value.ID, task.EventStateTransitioned, task.VisibilityUser, map[string]any{"state": task.Paused, "reason": reason})
-	if task.CanTransition(value.State, task.Paused) {
-		_ = a.deps.Store.Transition(ctx, value.ID, task.Paused, event)
+	event := a.event(value.ID, workmodel.EventStateTransitioned, workmodel.VisibilityUser, map[string]any{"state": workmodel.Paused, "reason": reason})
+	if workmodel.CanTransition(value.State, workmodel.Paused) {
+		_ = a.deps.Store.Transition(ctx, value.ID, workmodel.Paused, event)
 		_ = a.publish(ctx, event)
-		value.State = task.Paused
+		value.State = workmodel.Paused
 		_ = a.project(ctx, value, reason, true)
 	}
 }
@@ -1004,8 +1004,8 @@ func (a *App) cancelTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	event := a.event(id, task.EventStateTransitioned, task.VisibilityUser, map[string]any{"state": task.Canceled, "action": "canceled by operator"})
-	if err := a.deps.Store.Transition(ctx, id, task.Canceled, event); err != nil {
+	event := a.event(id, workmodel.EventStateTransitioned, workmodel.VisibilityUser, map[string]any{"state": workmodel.Canceled, "action": "canceled by operator"})
+	if err := a.deps.Store.Transition(ctx, id, workmodel.Canceled, event); err != nil {
 		return err
 	}
 	// Persist cancellation before interrupting the provider. Interrupt may close
@@ -1016,12 +1016,12 @@ func (a *App) cancelTask(ctx context.Context, id string) error {
 		active.cancel(context.Canceled)
 		_ = active.provider.Interrupt(ctx, active.session)
 	}
-	value.State = task.Canceled
+	value.State = workmodel.Canceled
 	_ = a.publish(ctx, event)
 	return a.project(ctx, value, "canceled by operator", true)
 }
 
-func (a *App) sendUsage(ctx context.Context, chatID int64, selected task.Provider) error {
+func (a *App) sendUsage(ctx context.Context, chatID int64, selected workmodel.Provider) error {
 	sent := false
 	for name, value := range a.deps.Providers {
 		if selected.Valid() && selected != name {
@@ -1051,7 +1051,7 @@ func (a *App) sendUsage(ctx context.Context, chatID int64, selected task.Provide
 	return nil
 }
 
-func renderUsage(name task.Provider, usage provider.Usage) string {
+func renderUsage(name workmodel.Provider, usage provider.Usage) string {
 	var text strings.Builder
 	fmt.Fprintf(&text, "%s usage\n", name)
 	if usage.ObservedAt.IsZero() {
@@ -1076,7 +1076,7 @@ func renderUsage(name task.Provider, usage provider.Usage) string {
 	return strings.TrimSpace(text.String())
 }
 
-func (a *App) project(ctx context.Context, value task.Task, action string, important bool) error {
+func (a *App) project(ctx context.Context, value workmodel.Task, action string, important bool) error {
 	if value.TelegramChatID == 0 {
 		return nil
 	}
@@ -1103,9 +1103,9 @@ func renderTaskStatus(value telegram.TaskStatus, now time.Time) string {
 	return fmt.Sprintf("Task: %s\nState: %s\nElapsed: %s\nRepository: %s\nAction: %s", value.TaskID, value.State, elapsed.Round(time.Second), value.RepoProfile, value.CurrentAction)
 }
 
-func (a *App) event(id string, kind task.EventType, visibility task.EventVisibility, payload any) task.Event {
+func (a *App) event(id string, kind workmodel.EventType, visibility workmodel.EventVisibility, payload any) workmodel.Event {
 	encoded, _ := json.Marshal(payload)
-	return task.Event{ID: a.nextID(), TaskID: id, Type: kind, Visibility: visibility, Payload: encoded, CreatedAt: a.deps.Clock().UTC()}
+	return workmodel.Event{ID: a.nextID(), TaskID: id, Type: kind, Visibility: visibility, Payload: encoded, CreatedAt: a.deps.Clock().UTC()}
 }
 
 func (a *App) nextID() string {
@@ -1113,7 +1113,7 @@ func (a *App) nextID() string {
 	defer a.idMu.Unlock()
 	return a.newID()
 }
-func (a *App) publish(ctx context.Context, value task.Event) error {
+func (a *App) publish(ctx context.Context, value workmodel.Event) error {
 	if a.deps.Live == nil {
 		return nil
 	}
@@ -1139,7 +1139,7 @@ func (a *App) takeActive(id string) (activeTask, bool) {
 // SuspendProvider stops all live sessions for a provider without changing
 // durable task state. auth.Service owns the subsequent Running -> AwaitingAuth
 // transition, so recovery cannot race an old session.
-func (a *App) SuspendProvider(ctx context.Context, providerName task.Provider) error {
+func (a *App) SuspendProvider(ctx context.Context, providerName workmodel.Provider) error {
 	a.mu.Lock()
 	active := make([]activeTask, 0)
 	for id, value := range a.active {
@@ -1163,20 +1163,20 @@ func (a *App) SuspendProvider(ctx context.Context, providerName task.Provider) e
 	return nil
 }
 
-func (a *App) Wait(ctx context.Context, id string) (task.Task, error) {
+func (a *App) Wait(ctx context.Context, id string) (workmodel.Task, error) {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		value, err := a.deps.Store.Task(ctx, id)
 		if err != nil {
-			return task.Task{}, err
+			return workmodel.Task{}, err
 		}
-		if value.State.Terminal() || value.State == task.Failed || value.State == task.Paused || value.State == task.AwaitingAuth || value.State == task.AwaitingApproval {
+		if value.State.Terminal() || value.State == workmodel.Failed || value.State == workmodel.Paused || value.State == workmodel.AwaitingAuth || value.State == workmodel.AwaitingApproval {
 			return value, nil
 		}
 		select {
 		case <-ctx.Done():
-			return task.Task{}, ctx.Err()
+			return workmodel.Task{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}

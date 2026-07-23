@@ -12,7 +12,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/localtask"
 	"github.com/berkayahi/agentbridge/internal/repository"
 	"github.com/berkayahi/agentbridge/internal/session"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -24,7 +24,7 @@ var (
 
 type ListFilter struct {
 	RepoProfileID string
-	States        []task.State
+	States        []workmodel.State
 	Limit         int
 }
 
@@ -37,26 +37,26 @@ type Lease struct {
 }
 
 type Store interface {
-	CreateTask(context.Context, task.Task, task.Event) error
-	Transition(context.Context, string, task.State, task.Event) error
-	AppendEvent(context.Context, task.Event) error
-	Events(context.Context, string) ([]task.Event, error)
-	Task(context.Context, string) (task.Task, error)
-	ListTasks(context.Context, ListFilter) ([]task.Task, error)
-	NonterminalTasks(context.Context) ([]task.Task, error)
+	CreateTask(context.Context, workmodel.Task, workmodel.Event) error
+	Transition(context.Context, string, workmodel.State, workmodel.Event) error
+	AppendEvent(context.Context, workmodel.Event) error
+	Events(context.Context, string) ([]workmodel.Event, error)
+	Task(context.Context, string) (workmodel.Task, error)
+	ListTasks(context.Context, ListFilter) ([]workmodel.Task, error)
+	NonterminalTasks(context.Context) ([]workmodel.Task, error)
 	SaveWorkspace(context.Context, string, string, string) error
 	SaveTelegramMessage(context.Context, string, int64) error
-	SaveProviderSession(context.Context, string, task.Session) error
+	SaveProviderSession(context.Context, string, workmodel.Session) error
 	SaveDelivery(context.Context, string, string, string, string) error
 	SaveFailure(context.Context, string, string) error
-	SaveAttachment(context.Context, task.Attachment) error
-	Attachments(context.Context, string) ([]task.Attachment, error)
-	UpsertSession(context.Context, task.Session) error
-	ResumableSessions(context.Context) ([]task.Session, error)
-	UpsertApproval(context.Context, task.Approval) error
-	PendingApprovals(context.Context) ([]task.Approval, error)
-	UpsertAuthIncident(context.Context, task.AuthIncident) error
-	OpenAuthIncident(context.Context, task.Provider) (task.AuthIncident, error)
+	SaveAttachment(context.Context, workmodel.Attachment) error
+	Attachments(context.Context, string) ([]workmodel.Attachment, error)
+	UpsertSession(context.Context, workmodel.Session) error
+	ResumableSessions(context.Context) ([]workmodel.Session, error)
+	UpsertApproval(context.Context, workmodel.Approval) error
+	PendingApprovals(context.Context) ([]workmodel.Approval, error)
+	UpsertAuthIncident(context.Context, workmodel.AuthIncident) error
+	OpenAuthIncident(context.Context, workmodel.Provider) (workmodel.AuthIncident, error)
 	AcquireLease(context.Context, string, string, time.Duration) (bool, error)
 	HeartbeatLease(context.Context, string, string, time.Duration) error
 	ReleaseLease(context.Context, string, string) error

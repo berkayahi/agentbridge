@@ -8,7 +8,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var failureRedactor = security.NewRedactor(security.Config{})
@@ -28,7 +28,7 @@ func (s *Store) SaveTelegramMessage(ctx context.Context, taskID string, messageI
 }
 
 // SaveProviderSession atomically updates both the durable session and its task projection.
-func (s *Store) SaveProviderSession(ctx context.Context, taskID string, session task.Session) error {
+func (s *Store) SaveProviderSession(ctx context.Context, taskID string, session workmodel.Session) error {
 	if session.TaskID != taskID {
 		return fmt.Errorf("provider session task mismatch: %w", store.ErrConflict)
 	}

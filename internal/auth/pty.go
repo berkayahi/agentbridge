@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/creack/pty"
 )
 
@@ -152,7 +152,7 @@ func ignorablePTYReadError(err error) bool {
 
 // expectedPrompt extracts only the device-login URL and human-entered code.
 // Arbitrary provider output, including OAuth and refresh tokens, is discarded.
-func expectedPrompt(provider task.Provider, value string) string {
+func expectedPrompt(provider workmodel.Provider, value string) string {
 	var urls []string
 	var codes []string
 	for _, line := range strings.Split(value, "\n") {
@@ -198,7 +198,7 @@ func expectedPrompt(provider task.Provider, value string) string {
 	return out.String()
 }
 
-func trustedRecoveryURL(provider task.Provider, candidate string) (string, bool) {
+func trustedRecoveryURL(provider workmodel.Provider, candidate string) (string, bool) {
 	candidate = strings.TrimRight(candidate, ".,;:)")
 	parsed, err := url.Parse(candidate)
 	if err != nil || parsed.Scheme != "https" || parsed.User != nil || !trustedAuthHost(provider, parsed.Hostname()) {
@@ -227,7 +227,7 @@ func loginPromptLine(line string) bool {
 		strings.Contains(line, "browse ") || strings.Contains(line, "go to ")
 }
 
-func trustedAuthPath(provider task.Provider, escapedPath string) bool {
+func trustedAuthPath(provider workmodel.Provider, escapedPath string) bool {
 	path, err := url.PathUnescape(escapedPath)
 	if err != nil {
 		return false
@@ -237,12 +237,12 @@ func trustedAuthPath(provider task.Provider, escapedPath string) bool {
 		path = strings.TrimSuffix(path, "/")
 	}
 	switch provider {
-	case task.ProviderCodex:
+	case workmodel.CodexSubscription:
 		switch path {
 		case "/codex/device", "/device", "/oauth/authorize", "/oauth2/authorize", "/authorize", "/login", "/auth/login":
 			return true
 		}
-	case task.ProviderClaude:
+	case workmodel.ClaudeSubscription:
 		switch path {
 		case "/oauth/authorize", "/oauth2/authorize", "/authorize", "/login", "/auth/login":
 			return true
@@ -251,13 +251,13 @@ func trustedAuthPath(provider task.Provider, escapedPath string) bool {
 	return false
 }
 
-func trustedAuthHost(provider task.Provider, host string) bool {
+func trustedAuthHost(provider workmodel.Provider, host string) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	var suffixes []string
 	switch provider {
-	case task.ProviderCodex:
+	case workmodel.CodexSubscription:
 		suffixes = []string{"openai.com", "chatgpt.com"}
-	case task.ProviderClaude:
+	case workmodel.ClaudeSubscription:
 		suffixes = []string{"claude.ai", "anthropic.com"}
 	default:
 		return false

@@ -15,8 +15,8 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const (
@@ -36,9 +36,9 @@ var (
 )
 
 type Store interface {
-	UpsertApproval(context.Context, task.Approval) error
-	AppendEvent(context.Context, task.Event) error
-	Events(context.Context, string) ([]task.Event, error)
+	UpsertApproval(context.Context, workmodel.Approval) error
+	AppendEvent(context.Context, workmodel.Event) error
+	Events(context.Context, string) ([]workmodel.Event, error)
 }
 
 type Messenger interface {
@@ -77,7 +77,7 @@ type Result struct {
 }
 
 type pending struct {
-	record  task.Approval
+	record  workmodel.Approval
 	result  chan Result
 	binding Binding
 
@@ -147,9 +147,9 @@ func (b *Broker) Request(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("approval: encode request: %w", err)
 	}
-	value := task.Approval{
+	value := workmodel.Approval{
 		ID: approvalID, TaskID: request.TaskID, Kind: kind,
-		Status: task.ApprovalPending, RequestPayload: payload,
+		Status: workmodel.ApprovalPending, RequestPayload: payload,
 		RequestedAt: now, ExpiresAt: &expires,
 	}
 	waiter := &pending{record: value, result: make(chan Result, 1)}
@@ -245,10 +245,10 @@ func (b *Broker) handleDecision(ctx context.Context, taskID, approvalID, userID 
 		return ErrBindingMismatch
 	}
 	value := waiter.record
-	value.Status = task.ApprovalRejected
+	value.Status = workmodel.ApprovalRejected
 	reason := "rejected by Telegram operator"
 	if allow {
-		value.Status = task.ApprovalApproved
+		value.Status = workmodel.ApprovalApproved
 		reason = "approved by Telegram operator"
 	}
 	value.ResolvedAt = &now
@@ -259,9 +259,9 @@ func (b *Broker) handleDecision(ctx context.Context, taskID, approvalID, userID 
 		return fmt.Errorf("approval: persist decision: %w", err)
 	}
 	eventPayload, _ := json.Marshal(map[string]any{"approved": allow})
-	event := task.Event{
+	event := workmodel.Event{
 		ID: approvalID + "-resolved", TaskID: taskID,
-		Type: task.EventApprovalResolved, Visibility: task.VisibilityUser,
+		Type: workmodel.EventApprovalResolved, Visibility: workmodel.VisibilityUser,
 		Payload: eventPayload, CreatedAt: now,
 	}
 	if err := b.appendDecisionEvent(ctx, event); err != nil {
@@ -290,7 +290,7 @@ func (b *Broker) lookupPending(taskID, approvalID string) (*pending, error) {
 	return waiter, nil
 }
 
-func (b *Broker) appendDecisionEvent(ctx context.Context, event task.Event) error {
+func (b *Broker) appendDecisionEvent(ctx context.Context, event workmodel.Event) error {
 	err := b.store.AppendEvent(ctx, event)
 	if err == nil || !errors.Is(err, store.ErrDuplicateEvent) {
 		return err
@@ -422,7 +422,7 @@ func (b *Broker) persistExpiredDetached(parent context.Context, waiter *pending,
 func (b *Broker) persistExpired(ctx context.Context, waiter *pending, reason string) error {
 	now := b.clock().UTC()
 	value := waiter.record
-	value.Status = task.ApprovalExpired
+	value.Status = workmodel.ApprovalExpired
 	value.ResolvedAt = &now
 	value.DecisionPayload, _ = json.Marshal(decisionPayload{Approved: false, Reason: reason})
 	if err := b.store.UpsertApproval(ctx, value); err != nil {

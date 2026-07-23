@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	_ "modernc.org/sqlite"
 )
 
@@ -63,7 +63,7 @@ func sqliteDSNWithImmediateTransactions(path string) string {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) CreateTask(ctx context.Context, value task.Task, initial task.Event) error {
+func (s *Store) CreateTask(ctx context.Context, value workmodel.Task, initial workmodel.Event) error {
 	if initial.TaskID != value.ID {
 		return fmt.Errorf("initial event task mismatch: %w", store.ErrConflict)
 	}
@@ -85,7 +85,7 @@ func (s *Store) CreateTask(ctx context.Context, value task.Task, initial task.Ev
 	return nil
 }
 
-func insertTask(ctx context.Context, tx *sql.Tx, value task.Task) error {
+func insertTask(ctx context.Context, tx *sql.Tx, value workmodel.Task) error {
 	_, err := tx.ExecContext(ctx, `
 		INSERT INTO tasks (
 			id, repo_profile_id, title, prompt, state, provider,
@@ -102,7 +102,7 @@ func insertTask(ctx context.Context, tx *sql.Tx, value task.Task) error {
 	return err
 }
 
-func (s *Store) Transition(ctx context.Context, taskID string, to task.State, event task.Event) error {
+func (s *Store) Transition(ctx context.Context, taskID string, to workmodel.State, event workmodel.Event) error {
 	if event.TaskID != taskID {
 		return fmt.Errorf("transition event task mismatch: %w", store.ErrConflict)
 	}
@@ -112,7 +112,7 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 	}
 	defer tx.Rollback()
 
-	var from task.State
+	var from workmodel.State
 	if err := tx.QueryRowContext(ctx, "SELECT state FROM tasks WHERE id = ?", taskID).Scan(&from); err != nil {
 		if isBusy(err) {
 			return fmt.Errorf("load transition task: %w", store.ErrConflict)
@@ -122,7 +122,7 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 	if from == to {
 		return fmt.Errorf("task already in %s: %w", to, store.ErrConflict)
 	}
-	if !task.CanTransition(from, to) {
+	if !workmodel.CanTransition(from, to) {
 		return fmt.Errorf("transition %s to %s: %w", from, to, store.ErrInvalidTransition)
 	}
 	at := timestamp(event.CreatedAt)
@@ -142,8 +142,8 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 			END
 		WHERE id = ? AND state = ?`,
 		to, at,
-		to, task.Running, at, to, task.Queued,
-		to, task.Queued, to, task.Completed, task.Failed, task.Canceled, at,
+		to, workmodel.Running, at, to, workmodel.Queued,
+		to, workmodel.Queued, to, workmodel.Completed, workmodel.Failed, workmodel.Canceled, at,
 		taskID, from,
 	)
 	if err != nil {
@@ -165,7 +165,7 @@ func (s *Store) Transition(ctx context.Context, taskID string, to task.State, ev
 	return nil
 }
 
-func (s *Store) AppendEvent(ctx context.Context, event task.Event) error {
+func (s *Store) AppendEvent(ctx context.Context, event workmodel.Event) error {
 	if err := insertEvent(ctx, s.db, event); err != nil {
 		return translateEventError(err)
 	}
@@ -176,7 +176,7 @@ type execer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func insertEvent(ctx context.Context, db execer, event task.Event) error {
+func insertEvent(ctx context.Context, db execer, event workmodel.Event) error {
 	var providerID any
 	if event.ProviderEventID != "" {
 		providerID = event.ProviderEventID
@@ -189,10 +189,10 @@ func insertEvent(ctx context.Context, db execer, event task.Event) error {
 	return err
 }
 
-func (s *Store) Task(ctx context.Context, id string) (task.Task, error) {
+func (s *Store) Task(ctx context.Context, id string) (workmodel.Task, error) {
 	value, err := scanTask(s.db.QueryRowContext(ctx, taskColumns+" WHERE id = ?", id))
 	if err != nil {
-		return task.Task{}, translateNotFound("load task", err)
+		return workmodel.Task{}, translateNotFound("load task", err)
 	}
 	return value, nil
 }
@@ -208,8 +208,8 @@ type scanner interface {
 	Scan(...any) error
 }
 
-func scanTask(row scanner) (task.Task, error) {
-	var value task.Task
+func scanTask(row scanner) (workmodel.Task, error) {
+	var value workmodel.Task
 	var created, updated string
 	var started, finished sql.NullString
 	err := row.Scan(
@@ -219,24 +219,24 @@ func scanTask(row scanner) (task.Task, error) {
 		&value.DeploymentURL, &value.FailureReason, &created, &updated, &started, &finished,
 	)
 	if err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	if value.CreatedAt, err = parseTimestamp(created); err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	if value.UpdatedAt, err = parseTimestamp(updated); err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	if value.StartedAt, err = parseNullableTimestamp(started); err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	if value.FinishedAt, err = parseNullableTimestamp(finished); err != nil {
-		return task.Task{}, err
+		return workmodel.Task{}, err
 	}
 	return value, nil
 }
 
-func (s *Store) ListTasks(ctx context.Context, filter store.ListFilter) ([]task.Task, error) {
+func (s *Store) ListTasks(ctx context.Context, filter store.ListFilter) ([]workmodel.Task, error) {
 	query := taskColumns + " WHERE 1 = 1"
 	args := make([]any, 0, len(filter.States)+2)
 	if filter.RepoProfileID != "" {
@@ -257,17 +257,17 @@ func (s *Store) ListTasks(ctx context.Context, filter store.ListFilter) ([]task.
 	return s.queryTasks(ctx, query, args...)
 }
 
-func (s *Store) NonterminalTasks(ctx context.Context) ([]task.Task, error) {
-	return s.queryTasks(ctx, taskColumns+" WHERE state NOT IN (?, ?) ORDER BY created_at, id", task.Completed, task.Canceled)
+func (s *Store) NonterminalTasks(ctx context.Context) ([]workmodel.Task, error) {
+	return s.queryTasks(ctx, taskColumns+" WHERE state NOT IN (?, ?) ORDER BY created_at, id", workmodel.Completed, workmodel.Canceled)
 }
 
-func (s *Store) queryTasks(ctx context.Context, query string, args ...any) ([]task.Task, error) {
+func (s *Store) queryTasks(ctx context.Context, query string, args ...any) ([]workmodel.Task, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
 	}
 	defer rows.Close()
-	var values []task.Task
+	var values []workmodel.Task
 	for rows.Next() {
 		value, err := scanTask(rows)
 		if err != nil {
@@ -281,7 +281,7 @@ func (s *Store) queryTasks(ctx context.Context, query string, args ...any) ([]ta
 	return values, nil
 }
 
-func (s *Store) Events(ctx context.Context, taskID string) ([]task.Event, error) {
+func (s *Store) Events(ctx context.Context, taskID string) ([]workmodel.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, event_type, visibility, provider_event_id, redacted_payload, created_at
 		FROM task_events WHERE task_id = ? ORDER BY created_at, id`, taskID)
@@ -289,9 +289,9 @@ func (s *Store) Events(ctx context.Context, taskID string) ([]task.Event, error)
 		return nil, fmt.Errorf("query events: %w", err)
 	}
 	defer rows.Close()
-	var events []task.Event
+	var events []workmodel.Event
 	for rows.Next() {
-		var event task.Event
+		var event workmodel.Event
 		var providerID sql.NullString
 		var payload []byte
 		var created string

@@ -13,13 +13,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const maxProcEnvironmentBytes = 1 << 20
 
 type taskProcessInspector interface {
-	Running(context.Context, string, task.Provider, string) (bool, error)
+	Running(context.Context, string, workmodel.Provider, string) (bool, error)
 }
 
 // procTaskInspector does not persist or signal numeric PIDs. It reads current
@@ -31,7 +31,7 @@ type procTaskInspector struct {
 	maxEntries int
 }
 
-func (p procTaskInspector) Running(ctx context.Context, taskID string, providerName task.Provider, worktree string) (bool, error) {
+func (p procTaskInspector) Running(ctx context.Context, taskID string, providerName workmodel.Provider, worktree string) (bool, error) {
 	platform := p.platform
 	if platform == "" {
 		platform = runtime.GOOS
@@ -119,7 +119,7 @@ func ownedByCurrentUser(info os.FileInfo) bool {
 	return ok && int(stat.Uid) == os.Getuid()
 }
 
-func boundedEnvironment(path, taskID string, providerName task.Provider) (bool, error) {
+func boundedEnvironment(path, taskID string, providerName workmodel.Provider) (bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return false, err

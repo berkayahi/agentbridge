@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"github.com/berkayahi/agentbridge/internal/provider"
 	providerfake "github.com/berkayahi/agentbridge/internal/provider/fake"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestTelegramPromptCompletesDurableDelivery(t *testing.T) {
@@ -31,7 +31,7 @@ func TestTelegramPromptCompletesDurableDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fixture.wait(t, id)
-	if got.State != task.Completed || got.BaseSHA != fixture.workspace.result.BaseSHA || got.CommitSHA != "commit-sha" || got.PushRef != "refs/heads/staging" {
+	if got.State != workmodel.Completed || got.BaseSHA != fixture.workspace.result.BaseSHA || got.CommitSHA != "commit-sha" || got.PushRef != "refs/heads/staging" {
 		t.Fatalf("completed task = %#v", got)
 	}
 	if got.ProviderSessionID != "session-1" {
@@ -47,7 +47,7 @@ func TestTelegramPromptCompletesDurableDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !hasEvent(events, task.EventProviderMessage) || !hasEvent(events, task.EventPushCompleted) {
+	if !hasEvent(events, workmodel.EventProviderMessage) || !hasEvent(events, workmodel.EventPushCompleted) {
 		t.Fatalf("events = %#v", events)
 	}
 }
@@ -59,7 +59,7 @@ func TestProviderAuthFailureAwaitsRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.AwaitingAuth {
+	if got := fixture.wait(t, id); got.State != workmodel.AwaitingAuth {
 		t.Fatalf("state = %s", got.State)
 	}
 }
@@ -71,7 +71,7 @@ func TestProviderFailureNotifiesTelegram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.Failed {
+	if got := fixture.wait(t, id); got.State != workmodel.Failed {
 		t.Fatalf("state = %s", got.State)
 	}
 	var found bool
@@ -96,7 +96,7 @@ func TestApprovalRejectionFailsWithoutDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.Failed {
+	if got := fixture.wait(t, id); got.State != workmodel.Failed {
 		t.Fatalf("state = %s", got.State)
 	}
 	if calls := fixture.delivery.calls(); len(calls) != 0 {
@@ -112,7 +112,7 @@ func TestVerificationFailureNeverCommits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.Failed || got.FailureReason == "" {
+	if got := fixture.wait(t, id); got.State != workmodel.Failed || got.FailureReason == "" {
 		t.Fatalf("failed task = %#v", got)
 	}
 	if calls := fixture.delivery.calls(); len(calls) != 1 || calls[0] != "verify" {
@@ -137,7 +137,7 @@ func TestCancellationInterruptsActiveProvider(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.Canceled {
+	if got := fixture.wait(t, id); got.State != workmodel.Canceled {
 		t.Fatalf("state = %s", got.State)
 	}
 	if !blocking.wasInterrupted() {
@@ -160,7 +160,7 @@ func TestLeaseLossInterruptsProviderAndPausesTask(t *testing.T) {
 	fixture.store.heartbeatErr = errors.New("lease owner changed")
 	fixture.store.mu.Unlock()
 
-	if got := fixture.wait(t, id); got.State != task.Paused || !strings.Contains(got.FailureReason, "lease") {
+	if got := fixture.wait(t, id); got.State != workmodel.Paused || !strings.Contains(got.FailureReason, "lease") {
 		t.Fatalf("task after lease loss = %#v", got)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -181,14 +181,14 @@ func TestSuspendProviderStopsSessionWithoutChangingDurableState(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-blocking.started
-	if err := fixture.app.SuspendProvider(context.Background(), task.ProviderCodex); err != nil {
+	if err := fixture.app.SuspendProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
 	value, err := fixture.store.Task(context.Background(), id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.State != task.Running {
+	if value.State != workmodel.Running {
 		t.Fatalf("state = %s, auth service must own AwaitingAuth transition", value.State)
 	}
 	if !blocking.wasInterrupted() {
@@ -233,8 +233,8 @@ func TestShutdownClosesRuntimeDependenciesBeforeStore(t *testing.T) {
 	values := &orderedCloseStore{memoryStore: newMemoryStore(), close: func() error { record("store"); return nil }}
 	application, err := New(Config{DefaultRepository: "sample", QueueSize: 1}, Dependencies{
 		Store: values, Messenger: &fakeMessenger{},
-		Providers: map[task.Provider]provider.Provider{
-			task.ProviderCodex: providerfake.New(task.ProviderCodex, provider.MustID("session"), nil),
+		Providers: map[workmodel.Provider]provider.Provider{
+			workmodel.CodexSubscription: providerfake.New(workmodel.CodexSubscription, provider.MustID("session"), nil),
 		},
 		Workspace: &fakeWorkspace{}, Delivery: &fakeDelivery{}, Files: fstest.MapFS{},
 		BeforeStoreClose: func(context.Context) error { record("runtime"); return nil },
@@ -261,8 +261,8 @@ func TestShutdownTimeoutCanBeRetriedUntilStoreCleanupFinishes(t *testing.T) {
 	values := &orderedCloseStore{memoryStore: newMemoryStore(), close: func() error { close(closed); return nil }}
 	application, err := New(Config{DefaultRepository: "sample", QueueSize: 1}, Dependencies{
 		Store: values, Messenger: &fakeMessenger{},
-		Providers: map[task.Provider]provider.Provider{
-			task.ProviderCodex: providerfake.New(task.ProviderCodex, provider.MustID("session"), nil),
+		Providers: map[workmodel.Provider]provider.Provider{
+			workmodel.CodexSubscription: providerfake.New(workmodel.CodexSubscription, provider.MustID("session"), nil),
 		},
 		Workspace: &fakeWorkspace{}, Delivery: &fakeDelivery{}, Files: fstest.MapFS{},
 	})
@@ -337,7 +337,7 @@ func TestAttachmentFailurePausesCreatedTaskAndExplainsAssociationFailure(t *test
 		t.Fatal("attachment command succeeded")
 	}
 	values, _ := fixture.store.ListTasks(context.Background(), store.ListFilter{})
-	if len(values) != 1 || values[0].State != task.Paused || values[0].FailureReason == "" {
+	if len(values) != 1 || values[0].State != workmodel.Paused || values[0].FailureReason == "" {
 		t.Fatalf("task = %#v", values)
 	}
 	later := promptUpdate(93, "")
@@ -362,7 +362,7 @@ type fixture struct {
 
 func newFixture(t *testing.T, events []provider.Event) *fixture {
 	t.Helper()
-	return newFixtureWithProvider(t, providerfake.New(task.ProviderCodex, provider.MustID("session-1"), events))
+	return newFixtureWithProvider(t, providerfake.New(workmodel.CodexSubscription, provider.MustID("session-1"), events))
 }
 
 func newFixtureWithProvider(t *testing.T, p provider.Provider) *fixture {
@@ -376,7 +376,7 @@ func newFixtureWithProvider(t *testing.T, p provider.Provider) *fixture {
 		sequence++
 		return "id-" + time.Unix(int64(sequence), 0).UTC().Format("150405")
 	}}, Dependencies{
-		Store: values, Messenger: messenger, Providers: map[task.Provider]provider.Provider{task.ProviderCodex: p},
+		Store: values, Messenger: messenger, Providers: map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: p},
 		Workspace: workspace, Delivery: delivery, Clock: func() time.Time { return time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC) },
 		Logger: slog.New(slog.NewTextHandler(discardWriter{}, nil)), Files: fstest.MapFS{},
 	})
@@ -401,7 +401,7 @@ func (f *fixture) start(t *testing.T) {
 	})
 }
 
-func (f *fixture) wait(t *testing.T, id string) task.Task {
+func (f *fixture) wait(t *testing.T, id string) workmodel.Task {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -416,7 +416,7 @@ func promptUpdate(id int64, text string) telegram.Update {
 	return telegram.Update{ID: id, Message: &telegram.IncomingMessage{ID: id, Chat: telegram.Chat{ID: 100, Type: telegram.ChatPrivate}, From: telegram.User{ID: 42}, Text: text}}
 }
 
-func hasEvent(values []task.Event, eventType task.EventType) bool {
+func hasEvent(values []workmodel.Event, eventType workmodel.EventType) bool {
 	for _, value := range values {
 		if value.Type == eventType {
 			return true
@@ -437,7 +437,7 @@ type orderedCloseStore struct {
 }
 
 func (s *orderedCloseStore) Close() error { return s.close() }
-func (f *fakeWorkspace) Inspect(context.Context, task.Task) (WorkspaceInspection, error) {
+func (f *fakeWorkspace) Inspect(context.Context, workmodel.Task) (WorkspaceInspection, error) {
 	return WorkspaceInspection{Exists: f.result.Path != "", BaseMatches: f.result.BaseSHA != ""}, nil
 }
 
@@ -447,19 +447,19 @@ type fakeDelivery struct {
 	verifyErr error
 }
 
-func (f *fakeDelivery) Changed(context.Context, task.Task, Workspace) (bool, error) {
+func (f *fakeDelivery) Changed(context.Context, workmodel.Task, Workspace) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeDelivery) Verify(context.Context, task.Task, Workspace) error {
+func (f *fakeDelivery) Verify(context.Context, workmodel.Task, Workspace) error {
 	f.record("verify")
 	return f.verifyErr
 }
-func (f *fakeDelivery) Commit(context.Context, task.Task, Workspace) (string, error) {
+func (f *fakeDelivery) Commit(context.Context, workmodel.Task, Workspace) (string, error) {
 	f.record("commit")
 	return "commit-sha", nil
 }
-func (f *fakeDelivery) Push(context.Context, task.Task, Workspace, string) (string, error) {
+func (f *fakeDelivery) Push(context.Context, workmodel.Task, Workspace, string) (string, error) {
 	f.record("push")
 	return "refs/heads/staging", nil
 }
@@ -481,13 +481,13 @@ type fakeAttachmentSaver struct {
 	err          error
 }
 
-func (f *fakeAttachmentSaver) Save(context.Context, attachment.IncomingFile) (task.Attachment, error) {
+func (f *fakeAttachmentSaver) Save(context.Context, attachment.IncomingFile) (workmodel.Attachment, error) {
 	f.associated++
-	return task.Attachment{}, f.err
+	return workmodel.Attachment{}, f.err
 }
-func (f *fakeAttachmentSaver) SaveForTask(_ context.Context, id string, _ attachment.IncomingFile) (task.Attachment, error) {
+func (f *fakeAttachmentSaver) SaveForTask(_ context.Context, id string, _ attachment.IncomingFile) (workmodel.Attachment, error) {
 	f.explicitTask = id
-	return task.Attachment{}, f.err
+	return workmodel.Attachment{}, f.err
 }
 
 func (f *fakeMessenger) Send(_ context.Context, value telegram.Message) (telegram.MessageRef, error) {
@@ -515,10 +515,10 @@ type blockingProvider struct {
 func newBlockingProvider() *blockingProvider {
 	return &blockingProvider{started: make(chan struct{}), events: make(chan provider.Event)}
 }
-func (*blockingProvider) Name() task.Provider { return task.ProviderCodex }
+func (*blockingProvider) Name() workmodel.Provider { return workmodel.CodexSubscription }
 func (p *blockingProvider) Start(context.Context, provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	close(p.started)
-	return provider.Session{ID: provider.MustID("blocking-session"), ExternalID: "blocking-session", Provider: task.ProviderCodex}, p.events, nil
+	return provider.Session{ID: provider.MustID("blocking-session"), ExternalID: "blocking-session", Provider: workmodel.CodexSubscription}, p.events, nil
 }
 func (p *blockingProvider) Resume(context.Context, provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
 	return provider.Session{}, nil, errors.New("unexpected resume")

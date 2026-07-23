@@ -1,4 +1,4 @@
-package task
+package workmodel
 
 // State is a durable task lifecycle state.
 type State string

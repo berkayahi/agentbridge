@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestOverviewPageIsPhoneFirstSemanticAndOperational(t *testing.T) {
@@ -91,11 +91,11 @@ func readBody(t *testing.T, response *http.Response) string {
 	return string(data)
 }
 
-func providerMessage(id, message string, visible bool) task.Event {
-	visibility := task.VisibilityInternal
+func providerMessage(id, message string, visible bool) workmodel.Event {
+	visibility := workmodel.VisibilityInternal
 	if visible {
-		visibility = task.VisibilityUser
+		visibility = workmodel.VisibilityUser
 	}
 	payload, _ := json.Marshal(map[string]string{"message": message})
-	return task.Event{ID: id, TaskID: "task-1", Type: task.EventProviderMessage, Visibility: visibility, Payload: payload, CreatedAt: time.Unix(201, 0).UTC()}
+	return workmodel.Event{ID: id, TaskID: "task-1", Type: workmodel.EventProviderMessage, Visibility: visibility, Payload: payload, CreatedAt: time.Unix(201, 0).UTC()}
 }

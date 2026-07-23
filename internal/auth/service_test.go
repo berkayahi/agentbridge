@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestHealthClassifiesSubscriptionStatus(t *testing.T) {
@@ -18,18 +18,18 @@ func TestHealthClassifiesSubscriptionStatus(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		provider task.Provider
+		provider workmodel.Provider
 		output   string
 		err      error
 		want     HealthKind
 	}{
-		{name: "codex healthy", provider: task.ProviderCodex, output: "Logged in using ChatGPT", want: HealthHealthy},
-		{name: "claude healthy", provider: task.ProviderClaude, output: `{"loggedIn":true,"subscriptionType":"max"}`, want: HealthHealthy},
-		{name: "expired", provider: task.ProviderCodex, output: "Your session has expired; run codex login", err: errors.New("exit 1"), want: HealthExpired},
-		{name: "claude logged out JSON", provider: task.ProviderClaude, output: `{"loggedIn": false}`, want: HealthExpired},
-		{name: "command missing", provider: task.ProviderClaude, err: ErrCommandMissing, want: HealthCommandMissing},
-		{name: "timeout", provider: task.ProviderCodex, err: context.DeadlineExceeded, want: HealthTimeout},
-		{name: "unauthorized", provider: task.ProviderClaude, output: "HTTP 401 unauthorized token=do-not-copy", err: errors.New("exit 1"), want: HealthUnauthorized},
+		{name: "codex healthy", provider: workmodel.CodexSubscription, output: "Logged in using ChatGPT", want: HealthHealthy},
+		{name: "claude healthy", provider: workmodel.ClaudeSubscription, output: `{"loggedIn":true,"subscriptionType":"max"}`, want: HealthHealthy},
+		{name: "expired", provider: workmodel.CodexSubscription, output: "Your session has expired; run codex login", err: errors.New("exit 1"), want: HealthExpired},
+		{name: "claude logged out JSON", provider: workmodel.ClaudeSubscription, output: `{"loggedIn": false}`, want: HealthExpired},
+		{name: "command missing", provider: workmodel.ClaudeSubscription, err: ErrCommandMissing, want: HealthCommandMissing},
+		{name: "timeout", provider: workmodel.CodexSubscription, err: context.DeadlineExceeded, want: HealthTimeout},
+		{name: "unauthorized", provider: workmodel.ClaudeSubscription, output: "HTTP 401 unauthorized token=do-not-copy", err: errors.New("exit 1"), want: HealthUnauthorized},
 	}
 
 	for _, tt := range tests {
@@ -45,9 +45,9 @@ func TestHealthClassifiesSubscriptionStatus(t *testing.T) {
 				t.Fatal("health message leaked command output")
 			}
 			call := commands.lastCall()
-			wantArgs := map[task.Provider][]string{
-				task.ProviderCodex:  {"login", "status"},
-				task.ProviderClaude: {"auth", "status", "--json"},
+			wantArgs := map[workmodel.Provider][]string{
+				workmodel.CodexSubscription:  {"login", "status"},
+				workmodel.ClaudeSubscription: {"auth", "status", "--json"},
 			}[tt.provider]
 			if fmt.Sprint(call.args) != fmt.Sprint(wantArgs) {
 				t.Fatalf("args = %v, want %v", call.args, wantArgs)
@@ -59,7 +59,7 @@ func TestHealthClassifiesSubscriptionStatus(t *testing.T) {
 func TestHealthUsesContextResultWhenKilledCommandMasksDeadline(t *testing.T) {
 	t.Parallel()
 	svc := newTestService(t, Options{Commands: deadlineMaskingCommands{}, CheckTimeout: time.Millisecond})
-	health := svc.Health(context.Background(), task.ProviderCodex)
+	health := svc.Health(context.Background(), workmodel.CodexSubscription)
 	if health.Kind != HealthTimeout {
 		t.Fatalf("kind = %q, want %q", health.Kind, HealthTimeout)
 	}
@@ -68,11 +68,11 @@ func TestHealthUsesContextResultWhenKilledCommandMasksDeadline(t *testing.T) {
 func TestUnhealthyCheckMovesAllRunningProviderTasksToAwaitingAuth(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
-	tasks := &fakeTaskStore{tasks: []task.Task{
-		{ID: "codex-1", Provider: task.ProviderCodex, State: task.Running},
-		{ID: "codex-2", Provider: task.ProviderCodex, State: task.Running},
-		{ID: "claude-1", Provider: task.ProviderClaude, State: task.Running},
-		{ID: "paused", Provider: task.ProviderCodex, State: task.Paused},
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{
+		{ID: "codex-1", Provider: workmodel.CodexSubscription, State: workmodel.Running},
+		{ID: "codex-2", Provider: workmodel.CodexSubscription, State: workmodel.Running},
+		{ID: "claude-1", Provider: workmodel.ClaudeSubscription, State: workmodel.Running},
+		{ID: "paused", Provider: workmodel.CodexSubscription, State: workmodel.Paused},
 	}}
 	incidents := &fakeIncidents{}
 	notifier := &fakeNotifier{}
@@ -85,17 +85,17 @@ func TestUnhealthyCheckMovesAllRunningProviderTasksToAwaitingAuth(t *testing.T) 
 		NewID:     sequenceIDs("incident", "event-1", "event-2"),
 	})
 
-	incident, err := svc.CheckProvider(context.Background(), task.ProviderCodex)
+	incident, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if incident.Kind != HealthUnauthorized || len(incident.TaskIDs) != 2 {
 		t.Fatalf("incident = %#v", incident)
 	}
-	if got := tasks.states(); got["codex-1"] != task.AwaitingAuth || got["codex-2"] != task.AwaitingAuth {
+	if got := tasks.states(); got["codex-1"] != workmodel.AwaitingAuth || got["codex-2"] != workmodel.AwaitingAuth {
 		t.Fatalf("states = %v", got)
 	}
-	if got := tasks.states(); got["claude-1"] != task.Running || got["paused"] != task.Paused {
+	if got := tasks.states(); got["claude-1"] != workmodel.Running || got["paused"] != workmodel.Paused {
 		t.Fatalf("unaffected states changed: %v", got)
 	}
 	assertNoSecret(t, "secret-oauth-token", incidents.text(), notifier.text(), tasks.text())
@@ -103,14 +103,14 @@ func TestUnhealthyCheckMovesAllRunningProviderTasksToAwaitingAuth(t *testing.T) 
 
 func TestRuntime401UsesSameAuthTransition(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderClaude, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.ClaudeSubscription, State: workmodel.Running}}}
 	svc := newTestService(t, Options{Tasks: tasks, NewID: sequenceIDs("incident", "event")})
 
-	incident, err := svc.HandleProviderError(context.Background(), task.ProviderClaude, errors.New("request failed: 401 oauth-secret"))
+	incident, err := svc.HandleProviderError(context.Background(), workmodel.ClaudeSubscription, errors.New("request failed: 401 oauth-secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if incident.Kind != HealthUnauthorized || tasks.states()["task-1"] != task.AwaitingAuth {
+	if incident.Kind != HealthUnauthorized || tasks.states()["task-1"] != workmodel.AwaitingAuth {
 		t.Fatalf("incident = %#v; states = %v", incident, tasks.states())
 	}
 	assertNoSecret(t, "oauth-secret", tasks.text())
@@ -118,7 +118,7 @@ func TestRuntime401UsesSameAuthTransition(t *testing.T) {
 
 func TestRepeatedUnhealthyCheckKeepsOneOpenIncident(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running}}}
 	incidents := &fakeIncidents{}
 	svc := newTestService(t, Options{
 		Commands: &fakeCommands{responses: []commandResponse{
@@ -127,11 +127,11 @@ func TestRepeatedUnhealthyCheckKeepsOneOpenIncident(t *testing.T) {
 		}},
 		Tasks: tasks, Incidents: incidents, NewID: sequenceIDs("event", "incident", "incident-retry"),
 	})
-	first, err := svc.CheckProvider(context.Background(), task.ProviderCodex)
+	first, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := svc.CheckProvider(context.Background(), task.ProviderCodex)
+	second, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestRepeatedUnhealthyCheckKeepsOneOpenIncident(t *testing.T) {
 
 func TestPeriodicCheckRetriesIncidentPersistenceWithoutRetransition(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running}}}
 	incidents := &fakeIncidents{fail: 1}
 	svc := newTestService(t, Options{
 		Commands: &fakeCommands{responses: []commandResponse{
@@ -156,14 +156,14 @@ func TestPeriodicCheckRetriesIncidentPersistenceWithoutRetransition(t *testing.T
 		}},
 		Tasks: tasks, Incidents: incidents, NewID: sequenceIDs("event", "incident", "incident-retry"),
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err == nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err == nil {
 		t.Fatal("first persistence failure returned nil")
 	}
-	incident, err := svc.CheckProvider(context.Background(), task.ProviderCodex)
+	incident, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if incident.ID != "incident-retry" || tasks.states()["task-1"] != task.AwaitingAuth {
+	if incident.ID != "incident-retry" || tasks.states()["task-1"] != workmodel.AwaitingAuth {
 		t.Fatalf("incident = %#v; states = %v", incident, tasks.states())
 	}
 	incidents.mu.Lock()
@@ -180,7 +180,7 @@ func TestMonitorChecksPeriodicallyUntilCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- svc.Monitor(ctx, 5*time.Millisecond, task.ProviderCodex, task.ProviderClaude)
+		done <- svc.Monitor(ctx, 5*time.Millisecond, workmodel.CodexSubscription, workmodel.ClaudeSubscription)
 	}()
 	deadline := time.Now().Add(time.Second)
 	for commands.callCount() < 4 && time.Now().Before(deadline) {
@@ -199,7 +199,7 @@ func TestHealthyChecksResolveAnIncidentExactlyOnce(t *testing.T) {
 	t.Parallel()
 	opened := time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC)
 	incidents := &fakeIncidents{values: []Incident{{
-		ID: "incident", Provider: task.ProviderCodex, Kind: HealthExpired,
+		ID: "incident", Provider: workmodel.CodexSubscription, Kind: HealthExpired,
 		Status: IncidentOpen, OpenedAt: opened,
 	}}}
 	checks := 0
@@ -210,10 +210,10 @@ func TestHealthyChecksResolveAnIncidentExactlyOnce(t *testing.T) {
 			return opened.Add(time.Duration(checks) * time.Minute)
 		},
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
 	incidents.mu.Lock()
@@ -227,35 +227,35 @@ func TestHealthyChecksResolveAnIncidentExactlyOnce(t *testing.T) {
 }
 
 func TestAuthIncidentSuspendsLiveProviderBeforeDurableTransition(t *testing.T) {
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running}}}
 	suspender := &fakeSuspender{}
 	svc := newTestService(t, Options{
 		Commands: &fakeCommands{responses: []commandResponse{{output: []byte("login required"), err: errors.New("exit 1")}}},
 		Tasks:    tasks, Suspender: suspender, NewID: sequenceIDs("event", "incident"),
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
-	if !suspender.called || suspender.provider != task.ProviderCodex {
+	if !suspender.called || suspender.provider != workmodel.CodexSubscription {
 		t.Fatalf("suspender = %#v", suspender)
 	}
-	if got := tasks.states()["task-1"]; got != task.AwaitingAuth {
+	if got := tasks.states()["task-1"]; got != workmodel.AwaitingAuth {
 		t.Fatalf("state = %s", got)
 	}
 }
 
 func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{
-		{ID: "task-1", Provider: task.ProviderCodex, State: task.Running, BaseSHA: "abc", WorktreePath: "/tmp/w1", ProviderSessionID: "session-1"},
-		{ID: "task-2", Provider: task.ProviderCodex, State: task.Running, BaseSHA: "def", WorktreePath: "/tmp/w2", ProviderSessionID: "session-2"},
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{
+		{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running, BaseSHA: "abc", WorktreePath: "/tmp/w1", ProviderSessionID: "session-1"},
+		{ID: "task-2", Provider: workmodel.CodexSubscription, State: workmodel.Running, BaseSHA: "def", WorktreePath: "/tmp/w2", ProviderSessionID: "session-2"},
 	}}
 	commands := &fakeCommands{responses: []commandResponse{
 		{output: []byte("session expired"), err: errors.New("exit 1")},
 		{output: []byte("Logged in using ChatGPT")},
 	}}
-	resumer := &fakeResumer{onResume: func(value task.Task) error {
-		if got := tasks.states()[value.ID]; got != task.Running {
+	resumer := &fakeResumer{onResume: func(value workmodel.Task) error {
+		if got := tasks.states()[value.ID]; got != workmodel.Running {
 			return fmt.Errorf("task state during resume = %s, want running", got)
 		}
 		return nil
@@ -266,11 +266,11 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 		Authorizer: fakeAuthorizer{"tailscale-user": true},
 		NewID:      sequenceIDs("incident", "event-1", "event-2", "recovery", "event-3", "event-4"),
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
 
-	recoveryID, err := svc.StartRecovery(context.Background(), "tailscale-user", task.ProviderCodex)
+	recoveryID, err := svc.StartRecovery(context.Background(), "tailscale-user", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +284,7 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 	if view.Status != RecoverySucceeded || view.Transcript != "" {
 		t.Fatalf("view = %#v; finished transcript must be erased", view)
 	}
-	if got := tasks.states(); got["task-1"] != task.Running || got["task-2"] != task.Running {
+	if got := tasks.states(); got["task-1"] != workmodel.Running || got["task-2"] != workmodel.Running {
 		t.Fatalf("states = %v", got)
 	}
 	if fmt.Sprint(resumer.validated) != "[task-1 task-2]" || fmt.Sprint(resumer.resumed) != "[task-1 task-2]" {
@@ -297,7 +297,7 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 
 func TestRecoveryValidationFailurePausesTaskWithSafeReason(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderClaude, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.ClaudeSubscription, State: workmodel.Running}}}
 	commands := &fakeCommands{responses: []commandResponse{
 		{output: []byte(`{"loggedIn":false}`), err: errors.New("exit 1")},
 		{output: []byte(`{"loggedIn":true}`)},
@@ -308,17 +308,17 @@ func TestRecoveryValidationFailurePausesTaskWithSafeReason(t *testing.T) {
 		PTY: &fakePTY{release: closedChannel()}, Authorizer: fakeAuthorizer{"operator": true},
 		NewID: sequenceIDs("incident", "event-1", "recovery", "event-2"),
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderClaude); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.ClaudeSubscription); err != nil {
 		t.Fatal(err)
 	}
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderClaude)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.ClaudeSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.WaitRecovery(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if got := tasks.states()["task-1"]; got != task.Paused {
+	if got := tasks.states()["task-1"]; got != workmodel.Paused {
 		t.Fatalf("state = %q", got)
 	}
 	assertNoSecret(t, "secret-path", tasks.text())
@@ -326,35 +326,35 @@ func TestRecoveryValidationFailurePausesTaskWithSafeReason(t *testing.T) {
 
 func TestFailedRecoveryPausesAffectedTasks(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.Running}}}
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running}}}
 	svc := newTestService(t, Options{
 		Commands: &fakeCommands{responses: []commandResponse{{output: []byte("session expired"), err: errors.New("exit 1")}}},
 		Tasks:    tasks, PTY: &fakePTY{err: errors.New("login failed"), release: closedChannel()},
 		Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("event-1", "incident", "recovery", "event-2"),
 	})
-	if _, err := svc.CheckProvider(context.Background(), task.ProviderCodex); err != nil {
+	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
 	}
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.WaitRecovery(context.Background(), id); err == nil {
 		t.Fatal("failed recovery returned nil")
 	}
-	if got := tasks.states()["task-1"]; got != task.Paused {
-		t.Fatalf("state = %q, want %q", got, task.Paused)
+	if got := tasks.states()["task-1"]; got != workmodel.Paused {
+		t.Fatalf("state = %q, want %q", got, workmodel.Paused)
 	}
 }
 
 func TestRecoveryRehydratesDurableAwaitingAuthTasksAfterRestart(t *testing.T) {
 	t.Parallel()
-	tasks := &fakeTaskStore{tasks: []task.Task{{
-		ID: "task-1", Provider: task.ProviderCodex, State: task.AwaitingAuth,
+	tasks := &fakeTaskStore{tasks: []workmodel.Task{{
+		ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.AwaitingAuth,
 		BaseSHA: "base", WorktreePath: "/tmp/worktree", ProviderSessionID: "session",
 	}}}
 	incidents := &fakeIncidents{values: []Incident{{
-		ID: "incident", Provider: task.ProviderCodex, Kind: HealthExpired,
+		ID: "incident", Provider: workmodel.CodexSubscription, Kind: HealthExpired,
 		Status: IncidentOpen, TaskIDs: []string{"task-1"}, OpenedAt: time.Now().UTC(),
 	}}}
 	resumer := &fakeResumer{}
@@ -366,21 +366,21 @@ func TestRecoveryRehydratesDurableAwaitingAuthTasksAfterRestart(t *testing.T) {
 		Tasks: tasks, Incidents: incidents, Resumer: resumer, PTY: &fakePTY{release: closedChannel()},
 		Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("recovery", "event"),
 	})
-	periodicIncident, err := svc.CheckProvider(context.Background(), task.ProviderCodex)
+	periodicIncident, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if periodicIncident.ID != "incident" {
 		t.Fatalf("periodic check created incident %q", periodicIncident.ID)
 	}
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.WaitRecovery(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
-	if got := tasks.states()["task-1"]; got != task.Running {
+	if got := tasks.states()["task-1"]; got != workmodel.Running {
 		t.Fatalf("state = %q", got)
 	}
 	if fmt.Sprint(resumer.resumed) != "[task-1]" {
@@ -397,10 +397,10 @@ func TestRecoveryRequiresAuthorizationAndSupportsCancel(t *testing.T) {
 	t.Parallel()
 	login := &fakePTY{started: make(chan struct{}), release: make(chan struct{})}
 	svc := newTestService(t, Options{PTY: login, Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("recovery")})
-	if _, err := svc.StartRecovery(context.Background(), "intruder", task.ProviderCodex); !errors.Is(err, ErrForbidden) {
+	if _, err := svc.StartRecovery(context.Background(), "intruder", workmodel.CodexSubscription); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("start error = %v", err)
 	}
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderClaude)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.ClaudeSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,12 +437,12 @@ func TestOnlyOneRecoveryMayRunPerProvider(t *testing.T) {
 	t.Parallel()
 	login := &fakePTY{started: make(chan struct{}), release: make(chan struct{})}
 	svc := newTestService(t, Options{PTY: login, Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("recovery")})
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-login.started
-	if _, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex); !errors.Is(err, ErrRecoveryActive) {
+	if _, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription); !errors.Is(err, ErrRecoveryActive) {
 		t.Fatalf("second start error = %v", err)
 	}
 	if err := svc.CancelRecovery(context.Background(), "operator", id); err != nil {
@@ -452,18 +452,18 @@ func TestOnlyOneRecoveryMayRunPerProvider(t *testing.T) {
 
 func TestRecoveryRemainsActiveThroughTerminalTaskCleanup(t *testing.T) {
 	t.Parallel()
-	base := &fakeTaskStore{tasks: []task.Task{{ID: "task-1", Provider: task.ProviderCodex, State: task.AwaitingAuth}}}
+	base := &fakeTaskStore{tasks: []workmodel.Task{{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.AwaitingAuth}}}
 	tasks := &blockingTaskStore{fakeTaskStore: base, started: make(chan struct{}), release: make(chan struct{})}
 	svc := newTestService(t, Options{
 		Tasks: tasks, PTY: &fakePTY{err: errors.New("login failed"), release: closedChannel()},
 		Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("recovery", "pause-event"),
 	})
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-tasks.started
-	if _, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex); !errors.Is(err, ErrRecoveryActive) {
+	if _, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription); !errors.Is(err, ErrRecoveryActive) {
 		t.Fatalf("start during cleanup error = %v", err)
 	}
 	close(tasks.release)
@@ -476,7 +476,7 @@ func TestAuthorizedRecoveryAcceptsOneBoundedCallbackCode(t *testing.T) {
 	t.Parallel()
 	login := &fakePTY{started: make(chan struct{}), receiveInput: true, release: closedChannel()}
 	svc := newTestService(t, Options{PTY: login, Authorizer: fakeAuthorizer{"operator": true}, NewID: sequenceIDs("recovery")})
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderClaude)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.ClaudeSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,7 @@ func TestRecoveryExpiresAndErasesTranscript(t *testing.T) {
 		PTY: login, Authorizer: fakeAuthorizer{"operator": true}, RecoveryTTL: 20 * time.Millisecond,
 		NewID: sequenceIDs("recovery"),
 	})
-	id, err := svc.StartRecovery(context.Background(), "operator", task.ProviderCodex)
+	id, err := svc.StartRecovery(context.Background(), "operator", workmodel.CodexSubscription)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,8 +583,8 @@ func (f *fakeCommands) callCount() int {
 
 type fakeTaskStore struct {
 	mu          sync.Mutex
-	tasks       []task.Task
-	transitions []task.Event
+	tasks       []workmodel.Task
+	transitions []workmodel.Event
 }
 
 type blockingTaskStore struct {
@@ -594,8 +594,8 @@ type blockingTaskStore struct {
 	once    sync.Once
 }
 
-func (b *blockingTaskStore) Transition(ctx context.Context, id string, state task.State, event task.Event) error {
-	if state == task.Paused {
+func (b *blockingTaskStore) Transition(ctx context.Context, id string, state workmodel.State, event workmodel.Event) error {
+	if state == workmodel.Paused {
 		b.once.Do(func() { close(b.started) })
 		select {
 		case <-ctx.Done():
@@ -606,18 +606,18 @@ func (b *blockingTaskStore) Transition(ctx context.Context, id string, state tas
 	return b.fakeTaskStore.Transition(ctx, id, state, event)
 }
 
-func (f *fakeTaskStore) NonterminalTasks(context.Context) ([]task.Task, error) {
+func (f *fakeTaskStore) NonterminalTasks(context.Context) ([]workmodel.Task, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]task.Task(nil), f.tasks...), nil
+	return append([]workmodel.Task(nil), f.tasks...), nil
 }
 
-func (f *fakeTaskStore) Transition(_ context.Context, id string, state task.State, event task.Event) error {
+func (f *fakeTaskStore) Transition(_ context.Context, id string, state workmodel.State, event workmodel.Event) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := range f.tasks {
 		if f.tasks[i].ID == id {
-			if !task.CanTransition(f.tasks[i].State, state) {
+			if !workmodel.CanTransition(f.tasks[i].State, state) {
 				return errors.New("invalid transition")
 			}
 			f.tasks[i].State = state
@@ -628,10 +628,10 @@ func (f *fakeTaskStore) Transition(_ context.Context, id string, state task.Stat
 	return errors.New("not found")
 }
 
-func (f *fakeTaskStore) states() map[string]task.State {
+func (f *fakeTaskStore) states() map[string]workmodel.State {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	out := make(map[string]task.State, len(f.tasks))
+	out := make(map[string]workmodel.State, len(f.tasks))
 	for _, value := range f.tasks {
 		out[value.ID] = value.State
 	}
@@ -651,7 +651,7 @@ type fakeIncidents struct {
 	saves  int
 }
 
-func (f *fakeIncidents) OpenIncident(_ context.Context, provider task.Provider) (Incident, error) {
+func (f *fakeIncidents) OpenIncident(_ context.Context, provider workmodel.Provider) (Incident, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := len(f.values) - 1; i >= 0; i-- {
@@ -702,27 +702,27 @@ type fakeResumer struct {
 	resumed     []string
 	validateErr error
 	resumeErr   error
-	onResume    func(task.Task) error
+	onResume    func(workmodel.Task) error
 }
 
 type fakeSuspender struct {
 	called   bool
-	provider task.Provider
+	provider workmodel.Provider
 }
 
-func (f *fakeSuspender) SuspendProvider(_ context.Context, provider task.Provider) error {
+func (f *fakeSuspender) SuspendProvider(_ context.Context, provider workmodel.Provider) error {
 	f.called, f.provider = true, provider
 	return nil
 }
 
-func (f *fakeResumer) ValidateResume(_ context.Context, value task.Task) error {
+func (f *fakeResumer) ValidateResume(_ context.Context, value workmodel.Task) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.validated = append(f.validated, value.ID)
 	return f.validateErr
 }
 
-func (f *fakeResumer) ResumeTask(_ context.Context, value task.Task) error {
+func (f *fakeResumer) ResumeTask(_ context.Context, value workmodel.Task) error {
 	f.mu.Lock()
 	f.resumed = append(f.resumed, value.ID)
 	onResume, resumeErr := f.onResume, f.resumeErr

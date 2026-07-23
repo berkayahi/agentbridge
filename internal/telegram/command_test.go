@@ -4,18 +4,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestParseCommandProviderPrompts(t *testing.T) {
 	tests := []struct {
 		name, input, bot string
-		provider         task.Provider
+		provider         workmodel.Provider
 		prompt           string
 	}{
-		{"codex", "/codex menüyü düzelt", "", task.ProviderCodex, "menüyü düzelt"},
-		{"claude suffix multiline", "  /claude@agent_bridge_bot ilk satır\nikinci satır", "agent_bridge_bot", task.ProviderClaude, "ilk satır\nikinci satır"},
-		{"caption", "/codex ekran görüntüsünü incele", "", task.ProviderCodex, "ekran görüntüsünü incele"},
+		{"codex", "/codex menüyü düzelt", "", workmodel.CodexSubscription, "menüyü düzelt"},
+		{"claude suffix multiline", "  /claude@agent_bridge_bot ilk satır\nikinci satır", "agent_bridge_bot", workmodel.ClaudeSubscription, "ilk satır\nikinci satır"},
+		{"caption", "/codex ekran görüntüsünü incele", "", workmodel.CodexSubscription, "ekran görüntüsünü incele"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

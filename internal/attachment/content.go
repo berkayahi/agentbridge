@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -46,7 +46,7 @@ func NewContentReader(root string, maxSize int64) (*ContentReader, error) {
 	return &ContentReader{root: filepath.Clean(absRoot), maxSize: maxSize}, nil
 }
 
-func (r *ContentReader) Read(ctx context.Context, value task.Attachment) ([]byte, error) {
+func (r *ContentReader) Read(ctx context.Context, value workmodel.Attachment) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

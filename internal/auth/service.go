@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const (
@@ -49,7 +49,7 @@ const (
 )
 
 type Health struct {
-	Provider  task.Provider
+	Provider  workmodel.Provider
 	Kind      HealthKind
 	Message   string
 	CheckedAt time.Time
@@ -66,7 +66,7 @@ const (
 // transcripts are intentionally absent.
 type Incident struct {
 	ID         string
-	Provider   task.Provider
+	Provider   workmodel.Provider
 	Kind       HealthKind
 	Status     IncidentStatus
 	TaskIDs    []string
@@ -76,7 +76,7 @@ type Incident struct {
 
 // IncidentSummary is the only incident shape supplied to notification ports.
 type IncidentSummary struct {
-	Provider task.Provider
+	Provider workmodel.Provider
 	Kind     HealthKind
 	Affected int
 	At       time.Time
@@ -87,13 +87,13 @@ type CommandRunner interface {
 }
 
 type TaskStore interface {
-	NonterminalTasks(context.Context) ([]task.Task, error)
-	Transition(context.Context, string, task.State, task.Event) error
+	NonterminalTasks(context.Context) ([]workmodel.Task, error)
+	Transition(context.Context, string, workmodel.State, workmodel.Event) error
 }
 
 type IncidentStore interface {
 	SaveIncident(context.Context, Incident) error
-	OpenIncident(context.Context, task.Provider) (Incident, error)
+	OpenIncident(context.Context, workmodel.Provider) (Incident, error)
 }
 
 type Notifier interface {
@@ -103,12 +103,12 @@ type Notifier interface {
 // Resumer owns provider-child restart and saved-session recovery. Validation
 // must check the worktree, base revision, and provider session invariants.
 type Resumer interface {
-	ValidateResume(context.Context, task.Task) error
-	ResumeTask(context.Context, task.Task) error
+	ValidateResume(context.Context, workmodel.Task) error
+	ResumeTask(context.Context, workmodel.Task) error
 }
 
 type ProviderSuspender interface {
-	SuspendProvider(context.Context, task.Provider) error
+	SuspendProvider(context.Context, workmodel.Provider) error
 }
 
 type RecoveryAuthorizer interface {
@@ -153,10 +153,10 @@ type Service struct {
 	mu         sync.Mutex
 	openingMu  sync.Mutex
 	closed     bool
-	affected   map[task.Provider][]task.Task
-	open       map[task.Provider]Incident
+	affected   map[workmodel.Provider][]workmodel.Task
+	open       map[workmodel.Provider]Incident
 	recoveries map[string]*recoverySession
-	active     map[task.Provider]string
+	active     map[workmodel.Provider]string
 }
 
 func NewService(options Options) (*Service, error) {
@@ -188,14 +188,14 @@ func NewService(options Options) (*Service, error) {
 		authorizer: options.Authorizer, logger: options.Logger,
 		checkTimeout: options.CheckTimeout, recoveryTTL: options.RecoveryTTL,
 		now: options.Now, newID: options.NewID,
-		affected: make(map[task.Provider][]task.Task), open: make(map[task.Provider]Incident),
+		affected: make(map[workmodel.Provider][]workmodel.Task), open: make(map[workmodel.Provider]Incident),
 		recoveries: make(map[string]*recoverySession),
-		active:     make(map[task.Provider]string),
+		active:     make(map[workmodel.Provider]string),
 	}, nil
 }
 
 // Health runs the provider's local, non-turn-consuming subscription check.
-func (s *Service) Health(ctx context.Context, provider task.Provider) Health {
+func (s *Service) Health(ctx context.Context, provider workmodel.Provider) Health {
 	checkedAt := s.now()
 	name, args, ok := statusCommand(provider)
 	if !ok {
@@ -210,18 +210,18 @@ func (s *Service) Health(ctx context.Context, provider task.Provider) Health {
 	return classifyHealth(provider, output, err, checkedAt)
 }
 
-func statusCommand(provider task.Provider) (string, []string, bool) {
+func statusCommand(provider workmodel.Provider) (string, []string, bool) {
 	switch provider {
-	case task.ProviderCodex:
+	case workmodel.CodexSubscription:
 		return "codex", []string{"login", "status"}, true
-	case task.ProviderClaude:
+	case workmodel.ClaudeSubscription:
 		return "claude", []string{"auth", "status", "--json"}, true
 	default:
 		return "", nil, false
 	}
 }
 
-func classifyHealth(provider task.Provider, output []byte, err error, at time.Time) Health {
+func classifyHealth(provider workmodel.Provider, output []byte, err error, at time.Time) Health {
 	kind := HealthUnknown
 	message := "authentication status could not be determined"
 	lower := strings.ToLower(string(output) + " " + errorText(err))
@@ -234,7 +234,7 @@ func classifyHealth(provider task.Provider, output []byte, err error, at time.Ti
 		kind, message = HealthCommandMissing, "provider command is unavailable"
 	case strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized"):
 		kind, message = HealthUnauthorized, "provider rejected subscription authentication"
-	case provider == task.ProviderClaude && claudeLoggedOut(output):
+	case provider == workmodel.ClaudeSubscription && claudeLoggedOut(output):
 		kind, message = HealthExpired, "subscription authentication requires login"
 	case strings.Contains(lower, "expired") || strings.Contains(lower, "not logged") || strings.Contains(lower, "login required") || strings.Contains(lower, `"loggedin":false`):
 		kind, message = HealthExpired, "subscription authentication requires login"
@@ -242,11 +242,11 @@ func classifyHealth(provider task.Provider, output []byte, err error, at time.Ti
 	return Health{Provider: provider, Kind: kind, Message: message, CheckedAt: at}
 }
 
-func authenticatedOutput(provider task.Provider, output []byte) bool {
+func authenticatedOutput(provider workmodel.Provider, output []byte) bool {
 	switch provider {
-	case task.ProviderCodex:
+	case workmodel.CodexSubscription:
 		return strings.Contains(strings.ToLower(string(output)), "logged in")
-	case task.ProviderClaude:
+	case workmodel.ClaudeSubscription:
 		loggedIn, valid := claudeLoginStatus(output)
 		return valid && loggedIn
 	default:
@@ -283,7 +283,7 @@ func errorText(err error) string {
 
 // CheckProvider performs a preflight or periodic check and opens an incident
 // for every running task that depends on the unhealthy provider.
-func (s *Service) CheckProvider(ctx context.Context, provider task.Provider) (Incident, error) {
+func (s *Service) CheckProvider(ctx context.Context, provider workmodel.Provider) (Incident, error) {
 	health := s.Health(ctx, provider)
 	if err := ctx.Err(); err != nil {
 		return Incident{}, err
@@ -299,7 +299,7 @@ func (s *Service) CheckProvider(ctx context.Context, provider task.Provider) (In
 
 // Monitor performs an immediate check and then checks on each interval until
 // ctx is canceled. It is synchronous so its caller owns the goroutine lifetime.
-func (s *Service) Monitor(ctx context.Context, interval time.Duration, providers ...task.Provider) error {
+func (s *Service) Monitor(ctx context.Context, interval time.Duration, providers ...workmodel.Provider) error {
 	if interval <= 0 {
 		return errors.New("auth monitor interval must be positive")
 	}
@@ -330,7 +330,7 @@ func (s *Service) Monitor(ctx context.Context, interval time.Duration, providers
 
 // HandleProviderError maps runtime authentication failures onto the same
 // durable incident flow used by preflight checks.
-func (s *Service) HandleProviderError(ctx context.Context, provider task.Provider, providerErr error) (Incident, error) {
+func (s *Service) HandleProviderError(ctx context.Context, provider workmodel.Provider, providerErr error) (Incident, error) {
 	health := classifyHealth(provider, nil, providerErr, s.now())
 	if health.Kind != HealthUnauthorized && health.Kind != HealthExpired {
 		return Incident{}, nil
@@ -338,7 +338,7 @@ func (s *Service) HandleProviderError(ctx context.Context, provider task.Provide
 	return s.openIncident(ctx, provider, health.Kind, health.CheckedAt)
 }
 
-func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind HealthKind, at time.Time) (Incident, error) {
+func (s *Service) openIncident(ctx context.Context, provider workmodel.Provider, kind HealthKind, at time.Time) (Incident, error) {
 	s.openingMu.Lock()
 	defer s.openingMu.Unlock()
 	if err := s.hydrateIncident(ctx, provider); err != nil {
@@ -352,37 +352,37 @@ func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind
 		return Incident{}, fmt.Errorf("list affected tasks: %w", err)
 	}
 	for _, value := range values {
-		if value.Provider == provider && value.State == task.Running {
+		if value.Provider == provider && value.State == workmodel.Running {
 			if err := s.suspender.SuspendProvider(ctx, provider); err != nil {
 				return Incident{}, fmt.Errorf("suspend active %s provider sessions: %w", provider, err)
 			}
 			break
 		}
 	}
-	affected := make([]task.Task, 0)
+	affected := make([]workmodel.Task, 0)
 	seen := make(map[string]struct{})
 	for _, value := range values {
-		if value.Provider == provider && value.State == task.AwaitingAuth {
+		if value.Provider == provider && value.State == workmodel.AwaitingAuth {
 			affected = append(affected, value)
 			seen[value.ID] = struct{}{}
 		}
 	}
 	var transitionErr error
 	for _, value := range values {
-		if value.Provider != provider || value.State != task.Running {
+		if value.Provider != provider || value.State != workmodel.Running {
 			continue
 		}
-		event := task.Event{
-			ID: s.newID(), TaskID: value.ID, Type: task.EventAuthRequired,
-			Visibility: task.VisibilityUser, Payload: safePayload(provider, kind), CreatedAt: at,
+		event := workmodel.Event{
+			ID: s.newID(), TaskID: value.ID, Type: workmodel.EventAuthRequired,
+			Visibility: workmodel.VisibilityUser, Payload: safePayload(provider, kind), CreatedAt: at,
 		}
-		if err := s.tasks.Transition(ctx, value.ID, task.AwaitingAuth, event); err != nil {
+		if err := s.tasks.Transition(ctx, value.ID, workmodel.AwaitingAuth, event); err != nil {
 			if transitionErr == nil {
 				transitionErr = fmt.Errorf("await authentication for task %s: %w", value.ID, err)
 			}
 			continue
 		}
-		value.State = task.AwaitingAuth
+		value.State = workmodel.AwaitingAuth
 		if _, ok := seen[value.ID]; !ok {
 			affected = append(affected, value)
 			seen[value.ID] = struct{}{}
@@ -404,7 +404,7 @@ func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind
 		return Incident{}, fmt.Errorf("save authentication incident: %w", err)
 	}
 	s.mu.Lock()
-	s.affected[provider] = append([]task.Task(nil), affected...)
+	s.affected[provider] = append([]workmodel.Task(nil), affected...)
 	s.open[provider] = incident
 	s.mu.Unlock()
 	if !alreadyOpen {
@@ -421,7 +421,7 @@ func (s *Service) openIncident(ctx context.Context, provider task.Provider, kind
 
 type noopSuspender struct{}
 
-func (noopSuspender) SuspendProvider(context.Context, task.Provider) error { return nil }
+func (noopSuspender) SuspendProvider(context.Context, workmodel.Provider) error { return nil }
 
 func sameStrings(a, b []string) bool {
 	if len(a) != len(b) {
@@ -435,11 +435,11 @@ func sameStrings(a, b []string) bool {
 	return true
 }
 
-func safePayload(provider task.Provider, kind HealthKind) json.RawMessage {
+func safePayload(provider workmodel.Provider, kind HealthKind) json.RawMessage {
 	payload, _ := json.Marshal(struct {
-		Provider task.Provider `json:"provider"`
-		Kind     HealthKind    `json:"kind"`
-		Message  string        `json:"message"`
+		Provider workmodel.Provider `json:"provider"`
+		Kind     HealthKind         `json:"kind"`
+		Message  string             `json:"message"`
 	}{provider, kind, "subscription authentication requires operator recovery"})
 	return payload
 }
@@ -456,7 +456,7 @@ const (
 
 type RecoveryView struct {
 	ID         string
-	Provider   task.Provider
+	Provider   workmodel.Provider
 	Status     RecoveryStatus
 	Transcript string
 	StartedAt  time.Time
@@ -466,7 +466,7 @@ type RecoveryView struct {
 type recoverySession struct {
 	mu             sync.Mutex
 	id             string
-	provider       task.Provider
+	provider       workmodel.Provider
 	status         RecoveryStatus
 	transcript     []byte
 	startedAt      time.Time
@@ -479,7 +479,7 @@ type recoverySession struct {
 	acceptingInput bool
 }
 
-func (s *Service) StartRecovery(ctx context.Context, principal string, provider task.Provider) (string, error) {
+func (s *Service) StartRecovery(ctx context.Context, principal string, provider workmodel.Provider) (string, error) {
 	if err := s.authorizer.AuthorizeRecovery(ctx, principal); err != nil {
 		return "", ErrForbidden
 	}
@@ -513,11 +513,11 @@ func (s *Service) StartRecovery(ctx context.Context, principal string, provider 
 	return id, nil
 }
 
-func loginCommand(provider task.Provider) (string, []string, bool) {
+func loginCommand(provider workmodel.Provider) (string, []string, bool) {
 	switch provider {
-	case task.ProviderCodex:
+	case workmodel.CodexSubscription:
 		return "codex", []string{"login", "--device-auth"}, true
-	case task.ProviderClaude:
+	case workmodel.ClaudeSubscription:
 		return "claude", []string{"auth", "login", "--claudeai"}, true
 	default:
 		return "", nil, false
@@ -576,7 +576,7 @@ func (s *Service) runRecovery(ctx context.Context, session *recoverySession, nam
 	}
 }
 
-func (s *Service) hydrateIncident(ctx context.Context, provider task.Provider) error {
+func (s *Service) hydrateIncident(ctx context.Context, provider workmodel.Provider) error {
 	s.mu.Lock()
 	_, ok := s.open[provider]
 	s.mu.Unlock()
@@ -598,7 +598,7 @@ func (s *Service) hydrateIncident(ctx context.Context, provider task.Provider) e
 	return nil
 }
 
-// ResumeTask explicitly selects one authentication-paused task. A successful
+// ResumeTask explicitly selects one authentication-paused workmodel. A successful
 // provider login never resumes a whole incident, and every selected task is
 // revalidated immediately before its durable state transition.
 func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
@@ -609,7 +609,7 @@ func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
 	if err != nil {
 		return fmt.Errorf("reload authentication task: %w", err)
 	}
-	var selected task.Task
+	var selected workmodel.Task
 	found := false
 	for _, value := range values {
 		if value.ID == id {
@@ -620,7 +620,7 @@ func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
 	if !found {
 		return ErrNotFound
 	}
-	if selected.State != task.AwaitingAuth {
+	if selected.State != workmodel.AwaitingAuth {
 		return fmt.Errorf("auth: task %s is not awaiting authentication", selected.ID)
 	}
 	if health := s.Health(ctx, selected.Provider); health.Kind != HealthHealthy {
@@ -630,11 +630,11 @@ func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
 		_ = s.pauseTask(context.WithoutCancel(ctx), selected, "saved task invariants changed; manual review required")
 		return err
 	}
-	event := task.Event{ID: s.newID(), TaskID: selected.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload("subscription authentication restored; operator selected resume"), CreatedAt: s.now()}
-	if err := s.tasks.Transition(ctx, selected.ID, task.Running, event); err != nil {
+	event := workmodel.Event{ID: s.newID(), TaskID: selected.ID, Type: workmodel.EventStateTransitioned, Visibility: workmodel.VisibilityUser, Payload: statePayload("subscription authentication restored; operator selected resume"), CreatedAt: s.now()}
+	if err := s.tasks.Transition(ctx, selected.ID, workmodel.Running, event); err != nil {
 		return fmt.Errorf("resume task %s: %w", selected.ID, err)
 	}
-	selected.State = task.Running
+	selected.State = workmodel.Running
 	if err := s.resumer.ResumeTask(ctx, selected); err != nil {
 		if transitionErr := s.pauseTask(context.WithoutCancel(ctx), selected, "saved provider session could not be resumed safely"); transitionErr != nil {
 			return fmt.Errorf("resume task %s: %w; pause task: %v", selected.ID, err, transitionErr)
@@ -644,7 +644,7 @@ func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
 	return s.resolveIfNoAffected(context.WithoutCancel(ctx), selected.Provider, s.now())
 }
 
-func (s *Service) pauseAffected(ctx context.Context, provider task.Provider, reason string) error {
+func (s *Service) pauseAffected(ctx context.Context, provider workmodel.Provider, reason string) error {
 	values, err := s.durableAffected(ctx, provider)
 	if err != nil {
 		return err
@@ -657,23 +657,23 @@ func (s *Service) pauseAffected(ctx context.Context, provider task.Provider, rea
 	return nil
 }
 
-func (s *Service) durableAffected(ctx context.Context, provider task.Provider) ([]task.Task, error) {
+func (s *Service) durableAffected(ctx context.Context, provider workmodel.Provider) ([]workmodel.Task, error) {
 	values, err := s.tasks.NonterminalTasks(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("reload authentication tasks: %w", err)
 	}
-	affected := make([]task.Task, 0)
+	affected := make([]workmodel.Task, 0)
 	for _, value := range values {
-		if value.Provider == provider && value.State == task.AwaitingAuth {
+		if value.Provider == provider && value.State == workmodel.AwaitingAuth {
 			affected = append(affected, value)
 		}
 	}
 	return affected, nil
 }
 
-func (s *Service) pauseTask(ctx context.Context, value task.Task, reason string) error {
-	event := task.Event{ID: s.newID(), TaskID: value.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload(reason), CreatedAt: s.now()}
-	if err := s.tasks.Transition(ctx, value.ID, task.Paused, event); err != nil {
+func (s *Service) pauseTask(ctx context.Context, value workmodel.Task, reason string) error {
+	event := workmodel.Event{ID: s.newID(), TaskID: value.ID, Type: workmodel.EventStateTransitioned, Visibility: workmodel.VisibilityUser, Payload: statePayload(reason), CreatedAt: s.now()}
+	if err := s.tasks.Transition(ctx, value.ID, workmodel.Paused, event); err != nil {
 		return fmt.Errorf("pause task %s: %w", value.ID, err)
 	}
 	return nil
@@ -686,7 +686,7 @@ func statePayload(reason string) json.RawMessage {
 	return payload
 }
 
-func (s *Service) resolveIncident(ctx context.Context, provider task.Provider, at time.Time) error {
+func (s *Service) resolveIncident(ctx context.Context, provider workmodel.Provider, at time.Time) error {
 	s.mu.Lock()
 	incident, ok := s.open[provider]
 	s.mu.Unlock()
@@ -706,7 +706,7 @@ func (s *Service) resolveIncident(ctx context.Context, provider task.Provider, a
 	return nil
 }
 
-func (s *Service) resolveIfNoAffected(ctx context.Context, provider task.Provider, at time.Time) error {
+func (s *Service) resolveIfNoAffected(ctx context.Context, provider workmodel.Provider, at time.Time) error {
 	if err := s.hydrateIncident(ctx, provider); err != nil {
 		return err
 	}

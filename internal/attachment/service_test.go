@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestServiceAcceptsDetectedJPEGPNGAndWebPAndIgnoresRemoteFilename(t *testing.T) {
@@ -187,14 +187,14 @@ func (f *fakeLocator) ActiveTaskIDs(context.Context, int64) ([]string, error) {
 	return append([]string(nil), f.active...), nil
 }
 
-type memoryStore struct{ attachments []task.Attachment }
+type memoryStore struct{ attachments []workmodel.Attachment }
 
-func (m *memoryStore) SaveAttachment(ctx context.Context, a task.Attachment) error {
+func (m *memoryStore) SaveAttachment(ctx context.Context, a workmodel.Attachment) error {
 	m.attachments = append(m.attachments, a)
 	return nil
 }
-func (m *memoryStore) Attachments(ctx context.Context, taskID string) ([]task.Attachment, error) {
-	var out []task.Attachment
+func (m *memoryStore) Attachments(ctx context.Context, taskID string) ([]workmodel.Attachment, error) {
+	var out []workmodel.Attachment
 	for _, a := range m.attachments {
 		if a.TaskID == taskID {
 			out = append(out, a)

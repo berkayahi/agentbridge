@@ -10,7 +10,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/events"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -41,7 +41,7 @@ func (s *Server) taskStream(c fiber.Ctx) error {
 		started := lastID == ""
 		foundLast := lastID == ""
 		for _, event := range replay {
-			if event.Visibility != task.VisibilityUser {
+			if event.Visibility != workmodel.VisibilityUser {
 				continue
 			}
 			if !started {
@@ -85,8 +85,8 @@ func (s *Server) taskStream(c fiber.Ctx) error {
 				if _, duplicate := seen[delivery.Event.ID]; duplicate {
 					continue
 				}
-				var event task.Event
-				if json.Unmarshal(delivery.Event.Payload, &event) != nil || event.TaskID != taskID || event.Visibility != task.VisibilityUser {
+				var event workmodel.Event
+				if json.Unmarshal(delivery.Event.Payload, &event) != nil || event.TaskID != taskID || event.Visibility != workmodel.VisibilityUser {
 					continue
 				}
 				if writeSSE(writer, event.ID, string(event.Type), event.Payload) != nil || writer.Flush() != nil {
@@ -117,7 +117,7 @@ func writeSSE(writer *bufio.Writer, id, eventType string, payload []byte) error 
 // mergeReplay is the deterministic core of replay/live gap handling. Live
 // events already present in replay are skipped; a dropped delivery forces the
 // connection to close so EventSource reconnects from its last event ID.
-func mergeReplay(replay []task.Event, live []events.Delivery, lastID string) ([]string, bool) {
+func mergeReplay(replay []workmodel.Event, live []events.Delivery, lastID string) ([]string, bool) {
 	seen := make(map[string]struct{}, len(replay))
 	result := make([]string, 0, len(replay)+len(live))
 	started := lastID == ""

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const (
@@ -106,7 +106,7 @@ func NewAdapter(rpc rpcTransport, cfg AdapterConfig) *Adapter {
 	return a
 }
 
-func (a *Adapter) Name() task.Provider { return task.ProviderCodex }
+func (a *Adapter) Name() workmodel.Provider { return workmodel.CodexSubscription }
 
 func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	if err := req.Input.Validate(); err != nil {
@@ -156,7 +156,7 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 	session.TaskID = req.TaskID
 	session.ThreadID = threadID
 	session.ExternalID = threadID
-	session.Provider = task.ProviderCodex
+	session.Provider = workmodel.CodexSubscription
 	if !session.ID.Valid() {
 		id, err := provider.NewID(threadID)
 		if err != nil {
@@ -239,7 +239,7 @@ func (a *Adapter) Usage(ctx context.Context) (provider.Usage, error) {
 	if err := a.rpc.Call(ctx, "account/usage/read", map[string]any{}, &ignored); err != nil {
 		return provider.Usage{}, mapCallError(err)
 	}
-	usage := provider.Usage{Provider: task.ProviderCodex, ObservedAt: a.now().UTC()}
+	usage := provider.Usage{Provider: workmodel.CodexSubscription, ObservedAt: a.now().UTC()}
 	usage.Windows = appendWindow(usage.Windows, "primary", rateLimits.RateLimits.Primary)
 	usage.Windows = appendWindow(usage.Windows, "secondary", rateLimits.RateLimits.Secondary)
 	return usage, nil
@@ -470,7 +470,7 @@ func newSession(taskID provider.ID, threadID string) (provider.Session, error) {
 	if err != nil {
 		return provider.Session{}, fmt.Errorf("invalid Codex thread id: %w", err)
 	}
-	return provider.Session{ID: id, TaskID: taskID, ExternalID: threadID, ThreadID: threadID, Provider: task.ProviderCodex}, nil
+	return provider.Session{ID: id, TaskID: taskID, ExternalID: threadID, ThreadID: threadID, Provider: workmodel.CodexSubscription}, nil
 }
 
 func codexInput(input provider.Input) []map[string]any {

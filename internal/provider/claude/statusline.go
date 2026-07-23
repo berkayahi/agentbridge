@@ -11,7 +11,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/controlsocket"
 	"github.com/berkayahi/agentbridge/internal/provider"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const maxStatuslineBytes = 64 * 1024
@@ -41,7 +41,7 @@ func (c *UsageCache) ProviderUsage() (provider.Usage, error) {
 	if snapshot.ObservedAt.IsZero() {
 		return provider.Usage{}, ErrUsageUnavailable
 	}
-	usage := provider.Usage{Provider: task.ProviderClaude, ObservedAt: snapshot.ObservedAt.UTC()}
+	usage := provider.Usage{Provider: workmodel.ClaudeSubscription, ObservedAt: snapshot.ObservedAt.UTC()}
 	if snapshot.FiveHour != nil {
 		usage.Windows = append(usage.Windows, provider.UsageWindow{Name: "five_hour", UsedPercent: snapshot.FiveHour.UsedPercent, ResetsAt: snapshot.FiveHour.ResetsAt.UTC()})
 	}

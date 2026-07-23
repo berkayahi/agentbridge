@@ -8,7 +8,7 @@ import (
 
 type Controller struct{ kernel *kernel.Kernel }
 
-func New(k *kernel.Kernel) *Controller { return &Controller{kernel: k} }
+func NewKernelController(k *kernel.Kernel) *Controller { return &Controller{kernel: k} }
 
 func (c *Controller) Start(ctx context.Context, command kernel.StartExecution) error {
 	return c.kernel.Start(ctx, command)

@@ -17,26 +17,28 @@ import (
 	"sync"
 	"time"
 
-	bridgeapp "github.com/berkayahi/agentbridge/internal/app"
 	"github.com/berkayahi/agentbridge/internal/approval"
 	"github.com/berkayahi/agentbridge/internal/attachment"
 	"github.com/berkayahi/agentbridge/internal/auth"
 	"github.com/berkayahi/agentbridge/internal/buildinfo"
 	"github.com/berkayahi/agentbridge/internal/config"
+	bridgeapp "github.com/berkayahi/agentbridge/internal/controller/standalone"
 	"github.com/berkayahi/agentbridge/internal/controlsocket"
 	"github.com/berkayahi/agentbridge/internal/events"
 	bridgegit "github.com/berkayahi/agentbridge/internal/git"
+	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/process"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/claude"
 	"github.com/berkayahi/agentbridge/internal/provider/codex"
+	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
 	"github.com/berkayahi/agentbridge/internal/verify"
 	"github.com/berkayahi/agentbridge/internal/web"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -44,12 +46,15 @@ const maxAttachmentBytes = 20 << 20
 
 type composedDaemon struct {
 	application *bridgeapp.App
+	kernel      *kernel.Kernel
+	controller  *bridgeapp.Controller
+	runtimes    *bridgeRuntime.Registry
 	telegram    *telegram.Client
 	dashboard   *web.Server
 	control     *controlsocket.Server
 	auth        *auth.Service
 	closers     []io.Closer
-	providers   []task.Provider
+	providers   []workmodel.Provider
 	listen      string
 
 	monitorMu      sync.Mutex
@@ -111,11 +116,15 @@ func (r fiberRuntime) ShutdownWithContext(ctx context.Context) error {
 	return r.app.ShutdownWithContext(ctx)
 }
 
+func openStandaloneStore(ctx context.Context, path string) (*sqlite.RuntimeStore, error) {
+	return sqlite.OpenV2RuntimeWithRuntimeLock(ctx, path)
+}
+
 func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, credential config.Credential, environment []string) (daemonRuntime, error) {
 	if cfg.Mode == "managed" {
 		return buildManagedDaemon(ctx, cfg, paths)
 	}
-	data, err := sqlite.Open(ctx, paths.database)
+	data, err := openStandaloneStore(ctx, paths.database)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +134,11 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		}
 		_ = data.Close()
 		return nil, cause
+	}
+	for id, profile := range cfg.Repositories {
+		if err := data.EnsureRepositoryBinding(ctx, id, profile.Remote); err != nil {
+			return fail(err)
+		}
 	}
 	client, err := telegram.NewClient(credential.Value(), telegram.ClientOptions{ForceIPv4: true})
 	if err != nil {
@@ -154,11 +168,17 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	}
 
 	authCommands := auth.ExecCommandRunner{Executables: configuredExecutables(cfg), Environment: environment}
-	providers, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
+	providers, runtimes, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
 	if err != nil {
 		control.Close()
 		return fail(err, providerClosers...)
 	}
+	bridgeKernel, err := kernel.New(kernel.Config{Work: data, Owner: "standalone-runtime", IntentTTL: 24 * time.Hour})
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
+	bridgeController := bridgeapp.NewKernelController(bridgeKernel)
 	profiles := composeProfiles(cfg, paths)
 	workspace := &workspaceAdapter{
 		profiles: profiles, manager: bridgegit.WorkspaceManager{Git: bridgegit.Runner{}, Port: data},
@@ -176,16 +196,16 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		return fail(err, providerClosers...)
 	}
 
-	models, deployments := make(map[task.Provider]string), make(map[string]string)
+	models, deployments := make(map[workmodel.Provider]string), make(map[string]string)
 	for name, value := range cfg.Providers {
-		models[task.Provider(name)] = value.Model
+		models[workmodel.Provider(name)] = value.Model
 	}
 	for name, value := range cfg.Repositories {
 		deployments[name] = value.DeploymentURL
 	}
 	var authService *auth.Service
 	daemon := &composedDaemon{
-		telegram: client, control: control, closers: providerClosers,
+		kernel: bridgeKernel, controller: bridgeController, runtimes: runtimes, telegram: client, control: control, closers: providerClosers,
 	}
 	application, err := bridgeapp.New(bridgeapp.Config{
 		DefaultRepository: cfg.DefaultRepository, Listen: cfg.Server.Listen, QueueSize: 16,
@@ -194,7 +214,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		Store: data, Messenger: client, Providers: providers, Workspace: workspace, Delivery: delivery,
 		Authorizer: telegram.NewAuthorizer(cfg.Telegram.AllowedUserIDs, cfg.Telegram.PairedChatID, 512, 10*time.Minute, nil),
 		Signer:     callbackSigner, Approvals: approvalBroker, Attachments: attachments,
-		AuthFailure: func(failureCtx context.Context, providerName task.Provider, cause error) {
+		AuthFailure: func(failureCtx context.Context, providerName workmodel.Provider, cause error) {
 			if authService != nil {
 				_, _ = authService.HandleProviderError(failureCtx, providerName, cause)
 			}
@@ -235,7 +255,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
-	providerNames := make([]task.Provider, 0, len(providers))
+	providerNames := make([]workmodel.Provider, 0, len(providers))
 	for name := range providers {
 		providerNames = append(providerNames, name)
 	}
@@ -286,34 +306,37 @@ func claudeSubscriptionAuthChecker(commands auth.CommandRunner, now func() time.
 	}
 }
 
-func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths, environment []string, data *sqlite.Store, control *controlsocket.Server, claudeUsage *claude.UsageCache, redactor *security.Redactor, authCommands auth.CommandRunner) (map[task.Provider]provider.Provider, []io.Closer, error) {
-	providers := make(map[task.Provider]provider.Provider)
+func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths, environment []string, data *sqlite.RuntimeStore, control *controlsocket.Server, claudeUsage *claude.UsageCache, redactor *security.Redactor, authCommands auth.CommandRunner) (map[workmodel.Provider]provider.Provider, *bridgeRuntime.Registry, []io.Closer, error) {
+	providers := make(map[workmodel.Provider]provider.Provider)
+	adapters := make([]bridgeRuntime.Adapter, 0, 2)
 	var closers []io.Closer
 	sink := providerSessionSink{store: data}
-	if value, ok := cfg.Providers[string(task.ProviderCodex)]; ok {
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
 		process, err := codex.StartAppServer(ctx, value.Executable, environment)
 		if err != nil {
-			return nil, closers, err
+			return nil, nil, closers, err
 		}
 		closers = append(closers, process)
-		providers[task.ProviderCodex] = codex.NewAdapter(process.Client, codex.AdapterConfig{
+		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return strconv.FormatInt(cfg.Telegram.AllowedUserIDs[0], 10) },
 		})
+		providers[workmodel.CodexSubscription] = adapter
+		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
 	}
-	if value, ok := cfg.Providers[string(task.ProviderClaude)]; ok {
+	if value, ok := cfg.Providers[string(workmodel.ClaudeSubscription)]; ok {
 		executable, err := os.Executable()
 		if err != nil {
-			return nil, closers, err
+			return nil, nil, closers, err
 		}
 		if err := claude.EnsureStatuslineSettings(paths.claudeConfig, executable); err != nil {
-			return nil, closers, err
+			return nil, nil, closers, err
 		}
 		mcpConfig, err := claude.WriteMCPConfig(paths.mcpConfig, executable)
 		if err != nil {
-			return nil, closers, err
+			return nil, nil, closers, err
 		}
-		providers[task.ProviderClaude] = claude.NewAdapter(claude.AdapterConfig{
+		adapter := claude.NewAdapter(claude.AdapterConfig{
 			Process:  claude.ProcessConfig{Executable: value.Executable, MCPConfigPath: mcpConfig, ClaudeConfigDir: paths.claudeConfig, Model: value.Model, Environment: environment},
 			Sessions: sink, Usage: claudeUsage, Auth: claudeSubscriptionAuthChecker(authCommands, nil),
 			Scope: func(id provider.ID) (claude.TaskScope, error) {
@@ -321,26 +344,38 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 				if _, err := rand.Read(capability); err != nil {
 					return claude.TaskScope{}, err
 				}
-				control.Grant(id.String(), string(task.ProviderClaude), capability)
+				control.Grant(id.String(), string(workmodel.ClaudeSubscription), capability)
 				return claude.TaskScope{ControlSocket: paths.controlSocket, Capability: capability, Revoke: func() { control.Revoke(id.String()) }}, nil
 			},
 		})
+		providers[workmodel.ClaudeSubscription] = adapter
+		adapters = append(adapters, claude.NewRuntimeAdapter(adapter))
 	}
 	if len(providers) == 0 {
-		return nil, closers, errors.New("no supported provider is configured")
+		return nil, nil, closers, errors.New("no supported provider is configured")
 	}
-	return providers, closers, nil
+	runtimes, err := bridgeRuntime.NewRegistry(adapters...)
+	if err != nil {
+		return nil, nil, closers, fmt.Errorf("register runtime adapters: %w", err)
+	}
+	return providers, runtimes, closers, nil
 }
 
-type providerSessionSink struct{ store *sqlite.Store }
+type providerSessionSink struct {
+	store interface {
+		UpsertSession(context.Context, workmodel.Session) error
+	}
+}
 
 func (s providerSessionSink) SaveSession(ctx context.Context, value provider.Session) error {
 	now := time.Now().UTC()
-	return s.store.UpsertSession(ctx, task.Session{ID: value.ID.String(), TaskID: value.TaskID.String(), Provider: value.Provider, ProviderSessionID: value.ExternalID, ProviderThreadID: value.ThreadID, Status: "running", Resumable: true, CreatedAt: now, UpdatedAt: now})
+	return s.store.UpsertSession(ctx, workmodel.Session{ID: value.ID.String(), TaskID: value.TaskID.String(), Provider: value.Provider, ProviderSessionID: value.ExternalID, ProviderThreadID: value.ThreadID, Status: "running", Resumable: true, CreatedAt: now, UpdatedAt: now})
 }
 
 type approvalSink struct {
-	store    *sqlite.Store
+	store interface {
+		UpsertApproval(context.Context, workmodel.Approval) error
+	}
 	redactor *security.Redactor
 }
 
@@ -353,12 +388,12 @@ func (s approvalSink) SaveApproval(ctx context.Context, value codex.ApprovalRequ
 		Summary string `json:"summary"`
 	}{redactor.RedactString(value.Summary)})
 	expires := value.ExpiresAt
-	return s.store.UpsertApproval(ctx, task.Approval{ID: value.ID.String(), TaskID: value.TaskID.String(), Kind: value.Kind, Status: task.ApprovalPending, RequestPayload: payload, RequestedAt: value.CreatedAt, ExpiresAt: &expires})
+	return s.store.UpsertApproval(ctx, workmodel.Approval{ID: value.ID.String(), TaskID: value.TaskID.String(), Kind: value.Kind, Status: workmodel.ApprovalPending, RequestPayload: payload, RequestedAt: value.CreatedAt, ExpiresAt: &expires})
 }
 
 type controlHandler struct {
 	store interface {
-		Task(context.Context, string) (task.Task, error)
+		Task(context.Context, string) (workmodel.Task, error)
 	}
 	messenger   telegram.Messenger
 	claudeUsage *claude.UsageCache
@@ -492,12 +527,12 @@ func openTaskArtifact(worktree, candidate, requestedName string) (*os.File, stri
 }
 
 type healthTaskStore interface {
-	NonterminalTasks(context.Context) ([]task.Task, error)
+	NonterminalTasks(context.Context) ([]workmodel.Task, error)
 }
 
 type healthAdapter struct {
 	store     healthTaskStore
-	providers map[task.Provider]provider.Provider
+	providers map[workmodel.Provider]provider.Provider
 }
 
 func (h healthAdapter) Health(ctx context.Context) (web.Health, error) {
@@ -507,7 +542,7 @@ func (h healthAdapter) Health(ctx context.Context) (web.Health, error) {
 	}
 	active := 0
 	for _, value := range values {
-		if value.State == task.Running {
+		if value.State == workmodel.Running {
 			active++
 		}
 	}
@@ -531,7 +566,7 @@ func (h healthAdapter) Health(ctx context.Context) (web.Health, error) {
 }
 
 type usageAdapter struct {
-	providers map[task.Provider]provider.Provider
+	providers map[workmodel.Provider]provider.Provider
 }
 
 func (u usageAdapter) Usage(ctx context.Context) ([]web.ProviderUsage, error) {
@@ -576,17 +611,17 @@ func (n authNotifier) AuthIncident(ctx context.Context, value auth.IncidentSumma
 
 type appRecoveryResumer struct{ application *bridgeapp.App }
 
-func (r *appRecoveryResumer) ValidateResume(ctx context.Context, value task.Task) error {
+func (r *appRecoveryResumer) ValidateResume(ctx context.Context, value workmodel.Task) error {
 	return r.application.ValidateResume(ctx, value)
 }
-func (r *appRecoveryResumer) ResumeTask(ctx context.Context, value task.Task) error {
+func (r *appRecoveryResumer) ResumeTask(ctx context.Context, value workmodel.Task) error {
 	return r.application.ResumeTask(ctx, value)
 }
 
 type recoveryAdapter struct{ service *auth.Service }
 
 func (r recoveryAdapter) Start(ctx context.Context, providerName, identity string) (web.RecoveryView, error) {
-	id, err := r.service.StartRecovery(ctx, identity, task.Provider(providerName))
+	id, err := r.service.StartRecovery(ctx, identity, workmodel.Provider(providerName))
 	if err != nil {
 		return web.RecoveryView{}, err
 	}
@@ -634,7 +669,7 @@ func (w *workspaceAdapter) Prepare(ctx context.Context, profileID, taskID string
 	value, err := w.manager.Prepare(ctx, profile, taskID)
 	return bridgeapp.Workspace{BaseSHA: value.BaseSHA, Path: value.Path}, err
 }
-func (w *workspaceAdapter) Inspect(ctx context.Context, value task.Task) (bridgeapp.WorkspaceInspection, error) {
+func (w *workspaceAdapter) Inspect(ctx context.Context, value workmodel.Task) (bridgeapp.WorkspaceInspection, error) {
 	profile, ok := w.profiles[value.RepoProfileID]
 	if !ok {
 		return bridgeapp.WorkspaceInspection{}, bridgegit.ErrInvalidProfile
@@ -670,7 +705,7 @@ type deliveryAdapter struct {
 	git      bridgegit.Runner
 }
 
-func (d *deliveryAdapter) Changed(ctx context.Context, value task.Task, workspace bridgeapp.Workspace) (bool, error) {
+func (d *deliveryAdapter) Changed(ctx context.Context, value workmodel.Task, workspace bridgeapp.Workspace) (bool, error) {
 	if _, ok := d.config[value.RepoProfileID]; !ok {
 		return false, bridgegit.ErrInvalidProfile
 	}
@@ -681,7 +716,7 @@ func (d *deliveryAdapter) Changed(ctx context.Context, value task.Task, workspac
 	return result.Stdout != "", nil
 }
 
-func (d *deliveryAdapter) Verify(ctx context.Context, value task.Task, workspace bridgeapp.Workspace) error {
+func (d *deliveryAdapter) Verify(ctx context.Context, value workmodel.Task, workspace bridgeapp.Workspace) error {
 	profile, ok := d.config[value.RepoProfileID]
 	if !ok {
 		return bridgegit.ErrInvalidProfile
@@ -693,7 +728,7 @@ func (d *deliveryAdapter) Verify(ctx context.Context, value task.Task, workspace
 	delivery, request := d.deliveryRequest(value, workspace, commands)
 	return delivery.Verify(ctx, request)
 }
-func (d *deliveryAdapter) Commit(ctx context.Context, value task.Task, workspace bridgeapp.Workspace) (string, error) {
+func (d *deliveryAdapter) Commit(ctx context.Context, value workmodel.Task, workspace bridgeapp.Workspace) (string, error) {
 	profile, ok := d.config[value.RepoProfileID]
 	if !ok {
 		return "", bridgegit.ErrInvalidProfile
@@ -709,7 +744,7 @@ func (d *deliveryAdapter) Commit(ctx context.Context, value task.Task, workspace
 	}
 	return result.CommitSHA, nil
 }
-func (d *deliveryAdapter) Push(ctx context.Context, value task.Task, workspace bridgeapp.Workspace, commit string) (string, error) {
+func (d *deliveryAdapter) Push(ctx context.Context, value workmodel.Task, workspace bridgeapp.Workspace, commit string) (string, error) {
 	profile, ok := d.config[value.RepoProfileID]
 	if !ok {
 		return "", bridgegit.ErrInvalidProfile
@@ -726,7 +761,7 @@ func (d *deliveryAdapter) Push(ctx context.Context, value task.Task, workspace b
 	return result.PushRef, nil
 }
 
-func (d *deliveryAdapter) deliveryRequest(value task.Task, workspace bridgeapp.Workspace, commands []verify.Command) (bridgegit.Delivery, bridgegit.DeliveryRequest) {
+func (d *deliveryAdapter) deliveryRequest(value workmodel.Task, workspace bridgeapp.Workspace, commands []verify.Command) (bridgegit.Delivery, bridgegit.DeliveryRequest) {
 	profile := d.config[value.RepoProfileID]
 	gitProfile := d.profiles[value.RepoProfileID]
 	return bridgegit.Delivery{Git: d.git, Verifier: verificationPort{commands: commands}}, bridgegit.DeliveryRequest{
@@ -743,4 +778,4 @@ func (v verificationPort) Verify(ctx context.Context, worktree string) error {
 }
 
 var _ fs.FS = os.DirFS("/")
-var _ store.Store = (*sqlite.Store)(nil)
+var _ store.Store = (*sqlite.RuntimeStore)(nil)

@@ -366,6 +366,7 @@ func validateCutoverMapping(ctx context.Context, tx *sql.Tx, lineage Lineage) er
 		target string
 	}{
 		{name: "local tasks", source: "_cutover_source_tasks", target: "local_tasks"},
+		{name: "task presentations", source: "_cutover_source_tasks", target: "task_presentations"},
 		{name: "executions", source: "_cutover_source_tasks", target: "executions"},
 		{name: "events", source: "_cutover_source_task_events", target: "execution_events"},
 		{name: "approvals", source: "_cutover_source_approvals", target: "approvals"},
@@ -458,9 +459,12 @@ func mapLegacyRows(ctx context.Context, tx *sql.Tx, lineage Lineage) error {
 	statements := []string{
 		`INSERT INTO repository_bindings(id, remote_url, created_at)
 			 SELECT DISTINCT repo_profile_id, 'legacy:' || repo_profile_id, MIN(created_at) FROM _cutover_source_tasks GROUP BY repo_profile_id`,
-		`INSERT INTO local_tasks(id, title, prompt, active_execution_id, base_sha, worktree_path, commit_sha, push_ref, deployment_url, failure_reason, created_at, updated_at)
-			 SELECT id, title, prompt, CASE WHEN state IN ('completed','failed','canceled') THEN NULL ELSE 'legacy-execution-' || id END,
-			 base_sha, worktree_path, commit_sha, push_ref, deployment_url, failure_reason, created_at, updated_at FROM _cutover_source_tasks`,
+		`INSERT INTO local_tasks(id, repo_profile_id, title, prompt, state, provider, active_execution_id, base_sha, worktree_path, commit_sha, push_ref, deployment_url, failure_reason, started_at, finished_at, created_at, updated_at)
+			 SELECT id, repo_profile_id, title, prompt, state, provider,
+			 CASE WHEN state IN ('completed','failed','canceled') THEN NULL ELSE 'legacy-execution-' || id END,
+			 base_sha, worktree_path, commit_sha, push_ref, deployment_url, failure_reason, started_at, finished_at, created_at, updated_at FROM _cutover_source_tasks`,
+		`INSERT INTO task_presentations(local_task_id, telegram_chat_id, telegram_message_id)
+			 SELECT id, telegram_chat_id, telegram_message_id FROM _cutover_source_tasks`,
 		`INSERT INTO sessions(id, runtime_id, repository_id, local_task_id, active_local_task_id, provider_session_id, provider_thread_id, status, resumable, created_at, updated_at)
 			 SELECT s.id, s.provider, t.repo_profile_id, t.id,
 			 CASE WHEN t.state IN ('completed','failed','canceled') THEN NULL WHEN s.id = (SELECT s2.id FROM _cutover_source_sessions s2 WHERE s2.task_id = t.id ORDER BY (s2.provider_session_id = t.provider_session_id) DESC, s2.updated_at DESC, s2.id DESC LIMIT 1) THEN s.task_id ELSE NULL END,
@@ -479,14 +483,14 @@ func mapLegacyRows(ctx context.Context, tx *sql.Tx, lineage Lineage) error {
 			 t.provider, t.repo_profile_id, NULL,
 			 CASE WHEN t.state IN ('queued','completed','failed','canceled','awaiting_approval','awaiting_auth','running') THEN t.state WHEN t.state = 'preparing' THEN 'accepted' ELSE 'running' END,
 			 0, 1, 'legacy-command-' || t.id, 0, '{}', t.state, t.started_at, t.finished_at, t.created_at, t.updated_at FROM _cutover_source_tasks t`,
-		`INSERT INTO execution_events(id, execution_id, event_type, visibility, provider_event_id, redacted_payload, created_at)
-			 SELECT id, 'legacy-execution-' || task_id, event_type, visibility, provider_event_id, redacted_payload, created_at FROM _cutover_source_task_events`,
-		`INSERT INTO approvals(id, execution_id, kind, status, request_payload, decision_payload, requested_at, expires_at, resolved_at)
-			 SELECT id, 'legacy-execution-' || task_id, kind, status, request_payload, decision_payload, requested_at, expires_at, resolved_at FROM _cutover_source_approvals`,
-		`INSERT INTO attachments(id, execution_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at)
-			 SELECT id, 'legacy-execution-' || task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at FROM _cutover_source_attachments`,
-		`INSERT INTO auth_incidents(id, execution_id, provider, status, redacted_detail, detected_at, resolved_at)
-			 SELECT id, CASE WHEN task_id IS NULL THEN NULL ELSE 'legacy-execution-' || task_id END, provider, status, redacted_detail, detected_at, resolved_at FROM _cutover_source_auth_incidents`,
+		`INSERT INTO execution_events(id, local_task_id, execution_id, event_type, visibility, provider_event_id, redacted_payload, created_at)
+			 SELECT id, task_id, 'legacy-execution-' || task_id, event_type, visibility, provider_event_id, redacted_payload, created_at FROM _cutover_source_task_events`,
+		`INSERT INTO approvals(id, local_task_id, execution_id, kind, status, request_payload, decision_payload, requested_at, expires_at, resolved_at)
+			 SELECT id, task_id, 'legacy-execution-' || task_id, kind, status, request_payload, decision_payload, requested_at, expires_at, resolved_at FROM _cutover_source_approvals`,
+		`INSERT INTO attachments(id, local_task_id, execution_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at)
+			 SELECT id, task_id, 'legacy-execution-' || task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at FROM _cutover_source_attachments`,
+		`INSERT INTO auth_incidents(id, local_task_id, execution_id, provider, status, redacted_detail, detected_at, resolved_at)
+			 SELECT id, task_id, CASE WHEN task_id IS NULL THEN NULL ELSE 'legacy-execution-' || task_id END, provider, status, redacted_detail, detected_at, resolved_at FROM _cutover_source_auth_incidents`,
 	}
 	if lineage == LineageDonor {
 		statements = append(statements,

@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -47,8 +47,8 @@ type FileSource interface {
 }
 
 type MetadataStore interface {
-	SaveAttachment(context.Context, task.Attachment) error
-	Attachments(context.Context, string) ([]task.Attachment, error)
+	SaveAttachment(context.Context, workmodel.Attachment) error
+	Attachments(context.Context, string) ([]workmodel.Attachment, error)
 }
 
 type TaskLocator interface {
@@ -98,33 +98,33 @@ func NewService(root string, maxSize int64, draftWindow time.Duration, store Met
 	return &Service{root: root, maxSize: maxSize, draftWindow: draftWindow, store: store, source: source, locator: locator, newID: newID, now: now, drafts: make(map[int64]draft), albums: make(map[string]draft)}, nil
 }
 
-func (s *Service) Save(ctx context.Context, in IncomingFile) (task.Attachment, error) {
+func (s *Service) Save(ctx context.Context, in IncomingFile) (workmodel.Attachment, error) {
 	if err := ctx.Err(); err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	if in.FileID == "" || in.ChatID == 0 {
-		return task.Attachment{}, errors.New("attachment: file and chat IDs are required")
+		return workmodel.Attachment{}, errors.New("attachment: file and chat IDs are required")
 	}
 	taskID, err := s.associate(ctx, in)
 	if err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	return s.saveForTask(ctx, taskID, in)
 }
 
 // SaveForTask associates a file with the task the trusted command dispatcher
 // just created, while still verifying the task belongs to the same chat.
-func (s *Service) SaveForTask(ctx context.Context, taskID string, in IncomingFile) (task.Attachment, error) {
+func (s *Service) SaveForTask(ctx context.Context, taskID string, in IncomingFile) (workmodel.Attachment, error) {
 	locator, ok := s.locator.(explicitTaskLocator)
 	if !ok {
-		return task.Attachment{}, ErrTaskReference
+		return workmodel.Attachment{}, ErrTaskReference
 	}
 	verified, err := locator.TaskForID(ctx, in.ChatID, taskID)
 	if err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	if verified != taskID {
-		return task.Attachment{}, ErrTaskReference
+		return workmodel.Attachment{}, ErrTaskReference
 	}
 	at := in.ReceivedAt
 	if at.IsZero() {
@@ -134,15 +134,15 @@ func (s *Service) SaveForTask(ctx context.Context, taskID string, in IncomingFil
 	return s.saveForTask(ctx, taskID, in)
 }
 
-func (s *Service) saveForTask(ctx context.Context, taskID string, in IncomingFile) (task.Attachment, error) {
+func (s *Service) saveForTask(ctx context.Context, taskID string, in IncomingFile) (workmodel.Attachment, error) {
 	reader, err := s.source.Open(ctx, in.FileID)
 	if err != nil {
-		return task.Attachment{}, fmt.Errorf("open Telegram attachment: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("open Telegram attachment: %w", err)
 	}
 	defer reader.Close()
 	temp, err := os.CreateTemp(s.root, ".incoming-*")
 	if err != nil {
-		return task.Attachment{}, fmt.Errorf("create attachment temporary file: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("create attachment temporary file: %w", err)
 	}
 	tempPath := temp.Name()
 	keep := false
@@ -155,59 +155,59 @@ func (s *Service) saveForTask(ctx context.Context, taskID string, in IncomingFil
 	hash := sha256.New()
 	size, err := copyLimitedContext(ctx, io.MultiWriter(temp, hash), reader, s.maxSize)
 	if err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	if err := temp.Sync(); err != nil {
-		return task.Attachment{}, fmt.Errorf("sync attachment: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("sync attachment: %w", err)
 	}
 	if _, err := temp.Seek(0, io.SeekStart); err != nil {
-		return task.Attachment{}, fmt.Errorf("inspect attachment: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("inspect attachment: %w", err)
 	}
 	header := make([]byte, 512)
 	n, readErr := io.ReadFull(temp, header)
 	if readErr != nil && !errors.Is(readErr, io.ErrUnexpectedEOF) && !errors.Is(readErr, io.EOF) {
-		return task.Attachment{}, fmt.Errorf("inspect attachment: %w", readErr)
+		return workmodel.Attachment{}, fmt.Errorf("inspect attachment: %w", readErr)
 	}
 	mediaType, extension, err := acceptedMediaType(header[:n], in.DeclaredMediaType)
 	if err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	checksum := hex.EncodeToString(hash.Sum(nil))
 	existing, err := s.store.Attachments(ctx, taskID)
 	if err != nil {
-		return task.Attachment{}, fmt.Errorf("list task attachments: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("list task attachments: %w", err)
 	}
 	for _, value := range existing {
 		if value.SHA256 == checksum {
-			return task.Attachment{}, ErrDuplicate
+			return workmodel.Attachment{}, ErrDuplicate
 		}
 	}
 	id, err := s.newID()
 	if err != nil {
-		return task.Attachment{}, fmt.Errorf("generate attachment ID: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("generate attachment ID: %w", err)
 	}
 	if !safeID.MatchString(id) {
-		return task.Attachment{}, errors.New("attachment: generated unsafe ID")
+		return workmodel.Attachment{}, errors.New("attachment: generated unsafe ID")
 	}
 	name := id + extension
 	finalPath := filepath.Join(s.root, name)
 	if err := temp.Close(); err != nil {
-		return task.Attachment{}, fmt.Errorf("close attachment: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("close attachment: %w", err)
 	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
-		return task.Attachment{}, fmt.Errorf("publish attachment: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("publish attachment: %w", err)
 	}
 	tempPath = finalPath
 	if err := syncDirectory(s.root); err != nil {
-		return task.Attachment{}, err
+		return workmodel.Attachment{}, err
 	}
 	createdAt := s.now()
 	if !in.ReceivedAt.IsZero() {
 		createdAt = in.ReceivedAt
 	}
-	value := task.Attachment{ID: id, TaskID: taskID, Kind: "image", Name: name, MediaType: mediaType, StoragePath: finalPath, SizeBytes: size, SHA256: checksum, CreatedAt: createdAt}
+	value := workmodel.Attachment{ID: id, TaskID: taskID, Kind: "image", Name: name, MediaType: mediaType, StoragePath: finalPath, SizeBytes: size, SHA256: checksum, CreatedAt: createdAt}
 	if err := s.store.SaveAttachment(ctx, value); err != nil {
-		return task.Attachment{}, fmt.Errorf("save attachment metadata: %w", err)
+		return workmodel.Attachment{}, fmt.Errorf("save attachment metadata: %w", err)
 	}
 	keep = true
 	return value, nil

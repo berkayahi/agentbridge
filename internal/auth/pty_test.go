@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestExecPTYRunsFakeLoginAndCapturesOnlyExpectedPrompt(t *testing.T) {
@@ -28,7 +28,7 @@ func TestExecPTYRunsFakeLoginAndCapturesOnlyExpectedPrompt(t *testing.T) {
 	var transcript strings.Builder
 	runner := ExecPTY{}
 	if err := runner.Run(context.Background(), path, nil, nil, func(chunk []byte) {
-		transcript.WriteString(expectedPrompt(task.ProviderCodex, string(chunk)))
+		transcript.WriteString(expectedPrompt(workmodel.CodexSubscription, string(chunk)))
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestExecPTYCancellationKillsProcessGroup(t *testing.T) {
 func TestExpectedPromptRejectsOAuthTokensAndUnrecognizedOutput(t *testing.T) {
 	t.Parallel()
 	input := "Bearer oauth-super-secret\nrefresh_token=another-secret\nOpen https://auth.openai.com/device and enter WXYZ-1234\n"
-	got := expectedPrompt(task.ProviderCodex, input)
+	got := expectedPrompt(workmodel.CodexSubscription, input)
 	if !strings.Contains(got, "https://auth.openai.com/device") || !strings.Contains(got, "WXYZ-1234") {
 		t.Fatalf("prompt = %q", got)
 	}
@@ -115,7 +115,7 @@ func TestExpectedPromptRejectsUntrustedAndCredentialURLs(t *testing.T) {
 		"refresh token endpoint https://auth.openai.com/session/PATH-SECRET\n" +
 		"Open https://auth.openai.com/device/TRAILING-SECRET and enter TRAIL-CODE\n" +
 		"Open https://auth.openai.com/device and enter REAL-CODE\n"
-	got := expectedPrompt(task.ProviderCodex, input)
+	got := expectedPrompt(workmodel.CodexSubscription, input)
 	if strings.Contains(got, "evil.example") || strings.Contains(got, "LEAK-ME") || strings.Contains(got, "ALSO-LEAK") || strings.Contains(got, "credential") || strings.Contains(got, "USER-CODE") || strings.Contains(got, "QUERY-CODE") || strings.Contains(got, "PATH-SECRET") || strings.Contains(got, "TRAILING-SECRET") || strings.Contains(got, "TRAIL-CODE") {
 		t.Fatalf("unsafe URL captured: %q", got)
 	}

@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -10,25 +10,25 @@ import (
 	"github.com/berkayahi/agentbridge/internal/provider"
 	providerfake "github.com/berkayahi/agentbridge/internal/provider/fake"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestDirectReadCommandsUseDurableStateWithoutStartingModelTurns(t *testing.T) {
-	p := &observedProvider{Provider: providerfake.New(task.ProviderCodex, provider.MustID("unused-session"), nil)}
+	p := &observedProvider{Provider: providerfake.New(workmodel.CodexSubscription, provider.MustID("unused-session"), nil)}
 	fixture := newFixtureWithProvider(t, p)
 	created := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
-	failed := task.Task{
+	failed := workmodel.Task{
 		ID: "task-failed", RepoProfileID: "sample", Title: "Fix navigation", Prompt: "secret prompt",
-		State: task.Failed, Provider: task.ProviderCodex, TelegramChatID: 100,
+		State: workmodel.Failed, Provider: workmodel.CodexSubscription, TelegramChatID: 100,
 		CommitSHA: "0123456789abcdef", PushRef: "refs/heads/staging", CreatedAt: created, UpdatedAt: created.Add(time.Minute),
 	}
 	createStoredTask(t, fixture.store, failed)
 	fixture.store.events[failed.ID] = append(fixture.store.events[failed.ID],
-		task.Event{ID: "diff", TaskID: failed.ID, Type: task.EventDiffSummary, Visibility: task.VisibilityUser, Payload: []byte(`{"summary":"button aligned"}`), CreatedAt: created.Add(time.Minute)},
-		task.Event{ID: "hidden", TaskID: failed.ID, Type: task.EventProviderMessage, Visibility: task.VisibilityInternal, Payload: []byte(`{"message":"must not leak"}`), CreatedAt: created.Add(2 * time.Minute)},
-		task.Event{ID: "log", TaskID: failed.ID, Type: task.EventFailure, Visibility: task.VisibilityUser, Payload: []byte(`{"token":"12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmno"}`), CreatedAt: created.Add(3 * time.Minute)},
+		workmodel.Event{ID: "diff", TaskID: failed.ID, Type: workmodel.EventDiffSummary, Visibility: workmodel.VisibilityUser, Payload: []byte(`{"summary":"button aligned"}`), CreatedAt: created.Add(time.Minute)},
+		workmodel.Event{ID: "hidden", TaskID: failed.ID, Type: workmodel.EventProviderMessage, Visibility: workmodel.VisibilityInternal, Payload: []byte(`{"message":"must not leak"}`), CreatedAt: created.Add(2 * time.Minute)},
+		workmodel.Event{ID: "log", TaskID: failed.ID, Type: workmodel.EventFailure, Visibility: workmodel.VisibilityUser, Payload: []byte(`{"token":"12345678:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmno"}`), CreatedAt: created.Add(3 * time.Minute)},
 	)
-	fixture.store.sessions["session-1"] = task.Session{ID: "session-1", TaskID: failed.ID, Provider: task.ProviderCodex, Status: "paused", Resumable: true, UpdatedAt: created}
+	fixture.store.sessions["session-1"] = workmodel.Session{ID: "session-1", TaskID: failed.ID, Provider: workmodel.CodexSubscription, Status: "paused", Resumable: true, UpdatedAt: created}
 	fixture.start(t)
 
 	tests := []struct {
@@ -76,7 +76,7 @@ func TestDirectReadCommandsUseDurableStateWithoutStartingModelTurns(t *testing.T
 
 func TestRetryRequeuesOnlyFailedOrPausedTask(t *testing.T) {
 	fixture := newFixture(t, []provider.Event{{ID: provider.MustID("done"), Type: provider.EventCompleted}})
-	value := task.Task{ID: "task-retry", RepoProfileID: "sample", Title: "Retry task", Prompt: "finish work", State: task.Failed, Provider: task.ProviderCodex, TelegramChatID: 100, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	value := workmodel.Task{ID: "task-retry", RepoProfileID: "sample", Title: "Retry task", Prompt: "finish work", State: workmodel.Failed, Provider: workmodel.CodexSubscription, TelegramChatID: 100, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	createStoredTask(t, fixture.store, value)
 	fixture.start(t)
 
@@ -84,14 +84,14 @@ func TestRetryRequeuesOnlyFailedOrPausedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	retryID := onlyOtherTaskID(t, fixture.store, value.ID)
-	if got := fixture.wait(t, retryID); got.State != task.Completed {
+	if got := fixture.wait(t, retryID); got.State != workmodel.Completed {
 		t.Fatalf("state = %s", got.State)
 	}
 	previous, err := fixture.store.Task(context.Background(), value.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if previous.State != task.Failed {
+	if previous.State != workmodel.Failed {
 		t.Fatalf("previous attempt state = %s", previous.State)
 	}
 	events, err := fixture.store.Events(context.Background(), retryID)
@@ -106,7 +106,7 @@ func TestRetryRequeuesOnlyFailedOrPausedTask(t *testing.T) {
 		t.Fatalf("retry confirmation = %q", got)
 	}
 
-	completed := task.Task{ID: "task-complete", RepoProfileID: "sample", Title: "Done", Prompt: "done", State: task.Completed, Provider: task.ProviderCodex, TelegramChatID: 100, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	completed := workmodel.Task{ID: "task-complete", RepoProfileID: "sample", Title: "Done", Prompt: "done", State: workmodel.Completed, Provider: workmodel.CodexSubscription, TelegramChatID: 100, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 	createStoredTask(t, fixture.store, completed)
 	if _, err := fixture.app.HandleUpdate(context.Background(), promptUpdate(72, "/retry task-complete")); err == nil {
 		t.Fatal("retry completed task succeeded")
@@ -124,9 +124,9 @@ func TestDirectCommandPropagatesUnknownTask(t *testing.T) {
 func TestProviderUsageRendersWindowsResetTimesAndCredits(t *testing.T) {
 	credits := 12.5
 	p := &usageProvider{
-		Provider: providerfake.New(task.ProviderCodex, provider.MustID("unused-session"), nil),
+		Provider: providerfake.New(workmodel.CodexSubscription, provider.MustID("unused-session"), nil),
 		usage: provider.Usage{
-			Provider:   task.ProviderCodex,
+			Provider:   workmodel.CodexSubscription,
 			ObservedAt: time.Date(2026, 7, 14, 10, 30, 0, 0, time.UTC),
 			Windows: []provider.UsageWindow{{
 				Name: "five_hour", UsedPercent: 37.5,
@@ -151,7 +151,7 @@ func TestProviderUsageRendersWindowsResetTimesAndCredits(t *testing.T) {
 
 func TestProviderUsageAlwaysRepliesWhenAuthenticationIsRequired(t *testing.T) {
 	p := &usageProvider{
-		Provider: providerfake.New(task.ProviderCodex, provider.MustID("unused-session"), nil),
+		Provider: providerfake.New(workmodel.CodexSubscription, provider.MustID("unused-session"), nil),
 		usageErr: errors.New("sensitive CLI failure"),
 		auth:     provider.AuthStatus{Authenticated: false},
 	}
@@ -199,9 +199,9 @@ func (p *observedProvider) Resume(ctx context.Context, request provider.ResumeRe
 	return p.Provider.Resume(ctx, request)
 }
 
-func createStoredTask(t *testing.T, values *memoryStore, value task.Task) {
+func createStoredTask(t *testing.T, values *memoryStore, value workmodel.Task) {
 	t.Helper()
-	event := task.Event{ID: "created-" + value.ID, TaskID: value.ID, Type: task.EventTaskCreated, Visibility: task.VisibilityUser, Payload: []byte(`{"created":true}`), CreatedAt: value.CreatedAt}
+	event := workmodel.Event{ID: "created-" + value.ID, TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, Payload: []byte(`{"created":true}`), CreatedAt: value.CreatedAt}
 	if err := values.CreateTask(context.Background(), value, event); err != nil {
 		t.Fatal(err)
 	}

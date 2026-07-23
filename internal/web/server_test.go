@@ -13,7 +13,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/events"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestAuthorizeServeRequestRequiresLoopbackHTTPSAndExactIdentity(t *testing.T) {
@@ -162,7 +162,7 @@ func TestRecoveryRequiresFreshCSRFCookieAndHeader(t *testing.T) {
 }
 
 func TestReplayAfterEventIDIsOrderedDeduplicatedAndDetectsGap(t *testing.T) {
-	replay := []task.Event{{ID: "e1"}, {ID: "e2"}, {ID: "e3"}}
+	replay := []workmodel.Event{{ID: "e1"}, {ID: "e2"}, {ID: "e3"}}
 	live := []events.Delivery{
 		{Event: events.Event{ID: "e3"}},
 		{Event: events.Event{ID: "e4"}},
@@ -181,16 +181,16 @@ func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	now := time.Unix(200, 0).UTC()
 	started := now.Add(-time.Minute)
-	tasks := []task.Task{
-		{ID: "task-1", RepoProfileID: "demo", Title: "Fix UI", State: task.Running, Provider: task.ProviderCodex, CommitSHA: "abc123", CreatedAt: now.Add(-2 * time.Minute), UpdatedAt: now, StartedAt: &started},
-		{ID: "task-0", RepoProfileID: "demo", Title: "Older", State: task.Completed, Provider: task.ProviderClaude, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
+	tasks := []workmodel.Task{
+		{ID: "task-1", RepoProfileID: "demo", Title: "Fix UI", State: workmodel.Running, Provider: workmodel.CodexSubscription, CommitSHA: "abc123", CreatedAt: now.Add(-2 * time.Minute), UpdatedAt: now, StartedAt: &started},
+		{ID: "task-0", RepoProfileID: "demo", Title: "Older", State: workmodel.Completed, Provider: workmodel.ClaudeSubscription, CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour)},
 	}
-	data := &fakeReadStore{tasks: tasks, events: map[string][]task.Event{"task-1": {
-		{ID: "event-1", TaskID: "task-1", Type: task.EventProviderMessage, Visibility: task.VisibilityUser, Payload: json.RawMessage(`{"message":"visible update"}`), CreatedAt: now},
-		{ID: "event-2", TaskID: "task-1", Type: task.EventProviderMessage, Visibility: task.VisibilityInternal, Payload: json.RawMessage(`{"message":"internal secret"}`), CreatedAt: now},
-		{ID: "event-3", TaskID: "task-1", Type: task.EventVerification, Visibility: task.VisibilityUser, Payload: json.RawMessage(`{"status":"passed"}`), CreatedAt: now},
-		{ID: "event-4", TaskID: "task-1", Type: task.EventType("diff_summary"), Visibility: task.VisibilityUser, Payload: json.RawMessage(`{"files":2}`), CreatedAt: now},
-	}}, attachments: map[string][]task.Attachment{"task-1": {{ID: "a1", TaskID: "task-1", Name: "screen.png", MediaType: "image/png", StoragePath: "/private/inbox/screen.png", SizeBytes: 42, CreatedAt: now}}}}
+	data := &fakeReadStore{tasks: tasks, events: map[string][]workmodel.Event{"task-1": {
+		{ID: "event-1", TaskID: "task-1", Type: workmodel.EventProviderMessage, Visibility: workmodel.VisibilityUser, Payload: json.RawMessage(`{"message":"visible update"}`), CreatedAt: now},
+		{ID: "event-2", TaskID: "task-1", Type: workmodel.EventProviderMessage, Visibility: workmodel.VisibilityInternal, Payload: json.RawMessage(`{"message":"internal secret"}`), CreatedAt: now},
+		{ID: "event-3", TaskID: "task-1", Type: workmodel.EventVerification, Visibility: workmodel.VisibilityUser, Payload: json.RawMessage(`{"status":"passed"}`), CreatedAt: now},
+		{ID: "event-4", TaskID: "task-1", Type: workmodel.EventType("diff_summary"), Visibility: workmodel.VisibilityUser, Payload: json.RawMessage(`{"files":2}`), CreatedAt: now},
+	}}, attachments: map[string][]workmodel.Attachment{"task-1": {{ID: "a1", TaskID: "task-1", Name: "screen.png", MediaType: "image/png", StoragePath: "/private/inbox/screen.png", SizeBytes: 42, CreatedAt: now}}}}
 	srv, err := New(Config{AllowedIdentities: []string{"operator@example.invalid"}, ServeMode: true, CSRFSecret: []byte("0123456789abcdef0123456789abcdef"), Now: func() time.Time { return now }}, Dependencies{
 		Store:  data,
 		Health: healthFunc(func(context.Context) (Health, error) { return Health{Status: "ok"}, nil }),
@@ -237,27 +237,27 @@ func decodeJSON(t *testing.T, response *http.Response) map[string]any {
 }
 
 type fakeReadStore struct {
-	tasks       []task.Task
-	events      map[string][]task.Event
-	attachments map[string][]task.Attachment
+	tasks       []workmodel.Task
+	events      map[string][]workmodel.Event
+	attachments map[string][]workmodel.Attachment
 }
 
-func (f *fakeReadStore) Task(_ context.Context, id string) (task.Task, error) {
+func (f *fakeReadStore) Task(_ context.Context, id string) (workmodel.Task, error) {
 	for _, value := range f.tasks {
 		if value.ID == id {
 			return value, nil
 		}
 	}
-	return task.Task{}, store.ErrNotFound
+	return workmodel.Task{}, store.ErrNotFound
 }
-func (f *fakeReadStore) ListTasks(context.Context, store.ListFilter) ([]task.Task, error) {
-	return append([]task.Task(nil), f.tasks...), nil
+func (f *fakeReadStore) ListTasks(context.Context, store.ListFilter) ([]workmodel.Task, error) {
+	return append([]workmodel.Task(nil), f.tasks...), nil
 }
-func (f *fakeReadStore) Events(_ context.Context, taskID string) ([]task.Event, error) {
-	return append([]task.Event(nil), f.events[taskID]...), nil
+func (f *fakeReadStore) Events(_ context.Context, taskID string) ([]workmodel.Event, error) {
+	return append([]workmodel.Event(nil), f.events[taskID]...), nil
 }
-func (f *fakeReadStore) Attachments(_ context.Context, taskID string) ([]task.Attachment, error) {
-	return append([]task.Attachment(nil), f.attachments[taskID]...), nil
+func (f *fakeReadStore) Attachments(_ context.Context, taskID string) ([]workmodel.Attachment, error) {
+	return append([]workmodel.Attachment(nil), f.attachments[taskID]...), nil
 }
 
 type healthFunc func(context.Context) (Health, error)

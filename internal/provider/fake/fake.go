@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const eventCapacity = 32
@@ -16,7 +16,7 @@ const eventCapacity = 32
 var ErrScriptTooLarge = errors.New("fake provider script exceeds event bound")
 
 type Provider struct {
-	name      task.Provider
+	name      workmodel.Provider
 	sessionID provider.ID
 	events    []provider.Event
 
@@ -24,11 +24,11 @@ type Provider struct {
 	calls []string
 }
 
-func New(name task.Provider, sessionID provider.ID, events []provider.Event) *Provider {
+func New(name workmodel.Provider, sessionID provider.ID, events []provider.Event) *Provider {
 	return &Provider{name: name, sessionID: sessionID, events: append([]provider.Event(nil), events...)}
 }
 
-func (p *Provider) Name() task.Provider { return p.name }
+func (p *Provider) Name() workmodel.Provider { return p.name }
 
 func (p *Provider) Start(ctx context.Context, req provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	if err := ctx.Err(); err != nil {

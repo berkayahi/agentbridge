@@ -12,19 +12,46 @@ CREATE TABLE repository_bindings (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE repository_leases (
+    repo_profile_id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    acquired_at TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE local_tasks (
     id TEXT PRIMARY KEY,
+    repo_profile_id TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL,
     prompt TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    provider TEXT NOT NULL DEFAULT '',
     active_execution_id TEXT,
     base_sha TEXT NOT NULL DEFAULT '',
     worktree_path TEXT NOT NULL DEFAULT '',
+    provider_session_id TEXT NOT NULL DEFAULT '',
+    provider_thread_id TEXT NOT NULL DEFAULT '',
     commit_sha TEXT NOT NULL DEFAULT '',
     push_ref TEXT NOT NULL DEFAULT '',
     deployment_url TEXT NOT NULL DEFAULT '',
     failure_reason TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    finished_at TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE INDEX local_tasks_created_idx ON local_tasks(created_at, id);
+CREATE INDEX local_tasks_state_idx ON local_tasks(state, updated_at, id);
+
+-- Presentation identifiers belong to an adapter boundary, never to the
+-- canonical local task record.
+CREATE TABLE task_presentations (
+    local_task_id TEXT PRIMARY KEY REFERENCES local_tasks(id) ON DELETE CASCADE,
+    telegram_chat_id INTEGER NOT NULL DEFAULT 0,
+    telegram_message_id INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE sessions (
@@ -87,6 +114,7 @@ CREATE TABLE git_operations (
 
 CREATE TABLE execution_events (
     id TEXT PRIMARY KEY,
+    local_task_id TEXT REFERENCES local_tasks(id) ON DELETE CASCADE,
     execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
     event_type TEXT NOT NULL,
     visibility TEXT NOT NULL,
@@ -99,6 +127,7 @@ CREATE UNIQUE INDEX execution_events_provider_dedupe_idx
 
 CREATE TABLE approvals (
     id TEXT PRIMARY KEY,
+    local_task_id TEXT REFERENCES local_tasks(id) ON DELETE CASCADE,
     execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -111,6 +140,7 @@ CREATE TABLE approvals (
 
 CREATE TABLE attachments (
     id TEXT PRIMARY KEY,
+    local_task_id TEXT REFERENCES local_tasks(id) ON DELETE CASCADE,
     execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,
     name TEXT NOT NULL,
@@ -145,6 +175,7 @@ CREATE TABLE spool_metadata (
 
 CREATE TABLE auth_incidents (
     id TEXT PRIMARY KEY,
+    local_task_id TEXT REFERENCES local_tasks(id) ON DELETE SET NULL,
     execution_id TEXT REFERENCES executions(id) ON DELETE SET NULL,
     provider TEXT NOT NULL,
     status TEXT NOT NULL,

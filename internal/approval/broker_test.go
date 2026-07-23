@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestBrokerPersistsAndSendsBeforeResolvingApproval(t *testing.T) {
@@ -62,7 +62,7 @@ func TestBrokerPersistsAndSendsBeforeResolvingApproval(t *testing.T) {
 		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
 	}
 	record := store.latest()
-	if record.Status != task.ApprovalApproved || record.ResolvedAt == nil || record.ResolvedAt.UTC() != now {
+	if record.Status != workmodel.ApprovalApproved || record.ResolvedAt == nil || record.ResolvedAt.UTC() != now {
 		t.Fatalf("approval = %#v", record)
 	}
 	if contains(string(record.RequestPayload), "github_pat_") || contains(string(record.DecisionPayload), "github_pat_") {
@@ -227,7 +227,7 @@ func TestBrokerDecisionClaimWinsConcurrentTimeout(t *testing.T) {
 		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
 	}
 	for _, record := range store.all() {
-		if record.Status == task.ApprovalExpired {
+		if record.Status == workmodel.ApprovalExpired {
 			t.Fatalf("claimed approval was persisted expired: %#v", record)
 		}
 	}
@@ -245,8 +245,8 @@ func TestBrokerTimeoutDeniesAndExpiresApproval(t *testing.T) {
 	if result.Approved || result.Reason != "approval timed out" {
 		t.Fatalf("result = %#v", result)
 	}
-	if got := store.latest().Status; got != task.ApprovalExpired {
-		t.Fatalf("status = %q, want %q", got, task.ApprovalExpired)
+	if got := store.latest().Status; got != workmodel.ApprovalExpired {
+		t.Fatalf("status = %q, want %q", got, workmodel.ApprovalExpired)
 	}
 	if err := broker.HandleDecision(context.Background(), "task-3", "approve-3", "42", true); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("late decision error = %v", err)
@@ -277,8 +277,8 @@ func TestBrokerCancellationDeniesAndInvalidRequestsNeverPersist(t *testing.T) {
 	if completed.err != nil || completed.result.Approved || completed.result.Reason != "approval canceled" {
 		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
 	}
-	if got := store.latest().Status; got != task.ApprovalExpired {
-		t.Fatalf("status = %q, want %q", got, task.ApprovalExpired)
+	if got := store.latest().Status; got != workmodel.ApprovalExpired {
+		t.Fatalf("status = %q, want %q", got, workmodel.ApprovalExpired)
 	}
 }
 
@@ -289,8 +289,8 @@ type requestResult struct {
 
 type recordingStore struct {
 	mu       sync.Mutex
-	records  []task.Approval
-	events   []task.Event
+	records  []workmodel.Approval
+	events   []workmodel.Event
 	ops      []string
 	eventErr error
 
@@ -300,8 +300,8 @@ type recordingStore struct {
 	decisionOnce        sync.Once
 }
 
-func (s *recordingStore) UpsertApproval(_ context.Context, value task.Approval) error {
-	if value.Status == task.ApprovalApproved || value.Status == task.ApprovalRejected {
+func (s *recordingStore) UpsertApproval(_ context.Context, value workmodel.Approval) error {
+	if value.Status == workmodel.ApprovalApproved || value.Status == workmodel.ApprovalRejected {
 		if s.decisionStarted != nil {
 			s.decisionOnce.Do(func() { close(s.decisionStarted) })
 		}
@@ -316,7 +316,7 @@ func (s *recordingStore) UpsertApproval(_ context.Context, value task.Approval) 
 	return nil
 }
 
-func (s *recordingStore) AppendEvent(_ context.Context, value task.Event) error {
+func (s *recordingStore) AppendEvent(_ context.Context, value workmodel.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.eventErr != nil {
@@ -337,10 +337,10 @@ func (s *recordingStore) AppendEvent(_ context.Context, value task.Event) error 
 	return nil
 }
 
-func (s *recordingStore) Events(_ context.Context, taskID string) ([]task.Event, error) {
+func (s *recordingStore) Events(_ context.Context, taskID string) ([]workmodel.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var values []task.Event
+	var values []workmodel.Event
 	for _, value := range s.events {
 		if value.TaskID == taskID {
 			values = append(values, value)
@@ -355,16 +355,16 @@ func (s *recordingStore) setEventError(err error) {
 	s.eventErr = err
 }
 
-func (s *recordingStore) latest() task.Approval {
+func (s *recordingStore) latest() workmodel.Approval {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.records[len(s.records)-1]
 }
 
-func (s *recordingStore) all() []task.Approval {
+func (s *recordingStore) all() []workmodel.Approval {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]task.Approval(nil), s.records...)
+	return append([]workmodel.Approval(nil), s.records...)
 }
 
 func (s *recordingStore) operations() []string {

@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 // CreateTaskRequest is the transport-neutral input for standalone task creation.
 type CreateTaskRequest struct {
-	Provider task.Provider
+	Provider workmodel.Provider
 	Prompt   string
 }
 
@@ -61,10 +61,10 @@ func (a *App) ContinueTask(ctx context.Context, id, input string) error {
 	if value.ProviderSessionID == "" {
 		return errors.New("app: task has no resumable provider session")
 	}
-	if !task.CanTransition(value.State, task.Running) {
+	if !workmodel.CanTransition(value.State, workmodel.Running) {
 		return errors.New("app: task is not resumable in its current state")
 	}
-	if !a.transition(ctx, &value, task.Running, "queued session continuation") {
+	if !a.transition(ctx, &value, workmodel.Running, "queued session continuation") {
 		return errors.New("app: could not resume task")
 	}
 	return a.enqueue(queuedTask{id: id, resume: true, input: input})
@@ -91,7 +91,7 @@ func (a *App) DecideApproval(ctx context.Context, request ApprovalDecisionReques
 	if err != nil {
 		return err
 	}
-	var record task.Approval
+	var record workmodel.Approval
 	for _, value := range pending {
 		if value.ID == request.ApprovalID && value.TaskID == request.TaskID {
 			record = value
@@ -138,28 +138,28 @@ func (a *App) DecideApproval(ctx context.Context, request ApprovalDecisionReques
 		Allow:     request.Allow,
 		DecidedAt: a.deps.Clock().UTC(),
 	}
-	status := task.ApprovalRejected
+	status := workmodel.ApprovalRejected
 	if request.Allow {
-		status = task.ApprovalApproved
+		status = workmodel.ApprovalApproved
 	}
 	if err := a.finishApproval(ctx, &record, status, request.Allow, ""); err != nil {
 		return err
 	}
 	if err := a.appendApprovalDecisionEvent(ctx, value.ID, request.Allow); err != nil {
-		record.Status = task.ApprovalPending
+		record.Status = workmodel.ApprovalPending
 		record.ResolvedAt = nil
 		record.DecisionPayload = nil
 		return errors.Join(err, a.deps.Store.UpsertApproval(ctx, record))
 	}
 	if request.Allow {
-		if !a.transition(ctx, &value, task.Running, "approval granted") {
+		if !a.transition(ctx, &value, workmodel.Running, "approval granted") {
 			return store.ErrInvalidTransition
 		}
 	} else {
 		a.fail(value, fmt.Errorf("operator %s rejected approval", request.UserID))
 	}
 	if err := active.provider.ResolveApproval(ctx, decision); err != nil {
-		compensationErr := a.finishApproval(ctx, &record, task.ApprovalRejected, false, "provider_release_failed")
+		compensationErr := a.finishApproval(ctx, &record, workmodel.ApprovalRejected, false, "provider_release_failed")
 		a.fail(value, err)
 		return errors.Join(err, compensationErr)
 	}
@@ -167,7 +167,7 @@ func (a *App) DecideApproval(ctx context.Context, request ApprovalDecisionReques
 }
 
 func (a *App) appendApprovalDecisionEvent(ctx context.Context, id string, allow bool) error {
-	event := a.event(id, task.EventApprovalResolved, task.VisibilityUser, map[string]any{"approved": allow})
+	event := a.event(id, workmodel.EventApprovalResolved, workmodel.VisibilityUser, map[string]any{"approved": allow})
 	if err := a.deps.Store.AppendEvent(ctx, event); err != nil {
 		return err
 	}

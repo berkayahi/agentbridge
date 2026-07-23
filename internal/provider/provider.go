@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const (
@@ -107,7 +107,7 @@ type Session struct {
 	TaskID     ID
 	ExternalID string
 	ThreadID   string
-	Provider   task.Provider
+	Provider   workmodel.Provider
 }
 
 type StartRequest struct {
@@ -138,7 +138,7 @@ type UsageWindow struct {
 }
 
 type Usage struct {
-	Provider   task.Provider
+	Provider   workmodel.Provider
 	ObservedAt time.Time
 	Windows    []UsageWindow
 	Credits    *float64
@@ -151,7 +151,7 @@ type AuthStatus struct {
 }
 
 type Provider interface {
-	Name() task.Provider
+	Name() workmodel.Provider
 	Start(context.Context, StartRequest) (Session, <-chan Event, error)
 	Resume(context.Context, ResumeRequest) (Session, <-chan Event, error)
 	Steer(context.Context, Session, Input) error

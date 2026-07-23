@@ -13,13 +13,13 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 type TaskStatus struct {
 	TaskID        string
 	ChatID        int64
-	State         task.State
+	State         workmodel.State
 	CurrentAction string
 	StartedAt     time.Time
 	RepoProfile   string
@@ -125,8 +125,8 @@ func (p *StatusProjector) Flush(ctx context.Context, taskID string) error {
 	return nil
 }
 
-func urgentStatus(state task.State) bool {
-	return state == task.AwaitingApproval || state == task.AwaitingAuth || state == task.Completed || state == task.Failed || state == task.Canceled || state == task.Paused
+func urgentStatus(state workmodel.State) bool {
+	return state == workmodel.AwaitingApproval || state == workmodel.AwaitingAuth || state == workmodel.Completed || state == workmodel.Failed || state == workmodel.Canceled || state == workmodel.Paused
 }
 
 func renderStatus(status TaskStatus, now time.Time) string {
@@ -231,7 +231,7 @@ func ApprovalKeyboard(signer *CallbackSigner, taskID, approvalID string, ttl tim
 	return InlineKeyboard{{{Text: "Approve", CallbackData: approve}, {Text: "Reject", CallbackData: reject}}}, nil
 }
 
-func SessionKeyboard(signer *CallbackSigner, provider task.Provider, tasks []task.Task, ttl time.Duration) (InlineKeyboard, error) {
+func SessionKeyboard(signer *CallbackSigner, provider workmodel.Provider, tasks []workmodel.Task, ttl time.Duration) (InlineKeyboard, error) {
 	if signer == nil {
 		return nil, errors.New("telegram: callback signer is required")
 	}

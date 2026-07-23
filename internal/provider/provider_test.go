@@ -12,7 +12,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/fake"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestFakeImplementsProviderOperationsAndPreservesEventOrder(t *testing.T) {
@@ -23,7 +23,7 @@ func TestFakeImplementsProviderOperationsAndPreservesEventOrder(t *testing.T) {
 		{Type: provider.EventHeartbeat},
 		{Type: provider.EventCompleted},
 	}
-	p := fake.New(task.ProviderCodex, sessionID, script)
+	p := fake.New(workmodel.CodexSubscription, sessionID, script)
 	input := provider.Input{Text: "inspect the repository"}
 
 	session, events, err := p.Start(context.Background(), provider.StartRequest{TaskID: taskID, Input: input})
@@ -57,7 +57,7 @@ func TestFakeImplementsProviderOperationsAndPreservesEventOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	usage, err := p.Usage(context.Background())
-	if err != nil || usage.Provider != task.ProviderCodex {
+	if err != nil || usage.Provider != workmodel.CodexSubscription {
 		t.Fatalf("usage = %#v, err = %v", usage, err)
 	}
 	auth, err := p.AuthStatus(context.Background())
@@ -72,7 +72,7 @@ func TestFakeImplementsProviderOperationsAndPreservesEventOrder(t *testing.T) {
 }
 
 func TestProviderOperationsHonorCanceledContext(t *testing.T) {
-	p := fake.New(task.ProviderClaude, provider.MustID("session-1"), nil)
+	p := fake.New(workmodel.ClaudeSubscription, provider.MustID("session-1"), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -144,7 +144,7 @@ func TestLargeScreenshotDoesNotCountAgainstTextLimit(t *testing.T) {
 
 func TestFakeRejectsScriptLargerThanItsBound(t *testing.T) {
 	events := make([]provider.Event, 33)
-	p := fake.New(task.ProviderCodex, provider.MustID("session-1"), events)
+	p := fake.New(workmodel.CodexSubscription, provider.MustID("session-1"), events)
 	_, _, err := p.Start(context.Background(), provider.StartRequest{TaskID: provider.MustID("task-1"), Input: provider.Input{Text: "work"}})
 	if !errors.Is(err, fake.ErrScriptTooLarge) {
 		t.Fatalf("error = %v, want ErrScriptTooLarge", err)

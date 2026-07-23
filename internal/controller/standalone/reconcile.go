@@ -1,11 +1,11 @@
-package app
+package standalone
 
 import (
 	"context"
 	"errors"
 	"fmt"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 // Reconcile converts durable restart evidence into safe queue decisions. It
@@ -22,7 +22,7 @@ func (a *App) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load resumable sessions: %w", err)
 	}
-	byTask := make(map[string]task.Session, len(sessions))
+	byTask := make(map[string]workmodel.Session, len(sessions))
 	for _, session := range sessions {
 		byTask[session.TaskID] = session
 	}
@@ -32,11 +32,11 @@ func (a *App) Reconcile(ctx context.Context) error {
 	}
 	for _, value := range values {
 		switch value.State {
-		case task.Queued:
+		case workmodel.Queued:
 			if err := a.enqueue(queuedTask{id: value.ID}); err != nil {
 				return err
 			}
-		case task.Preparing:
+		case workmodel.Preparing:
 			if value.WorktreePath == "" && value.BaseSHA == "" {
 				if err := a.enqueue(queuedTask{id: value.ID}); err != nil {
 					return err
@@ -44,7 +44,7 @@ func (a *App) Reconcile(ctx context.Context) error {
 				continue
 			}
 			a.pause(value, "partial workspace preparation requires manual review")
-		case task.Running:
+		case workmodel.Running:
 			inspection, inspectErr := a.deps.Workspace.Inspect(ctx, value)
 			session, hasSession := byTask[value.ID]
 			sessionMatches := hasSession && session.Provider == value.Provider && session.ProviderSessionID == value.ProviderSessionID && session.ProviderSessionID != ""
@@ -55,7 +55,7 @@ func (a *App) Reconcile(ctx context.Context) error {
 			if err := a.enqueue(queuedTask{id: value.ID, resume: true}); err != nil {
 				return err
 			}
-		case task.Verifying:
+		case workmodel.Verifying:
 			inspection, inspectErr := a.deps.Workspace.Inspect(ctx, value)
 			if inspectErr != nil || !inspection.Exists || !inspection.BaseMatches || inspection.ProcessRunning {
 				a.pause(value, "verification workspace changed; manual review required")
@@ -64,9 +64,9 @@ func (a *App) Reconcile(ctx context.Context) error {
 			if err := a.enqueue(queuedTask{id: value.ID}); err != nil {
 				return err
 			}
-		case task.AwaitingApproval, task.Committing, task.Pushing:
+		case workmodel.AwaitingApproval, workmodel.Committing, workmodel.Pushing:
 			a.pause(value, "interrupted operation cannot be resumed automatically")
-		case task.AwaitingAuth, task.Failed, task.Paused:
+		case workmodel.AwaitingAuth, workmodel.Failed, workmodel.Paused:
 			// Operator/auth recovery owns these states.
 		}
 	}
@@ -74,14 +74,14 @@ func (a *App) Reconcile(ctx context.Context) error {
 }
 
 // ValidateResume implements the authentication recovery safety gate.
-func (a *App) ValidateResume(ctx context.Context, value task.Task) error {
-	if value.State != task.AwaitingAuth {
+func (a *App) ValidateResume(ctx context.Context, value workmodel.Task) error {
+	if value.State != workmodel.AwaitingAuth {
 		return errors.New("app: task is not awaiting authentication")
 	}
 	return a.validateResumeEvidence(ctx, value)
 }
 
-func (a *App) validateResumeEvidence(ctx context.Context, value task.Task) error {
+func (a *App) validateResumeEvidence(ctx context.Context, value workmodel.Task) error {
 	if value.WorktreePath == "" || value.BaseSHA == "" || value.ProviderSessionID == "" {
 		return errors.New("app: incomplete resumable task")
 	}
@@ -106,8 +106,8 @@ func (a *App) validateResumeEvidence(ctx context.Context, value task.Task) error
 
 // ResumeTask schedules provider resume after auth.Service durably transitions
 // AwaitingAuth back to Running. The goroutine is owned by App shutdown.
-func (a *App) ResumeTask(ctx context.Context, value task.Task) error {
-	if value.State != task.Running {
+func (a *App) ResumeTask(ctx context.Context, value workmodel.Task) error {
+	if value.State != workmodel.Running {
 		return errors.New("app: recovered task is not running")
 	}
 	if err := a.validateResumeEvidence(ctx, value); err != nil {

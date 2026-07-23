@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -15,8 +15,8 @@ var (
 )
 
 type TaskLookup interface {
-	Task(context.Context, string) (task.Task, error)
-	NonterminalTasks(context.Context) ([]task.Task, error)
+	Task(context.Context, string) (workmodel.Task, error)
+	NonterminalTasks(context.Context) ([]workmodel.Task, error)
 }
 
 // StoreTaskLocator associates Telegram files without allowing a caption or
@@ -81,7 +81,7 @@ func (l *StoreTaskLocator) ActiveTaskIDs(ctx context.Context, chatID int64) ([]s
 	return ids, nil
 }
 
-func (l *StoreTaskLocator) activeTasks(ctx context.Context, chatID int64) ([]task.Task, error) {
+func (l *StoreTaskLocator) activeTasks(ctx context.Context, chatID int64) ([]workmodel.Task, error) {
 	if l == nil || l.tasks == nil {
 		return nil, errors.New("attachment: task lookup is required")
 	}
@@ -89,7 +89,7 @@ func (l *StoreTaskLocator) activeTasks(ctx context.Context, chatID int64) ([]tas
 	if err != nil {
 		return nil, fmt.Errorf("list attachment tasks: %w", err)
 	}
-	active := make([]task.Task, 0, len(values))
+	active := make([]workmodel.Task, 0, len(values))
 	for _, value := range values {
 		if value.TelegramChatID == chatID && workflowActive(value.State) {
 			active = append(active, value)
@@ -98,9 +98,9 @@ func (l *StoreTaskLocator) activeTasks(ctx context.Context, chatID int64) ([]tas
 	return active, nil
 }
 
-func workflowActive(state task.State) bool {
+func workflowActive(state workmodel.State) bool {
 	switch state {
-	case task.Queued, task.Preparing, task.Running, task.AwaitingApproval, task.AwaitingAuth, task.Verifying, task.Committing, task.Pushing:
+	case workmodel.Queued, workmodel.Preparing, workmodel.Running, workmodel.AwaitingApproval, workmodel.AwaitingAuth, workmodel.Verifying, workmodel.Committing, workmodel.Pushing:
 		return true
 	default:
 		return false

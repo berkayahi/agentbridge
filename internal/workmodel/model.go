@@ -1,4 +1,4 @@
-package task
+package workmodel
 
 import (
 	"encoding/json"
@@ -11,12 +11,12 @@ const DefaultTitleRunes = 80
 type Provider string
 
 const (
-	ProviderCodex  Provider = "codex"
-	ProviderClaude Provider = "claude"
+	CodexSubscription  Provider = "codex"
+	ClaudeSubscription Provider = "claude"
 )
 
 func (p Provider) Valid() bool {
-	return p == ProviderCodex || p == ProviderClaude
+	return p == CodexSubscription || p == ClaudeSubscription
 }
 
 type Task struct {
@@ -36,6 +36,7 @@ type Task struct {
 	PushRef           string
 	DeploymentURL     string
 	FailureReason     string
+	Revision          int64
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 	StartedAt         *time.Time

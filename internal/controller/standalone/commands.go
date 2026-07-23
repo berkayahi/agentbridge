@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -10,8 +10,8 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const (
@@ -79,11 +79,11 @@ func (a *App) statusText(ctx context.Context) (string, error) {
 	var active, queued, attention, completed int
 	for _, value := range tasks {
 		switch value.State {
-		case task.Queued:
+		case workmodel.Queued:
 			queued++
-		case task.Failed, task.Paused, task.AwaitingAuth, task.AwaitingApproval:
+		case workmodel.Failed, workmodel.Paused, workmodel.AwaitingAuth, workmodel.AwaitingApproval:
 			attention++
-		case task.Completed, task.Canceled:
+		case workmodel.Completed, workmodel.Canceled:
 			completed++
 		default:
 			active++
@@ -97,7 +97,7 @@ func (a *App) tasksText(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slices.SortFunc(tasks, func(left, right task.Task) int {
+	slices.SortFunc(tasks, func(left, right workmodel.Task) int {
 		if compared := right.CreatedAt.Compare(left.CreatedAt); compared != 0 {
 			return compared
 		}
@@ -121,7 +121,7 @@ func (a *App) sessionsText(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	slices.SortFunc(sessions, func(left, right task.Session) int {
+	slices.SortFunc(sessions, func(left, right workmodel.Session) int {
 		if compared := right.UpdatedAt.Compare(left.UpdatedAt); compared != 0 {
 			return compared
 		}
@@ -151,7 +151,7 @@ func (a *App) diffText(ctx context.Context, id string) (string, error) {
 	}
 	lines := []string{"Diff for " + id}
 	for _, event := range events {
-		if event.Visibility != task.VisibilityUser || !diffEvent(event.Type) {
+		if event.Visibility != workmodel.VisibilityUser || !diffEvent(event.Type) {
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s | %s", event.Type, safePayload(event.Payload)))
@@ -171,9 +171,9 @@ func (a *App) diffText(ctx context.Context, id string) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-func diffEvent(value task.EventType) bool {
+func diffEvent(value workmodel.EventType) bool {
 	switch value {
-	case task.EventDiffSummary, task.EventVerification, task.EventCommitCreated, task.EventPushCompleted, task.EventDeployment:
+	case workmodel.EventDiffSummary, workmodel.EventVerification, workmodel.EventCommitCreated, workmodel.EventPushCompleted, workmodel.EventDeployment:
 		return true
 	default:
 		return false
@@ -188,9 +188,9 @@ func (a *App) logsText(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	visible := make([]task.Event, 0, len(events))
+	visible := make([]workmodel.Event, 0, len(events))
 	for _, event := range events {
-		if event.Visibility == task.VisibilityUser {
+		if event.Visibility == workmodel.VisibilityUser {
 			visible = append(visible, event)
 		}
 	}
@@ -211,7 +211,7 @@ func (a *App) healthText(ctx context.Context) (string, error) {
 	if _, err := a.deps.Store.ListTasks(ctx, store.ListFilter{Limit: 1}); err != nil {
 		return "", err
 	}
-	names := make([]task.Provider, 0, len(a.deps.Providers))
+	names := make([]workmodel.Provider, 0, len(a.deps.Providers))
 	for name := range a.deps.Providers {
 		names = append(names, name)
 	}
@@ -237,22 +237,22 @@ func (a *App) retryTask(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if previous.State != task.Failed && previous.State != task.Paused {
+	if previous.State != workmodel.Failed && previous.State != workmodel.Paused {
 		return "", fmt.Errorf("app: task %s in state %s cannot be retried: %w", id, previous.State, store.ErrInvalidTransition)
 	}
 	at := a.deps.Clock().UTC()
-	retry := task.Task{
+	retry := workmodel.Task{
 		ID:             a.nextID(),
 		RepoProfileID:  previous.RepoProfileID,
 		Title:          previous.Title,
 		Prompt:         previous.Prompt,
-		State:          task.Queued,
+		State:          workmodel.Queued,
 		Provider:       previous.Provider,
 		TelegramChatID: previous.TelegramChatID,
 		CreatedAt:      at,
 		UpdatedAt:      at,
 	}
-	event := a.event(retry.ID, task.EventTaskCreated, task.VisibilityUser, map[string]any{"retry_of": previous.ID})
+	event := a.event(retry.ID, workmodel.EventTaskCreated, workmodel.VisibilityUser, map[string]any{"retry_of": previous.ID})
 	if err := a.deps.Store.CreateTask(ctx, retry, event); err != nil {
 		return "", err
 	}

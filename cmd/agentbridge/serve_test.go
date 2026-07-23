@@ -19,8 +19,8 @@ import (
 	"github.com/berkayahi/agentbridge/internal/provider/codex"
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestDeriveRuntimePathsRequiresAbsoluteDataDirectory(t *testing.T) {
@@ -28,6 +28,44 @@ func TestDeriveRuntimePathsRequiresAbsoluteDataDirectory(t *testing.T) {
 		if _, err := deriveRuntimePaths(value); err == nil {
 			t.Fatalf("deriveRuntimePaths(%q) succeeded", value)
 		}
+	}
+}
+
+func TestStandaloneCompositionRequiresV2DatabaseLineage(t *testing.T) {
+	ctx := context.Background()
+	freshPath := filepath.Join(t.TempDir(), "fresh.db")
+	data, err := openStandaloneStore(ctx, freshPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.Close(); err != nil {
+		t.Fatal(err)
+	}
+	report, err := sqlite.Preflight(ctx, freshPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Lineage != sqlite.LineageV2 {
+		t.Fatalf("fresh standalone lineage = %q, want v2", report.Lineage)
+	}
+
+	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sqlite.Open(ctx, legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openStandaloneStore(ctx, legacyPath); !errors.Is(err, sqlite.ErrMigrationRequired) {
+		t.Fatalf("legacy standalone open error = %v, want migration required", err)
+	}
+	report, err = sqlite.Preflight(ctx, legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Lineage != sqlite.LineagePublicV1 {
+		t.Fatalf("legacy lineage after rejected open = %q, want public v1", report.Lineage)
 	}
 }
 
@@ -39,10 +77,10 @@ func TestCodexApprovalSinkRedactsBeforeFirstDurableWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = data.Close() })
 	now := time.Unix(100, 0).UTC()
-	if err := data.CreateTask(context.Background(), task.Task{
-		ID: "task-redacted", RepoProfileID: "sample", Prompt: "test", State: task.Queued,
-		Provider: task.ProviderCodex, TelegramChatID: 100, CreatedAt: now, UpdatedAt: now,
-	}, task.Event{ID: "event-redacted", TaskID: "task-redacted", Type: task.EventTaskCreated, Visibility: task.VisibilityUser, Payload: []byte(`{}`), CreatedAt: now}); err != nil {
+	if err := data.CreateTask(context.Background(), workmodel.Task{
+		ID: "task-redacted", RepoProfileID: "sample", Prompt: "test", State: workmodel.Queued,
+		Provider: workmodel.CodexSubscription, TelegramChatID: 100, CreatedAt: now, UpdatedAt: now,
+	}, workmodel.Event{ID: "event-redacted", TaskID: "task-redacted", Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, Payload: []byte(`{}`), CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
 	sink := approvalSink{store: data, redactor: security.NewRedactor(security.Config{Secrets: []string{secret}})}
@@ -150,8 +188,8 @@ func TestHealthAdapterReportsProviderAuthenticationWithoutErrorDetails(t *testin
 	checkedAt := time.Unix(600, 0).UTC()
 	health, err := (healthAdapter{
 		store: healthTaskStoreStub{},
-		providers: map[task.Provider]provider.Provider{
-			task.ProviderClaude: healthProviderStub{status: provider.AuthStatus{CheckedAt: checkedAt}, err: errors.New(secret)},
+		providers: map[workmodel.Provider]provider.Provider{
+			workmodel.ClaudeSubscription: healthProviderStub{status: provider.AuthStatus{CheckedAt: checkedAt}, err: errors.New(secret)},
 		},
 	}).Health(context.Background())
 	if err != nil || health.Status != "degraded" {
@@ -312,7 +350,7 @@ func TestControlHandlerSendsOnlyTaskWorktreeArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	messenger := &artifactMessenger{}
-	handler := controlHandler{store: controlTaskStore{value: task.Task{ID: "task-1", Provider: task.ProviderClaude, WorktreePath: root, TelegramChatID: 42}}, messenger: messenger}
+	handler := controlHandler{store: controlTaskStore{value: workmodel.Task{ID: "task-1", Provider: workmodel.ClaudeSubscription, WorktreePath: root, TelegramChatID: 42}}, messenger: messenger}
 	params := []byte(`{"path":"` + inside + `","name":"result.txt"}`)
 	result, err := handler.Handle(context.Background(), controlsocket.Request{TaskID: "task-1", Provider: "claude", Tool: "send_artifact", Params: params})
 	if err != nil || result == nil || messenger.contents != "result" || messenger.name != "result.txt" || messenger.chatID != 42 {
@@ -340,7 +378,7 @@ func TestControlHandlerRedactsConfiguredCredentialsBeforeTelegram(t *testing.T) 
 	const secret = "recognizable-bot-token-literal"
 	messenger := &artifactMessenger{sent: make(chan telegram.Message, 1)}
 	handler := controlHandler{
-		store:     controlTaskStore{value: task.Task{ID: "task-1", Provider: task.ProviderClaude, TelegramChatID: 42}},
+		store:     controlTaskStore{value: workmodel.Task{ID: "task-1", Provider: workmodel.ClaudeSubscription, TelegramChatID: 42}},
 		messenger: messenger,
 		redactor:  security.NewRedactor(security.Config{Secrets: []string{secret}}),
 	}
@@ -373,7 +411,7 @@ func TestControlHandlerApprovalWaitsForSignedTelegramDecision(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := controlHandler{
-		store:     controlTaskStore{value: task.Task{ID: "task-1", Provider: task.ProviderClaude, TelegramChatID: 99}},
+		store:     controlTaskStore{value: workmodel.Task{ID: "task-1", Provider: workmodel.ClaudeSubscription, TelegramChatID: 99}},
 		messenger: messenger, approvals: broker,
 	}
 	result := make(chan any, 1)
@@ -415,18 +453,18 @@ func TestProcTaskInspectorFindsOnlyExactLiveTaskWorktreeEvidence(t *testing.T) {
 	}
 	writeProcEvidence(t, procRoot, "101", nested, "task-1", "claude")
 	inspector := procTaskInspector{root: procRoot, platform: "linux", maxEntries: 32}
-	running, err := inspector.Running(context.Background(), "task-1", task.ProviderClaude, worktree)
+	running, err := inspector.Running(context.Background(), "task-1", workmodel.ClaudeSubscription, worktree)
 	if err != nil || !running {
 		t.Fatalf("running=%v err=%v", running, err)
 	}
 	// Codex tool children may not carry task markers; the per-task worktree cwd
 	// is therefore sufficient orphan evidence.
-	running, err = inspector.Running(context.Background(), "task-2", task.ProviderCodex, worktree)
+	running, err = inspector.Running(context.Background(), "task-2", workmodel.CodexSubscription, worktree)
 	if err != nil || !running {
 		t.Fatalf("cwd-only evidence running=%v err=%v", running, err)
 	}
 	otherWorktree := t.TempDir()
-	running, err = inspector.Running(context.Background(), "task-1", task.ProviderClaude, otherWorktree)
+	running, err = inspector.Running(context.Background(), "task-1", workmodel.ClaudeSubscription, otherWorktree)
 	if err != nil || running {
 		t.Fatalf("wrong worktree running=%v err=%v", running, err)
 	}
@@ -434,11 +472,11 @@ func TestProcTaskInspectorFindsOnlyExactLiveTaskWorktreeEvidence(t *testing.T) {
 
 func TestProcTaskInspectorFailsClosedWithoutReliableEvidenceSource(t *testing.T) {
 	inspector := procTaskInspector{root: filepath.Join(t.TempDir(), "missing"), platform: "linux", maxEntries: 32}
-	if running, err := inspector.Running(context.Background(), "task-1", task.ProviderClaude, t.TempDir()); err == nil || running {
+	if running, err := inspector.Running(context.Background(), "task-1", workmodel.ClaudeSubscription, t.TempDir()); err == nil || running {
 		t.Fatalf("missing proc source running=%v err=%v, want conservative error", running, err)
 	}
 	unsupported := procTaskInspector{root: "/proc", platform: "darwin", maxEntries: 32}
-	if running, err := unsupported.Running(context.Background(), "task-1", task.ProviderClaude, t.TempDir()); err != nil || !running {
+	if running, err := unsupported.Running(context.Background(), "task-1", workmodel.ClaudeSubscription, t.TempDir()); err != nil || !running {
 		t.Fatalf("unsupported platform running=%v err=%v, want conservative process evidence", running, err)
 	}
 }
@@ -507,11 +545,11 @@ func (f *fakeLiveHTTP) ShutdownWithContext(context.Context) error {
 	return nil
 }
 
-type controlTaskStore struct{ value task.Task }
+type controlTaskStore struct{ value workmodel.Task }
 
-func (s controlTaskStore) Task(_ context.Context, id string) (task.Task, error) {
+func (s controlTaskStore) Task(_ context.Context, id string) (workmodel.Task, error) {
 	if id != s.value.ID {
-		return task.Task{}, errors.New("not found")
+		return workmodel.Task{}, errors.New("not found")
 	}
 	return s.value, nil
 }
@@ -530,7 +568,9 @@ func (s *authCommandStub) Run(_ context.Context, name string, args ...string) ([
 
 type healthTaskStoreStub struct{}
 
-func (healthTaskStoreStub) NonterminalTasks(context.Context) ([]task.Task, error) { return nil, nil }
+func (healthTaskStoreStub) NonterminalTasks(context.Context) ([]workmodel.Task, error) {
+	return nil, nil
+}
 
 type healthProviderStub struct {
 	provider.Provider
@@ -570,19 +610,19 @@ func (m *artifactMessenger) SendDocument(_ context.Context, document telegram.Do
 
 type approvalStore struct {
 	mu     sync.Mutex
-	values []task.Approval
+	values []workmodel.Approval
 }
 
-func (s *approvalStore) UpsertApproval(_ context.Context, value task.Approval) error {
+func (s *approvalStore) UpsertApproval(_ context.Context, value workmodel.Approval) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.values = append(s.values, value)
 	return nil
 }
 
-func (*approvalStore) AppendEvent(context.Context, task.Event) error { return nil }
+func (*approvalStore) AppendEvent(context.Context, workmodel.Event) error { return nil }
 
-func (*approvalStore) Events(context.Context, string) ([]task.Event, error) { return nil, nil }
+func (*approvalStore) Events(context.Context, string) ([]workmodel.Event, error) { return nil, nil }
 
 func (f *fakeDaemonRuntime) Start(context.Context) error {
 	f.record("start")

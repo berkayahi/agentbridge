@@ -1,6 +1,8 @@
 # CLI compatibility
 
 AgentBridge uses official subscription-authenticated CLIs and does not call model-provider APIs.
+The provider adapters are runtime plugins behind opaque work-model IDs; no
+provider-specific identifier is a transport or database authority.
 CLI paths remain runtime-configurable so operators can upgrade independently.
 
 | Integration | Validated version | Validation contract |

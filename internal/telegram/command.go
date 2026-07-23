@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -33,7 +33,7 @@ const (
 
 type Command struct {
 	Kind       Kind
-	Provider   task.Provider
+	Provider   workmodel.Provider
 	Argument   string
 	TaskID     string
 	ApprovalID string
@@ -65,7 +65,7 @@ func ParseUpdate(update Update, botUsername string, signer *CallbackSigner) (Com
 		return Command{Kind: KindSessionSelect, TaskID: action.TaskID, CallbackID: update.Callback.ID}, nil
 	}
 	if action.Action == "session_new" {
-		return Command{Kind: KindSessionSelect, Provider: task.Provider(action.TaskID), CallbackID: update.Callback.ID}, nil
+		return Command{Kind: KindSessionSelect, Provider: workmodel.Provider(action.TaskID), CallbackID: update.Callback.ID}, nil
 	}
 	if action.Action == "reject" {
 		kind = KindReject
@@ -117,9 +117,9 @@ func ParseCommand(input, botUsername string) (Command, error) {
 			return Command{}, errors.New("telegram: provider prompt is required")
 		}
 		if strings.EqualFold(argument, "usage") {
-			return Command{Kind: KindUsage, Provider: task.Provider(name)}, nil
+			return Command{Kind: KindUsage, Provider: workmodel.Provider(name)}, nil
 		}
-		return Command{Kind: KindPrompt, Provider: task.Provider(name), Argument: argument}, nil
+		return Command{Kind: KindPrompt, Provider: workmodel.Provider(name), Argument: argument}, nil
 	}
 	kind, ok := directKinds[name]
 	if !ok {

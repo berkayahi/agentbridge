@@ -1,4 +1,4 @@
-package app
+package standalone
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/security"
-	"github.com/berkayahi/agentbridge/internal/task"
 	"github.com/berkayahi/agentbridge/internal/telegram"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestNativeApprovalPersistsDecisionBeforeProviderRelease(t *testing.T) {
@@ -63,10 +63,10 @@ func TestNativeApprovalReleaseFailureCompensatesDurableDecision(t *testing.T) {
 		t.Fatal("approval release failure succeeded")
 	}
 	approval := fixture.store.approval("approval-1")
-	if approval.Status == task.ApprovalApproved || approval.Status == task.ApprovalPending {
+	if approval.Status == workmodel.ApprovalApproved || approval.Status == workmodel.ApprovalPending {
 		t.Fatalf("approval status = %q, want fail-closed terminal status", approval.Status)
 	}
-	if got, getErr := fixture.store.Task(context.Background(), value.ID); getErr != nil || got.State != task.Failed {
+	if got, getErr := fixture.store.Task(context.Background(), value.ID); getErr != nil || got.State != workmodel.Failed {
 		t.Fatalf("task = %#v, err = %v", got, getErr)
 	}
 }
@@ -94,7 +94,7 @@ func TestNativeApprovalPersistenceFailureNeverReleasesProvider(t *testing.T) {
 	if released {
 		t.Fatal("provider was released before durable approval")
 	}
-	if got := base.approval("approval-1"); got.Status != task.ApprovalPending {
+	if got := base.approval("approval-1"); got.Status != workmodel.ApprovalPending {
 		t.Fatalf("approval status = %s, want pending fail-closed state", got.Status)
 	}
 }
@@ -103,11 +103,11 @@ func TestApprovalTaskAwaitsDecisionBeforeKeyboardPublication(t *testing.T) {
 	providerPort := newApprovalBlockingProvider()
 	fixture := newFixtureWithProvider(t, providerPort)
 	fixture.app.deps.Signer = telegram.NewCallbackSigner([]byte("01234567890123456789012345678901"), nil)
-	states := make(chan task.State, 1)
+	states := make(chan workmodel.State, 1)
 	fixture.app.deps.Messenger = &stateInspectingMessenger{next: fixture.messenger, inspect: func() {
 		values, _ := fixture.store.NonterminalTasks(context.Background())
 		for _, value := range values {
-			if value.State == task.Running || value.State == task.AwaitingApproval {
+			if value.State == workmodel.Running || value.State == workmodel.AwaitingApproval {
 				states <- value.State
 				return
 			}
@@ -119,8 +119,8 @@ func TestApprovalTaskAwaitsDecisionBeforeKeyboardPublication(t *testing.T) {
 	}
 	select {
 	case got := <-states:
-		if got != task.AwaitingApproval {
-			t.Fatalf("state at keyboard publication = %s, want %s", got, task.AwaitingApproval)
+		if got != workmodel.AwaitingApproval {
+			t.Fatalf("state at keyboard publication = %s, want %s", got, workmodel.AwaitingApproval)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("approval keyboard was not published")
@@ -138,10 +138,10 @@ func TestApprovalTimeoutExpiresRecordAndFailsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.Failed {
-		t.Fatalf("task state = %s, want %s", got.State, task.Failed)
+	if got := fixture.wait(t, id); got.State != workmodel.Failed {
+		t.Fatalf("task state = %s, want %s", got.State, workmodel.Failed)
 	}
-	if got := fixture.store.approval("appr-time"); got.Status != task.ApprovalExpired || got.ResolvedAt == nil {
+	if got := fixture.store.approval("appr-time"); got.Status != workmodel.ApprovalExpired || got.ResolvedAt == nil {
 		t.Fatalf("approval = %#v", got)
 	}
 }
@@ -159,7 +159,7 @@ func TestProviderOutputIsRedactedBeforeDurableAndTelegramPublication(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fixture.wait(t, id); got.State != task.AwaitingApproval {
+	if got := fixture.wait(t, id); got.State != workmodel.AwaitingApproval {
 		t.Fatalf("task state = %s", got.State)
 	}
 	events, err := fixture.store.Events(context.Background(), id)
@@ -182,26 +182,26 @@ func TestProviderOutputIsRedactedBeforeDurableAndTelegramPublication(t *testing.
 	}
 }
 
-func seedPendingApproval(t *testing.T, application *App, values *memoryStore, providerPort provider.Provider) task.Task {
+func seedPendingApproval(t *testing.T, application *App, values *memoryStore, providerPort provider.Provider) workmodel.Task {
 	t.Helper()
 	now := time.Unix(100, 0).UTC()
-	value := task.Task{ID: "task-approval", RepoProfileID: "sample", Prompt: "change", State: task.Queued, Provider: task.ProviderCodex, TelegramChatID: 100, CreatedAt: now, UpdatedAt: now}
-	if err := values.CreateTask(context.Background(), value, task.Event{ID: "created", TaskID: value.ID, Type: task.EventTaskCreated, Visibility: task.VisibilityUser, CreatedAt: now}); err != nil {
+	value := workmodel.Task{ID: "task-approval", RepoProfileID: "sample", Prompt: "change", State: workmodel.Queued, Provider: workmodel.CodexSubscription, TelegramChatID: 100, CreatedAt: now, UpdatedAt: now}
+	if err := values.CreateTask(context.Background(), value, workmodel.Event{ID: "created", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, CreatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	for index, state := range []task.State{task.Preparing, task.Running, task.AwaitingApproval} {
-		if err := values.Transition(context.Background(), value.ID, state, task.Event{ID: "transition-" + string(rune('0'+index)), TaskID: value.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, CreatedAt: now}); err != nil {
+	for index, state := range []workmodel.State{workmodel.Preparing, workmodel.Running, workmodel.AwaitingApproval} {
+		if err := values.Transition(context.Background(), value.ID, state, workmodel.Event{ID: "transition-" + string(rune('0'+index)), TaskID: value.ID, Type: workmodel.EventStateTransitioned, Visibility: workmodel.VisibilityUser, CreatedAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	expires := now.Add(time.Minute)
-	if err := values.UpsertApproval(context.Background(), task.Approval{ID: "approval-1", TaskID: value.ID, Kind: "provider", Status: task.ApprovalPending, RequestedAt: now, ExpiresAt: &expires}); err != nil {
+	if err := values.UpsertApproval(context.Background(), workmodel.Approval{ID: "approval-1", TaskID: value.ID, Kind: "provider", Status: workmodel.ApprovalPending, RequestedAt: now, ExpiresAt: &expires}); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	close(done)
-	application.rememberActive(value.ID, providerPort, provider.Session{ID: provider.MustID("session-approval"), TaskID: provider.MustID(value.ID), Provider: task.ProviderCodex}, func(error) {}, done)
-	value.State = task.AwaitingApproval
+	application.rememberActive(value.ID, providerPort, provider.Session{ID: provider.MustID("session-approval"), TaskID: provider.MustID(value.ID), Provider: workmodel.CodexSubscription}, func(error) {}, done)
+	value.State = workmodel.AwaitingApproval
 	return value
 }
 
@@ -216,15 +216,15 @@ type approvalOrderStore struct {
 
 type approvalDecisionFailureStore struct{ *memoryStore }
 
-func (s *approvalDecisionFailureStore) UpsertApproval(ctx context.Context, value task.Approval) error {
-	if value.Status != task.ApprovalPending {
+func (s *approvalDecisionFailureStore) UpsertApproval(ctx context.Context, value workmodel.Approval) error {
+	if value.Status != workmodel.ApprovalPending {
 		return errors.New("decision write failed")
 	}
 	return s.memoryStore.UpsertApproval(ctx, value)
 }
 
-func (s *approvalOrderStore) UpsertApproval(ctx context.Context, value task.Approval) error {
-	if value.Status != task.ApprovalPending {
+func (s *approvalOrderStore) UpsertApproval(ctx context.Context, value workmodel.Approval) error {
+	if value.Status != workmodel.ApprovalPending {
 		s.record("persist:" + string(value.Status))
 	}
 	return s.memoryStore.UpsertApproval(ctx, value)
@@ -234,7 +234,7 @@ type approvalProvider struct {
 	resolve func(context.Context, provider.ApprovalDecision) error
 }
 
-func (*approvalProvider) Name() task.Provider { return task.ProviderCodex }
+func (*approvalProvider) Name() workmodel.Provider { return workmodel.CodexSubscription }
 func (*approvalProvider) Start(context.Context, provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	return provider.Session{}, nil, errors.New("unexpected start")
 }
@@ -261,14 +261,14 @@ type approvalBlockingProvider struct {
 func newApprovalBlockingProvider() *approvalBlockingProvider {
 	return &approvalBlockingProvider{started: make(chan struct{}), events: make(chan provider.Event, 2), summary: "run command"}
 }
-func (*approvalBlockingProvider) Name() task.Provider { return task.ProviderCodex }
+func (*approvalBlockingProvider) Name() workmodel.Provider { return workmodel.CodexSubscription }
 func (p *approvalBlockingProvider) Start(_ context.Context, request provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	close(p.started)
 	if p.prelude != "" {
 		p.events <- provider.Event{ID: provider.MustID("assistant-event"), Type: provider.EventAssistantMessage, Message: p.prelude, Tool: p.prelude}
 	}
 	p.events <- provider.Event{ID: provider.MustID("approval-event"), RequestID: provider.MustID("appr-req"), Type: provider.EventApprovalRequired, Message: p.summary}
-	return provider.Session{ID: provider.MustID("session-approval"), TaskID: request.TaskID, ExternalID: "session-approval", Provider: task.ProviderCodex}, p.events, nil
+	return provider.Session{ID: provider.MustID("session-approval"), TaskID: request.TaskID, ExternalID: "session-approval", Provider: workmodel.CodexSubscription}, p.events, nil
 }
 func (*approvalBlockingProvider) Resume(context.Context, provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
 	return provider.Session{}, nil, errors.New("unexpected resume")
@@ -314,7 +314,7 @@ func (m *stateInspectingMessenger) SendDocument(ctx context.Context, document te
 	return m.next.SendDocument(ctx, document)
 }
 
-func (s *memoryStore) approval(id string) task.Approval {
+func (s *memoryStore) approval(id string) workmodel.Approval {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.approvals[id]

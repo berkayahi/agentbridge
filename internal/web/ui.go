@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/store"
-	"github.com/berkayahi/agentbridge/internal/task"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 	"github.com/gofiber/fiber/v3"
 )
 
@@ -66,7 +66,7 @@ type taskPageView struct {
 }
 type timelineView struct {
 	ID        string
-	Type      task.EventType
+	Type      workmodel.EventType
 	Message   string
 	CreatedAt time.Time
 }
@@ -132,10 +132,10 @@ func (s *Server) render(c fiber.Ctx, name string, data any) error {
 	c.Type("html", "utf-8")
 	return s.views.templates.ExecuteTemplate(c.Response().BodyWriter(), name, data)
 }
-func visibleTimeline(values []task.Event) []timelineView {
+func visibleTimeline(values []workmodel.Event) []timelineView {
 	result := make([]timelineView, 0, len(values))
 	for _, value := range values {
-		if value.Visibility != task.VisibilityUser {
+		if value.Visibility != workmodel.VisibilityUser {
 			continue
 		}
 		message := string(value.Payload)

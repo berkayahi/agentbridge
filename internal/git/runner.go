@@ -18,6 +18,7 @@ type Runner struct {
 	Executable     string
 	MaxOutputBytes int
 	Redactor       *security.Redactor
+	Environment    []string
 }
 
 func (r Runner) Run(ctx context.Context, dir string, args ...string) (RunResult, error) {
@@ -34,7 +35,7 @@ func (r Runner) Run(ctx context.Context, dir string, args ...string) (RunResult,
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = dir
-	cmd.Env = gitEnvironment()
+	cmd.Env = gitEnvironment(r.Environment)
 	var stdout, stderr boundedBuffer
 	stdout.limit, stderr.limit = limit, limit
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -64,9 +65,15 @@ func (r Runner) summary(args []string) string {
 	return strings.Join(parts, " ")
 }
 
-func gitEnvironment() []string {
+func gitEnvironment(extra []string) []string {
 	allowed := map[string]bool{"HOME": true, "PATH": true, "TMPDIR": true, "SSH_AUTH_SOCK": true, "SSH_AGENT_PID": true, "USER": true, "LOGNAME": true, "SystemRoot": true}
 	env := []string{"GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
+	if len(extra) > 0 {
+		env = append([]string(nil), extra...)
+	}
+	if len(extra) > 0 {
+		return env
+	}
 	for _, value := range os.Environ() {
 		key, _, ok := strings.Cut(value, "=")
 		if ok && allowed[key] {

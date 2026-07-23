@@ -50,6 +50,17 @@ func sqliteDSN(path string) string {
 	return u.String()
 }
 
+func sqliteDSNWithImmediateTransactions(path string) string {
+	u, err := url.Parse(sqliteDSN(path))
+	if err != nil {
+		return sqliteDSN(path)
+	}
+	query := u.Query()
+	query.Set("_txlock", "immediate")
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) CreateTask(ctx context.Context, value task.Task, initial task.Event) error {

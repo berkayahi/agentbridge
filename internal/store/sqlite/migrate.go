@@ -22,6 +22,11 @@ type migration struct {
 }
 
 func migrate(ctx context.Context, db *sql.DB) error {
+	if exists, err := tableExists(ctx, db, "migration_ledger"); err != nil {
+		return err
+	} else if exists {
+		return ErrMigrationRequired
+	}
 	if _, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,

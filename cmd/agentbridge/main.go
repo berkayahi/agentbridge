@@ -44,6 +44,7 @@ type commandDeps struct {
 	runMCP         func(context.Context, mcpserver.RunOptions) error
 	runStatusline  func(context.Context, io.Reader, claude.StatuslineCaller, claude.StatuslineScope, func() time.Time) error
 	runServe       func(context.Context, string) error
+	runMigrate     func(context.Context, string) error
 }
 
 func defaultCommandDeps() commandDeps {
@@ -64,6 +65,7 @@ func defaultCommandDeps() commandDeps {
 		runMCP:        mcpserver.Run,
 		runStatusline: claude.CaptureStatusline,
 		runServe:      serveDaemon,
+		runMigrate:    runMigrate,
 	}
 }
 
@@ -132,8 +134,19 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		}
 		return 0
 	}
+	if len(args) == 3 && args[0] == "migrate" && args[1] == "--database" && strings.TrimSpace(args[2]) != "" {
+		if deps.runMigrate == nil {
+			fmt.Fprintln(stderr, "agentbridge: migration is unavailable")
+			return 1
+		}
+		if err := deps.runMigrate(ctx, args[2]); err != nil {
+			fmt.Fprintln(stderr, "agentbridge: migration failed; database was not activated")
+			return 1
+		}
+		return 0
+	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 

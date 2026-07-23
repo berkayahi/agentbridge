@@ -171,7 +171,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

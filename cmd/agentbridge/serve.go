@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/config"
+	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 )
 
 type daemonRuntime interface {
@@ -129,6 +130,11 @@ func serveDaemonWithBuilder(ctx context.Context, configPath string, builder daem
 	if err := paths.prepare(); err != nil {
 		return err
 	}
+	releaseDatabaseLock, err := sqlite.AcquireDatabaseRuntimeLock(paths.database)
+	if err != nil {
+		return err
+	}
+	defer releaseDatabaseLock()
 	token, err := (config.CredentialReader{}).Read("telegram_bot_token")
 	if err != nil {
 		return err

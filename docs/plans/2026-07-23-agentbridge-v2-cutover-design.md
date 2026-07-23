@@ -18,10 +18,11 @@ active writers, runs SQLite integrity and lineage checks, and validates applied
 migration names, embedded migration checksums, and the live structural
 fingerprint. Unknown or altered databases fail closed.
 
-Before transformation, the command creates a mode-0600 backup with `VACUUM
-INTO`. It independently verifies backup integrity, schema fingerprint, page
-count, and representative row counts, then writes a manifest containing source
-and backup hashes, the source fingerprint, tool version, and timestamp.
+Before transformation, the command creates a mode-0600 backup with SQLite's
+online backup API so freelist pages do not cause a false page-count mismatch. It
+independently verifies backup integrity, schema fingerprint, page count, and
+representative row counts, then writes a manifest containing source and backup
+hashes, the source fingerprint, tool version, and timestamp.
 
 The transformation runs in one SQLite transaction. It creates the embedded
 execution-kernel schema, maps legacy tasks to `local_tasks` and synthetic

@@ -1,6 +1,10 @@
 package kernel
 
-import "time"
+import (
+	"time"
+
+	"github.com/berkayahi/agentbridge/internal/execution"
+)
 
 type StartExecution struct {
 	CommandID      string
@@ -42,6 +46,23 @@ type ForkExecution struct {
 type ApprovalDecision struct {
 	CommandID, ExecutionID, TaskID, RuntimeID, ApprovalID string
 	Allow                                                 bool
+}
+
+type RetryExecution struct {
+	ExecutionID  string
+	CommandID    string
+	EvidenceID   string
+	Basis        execution.RetryBasis
+	FencingEpoch uint64
+	IssuedAt     time.Time
+}
+
+type SuccessorExecution struct {
+	ExecutionID  string
+	NewID        string
+	CommandID    string
+	FencingEpoch uint64
+	CreatedAt    time.Time
 }
 
 type CommandResult struct {

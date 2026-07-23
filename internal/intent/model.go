@@ -14,6 +14,7 @@ var (
 	ErrNotPending      = errors.New("intent: not pending")
 	ErrExpired         = errors.New("intent: expired")
 	ErrAlreadyComplete = errors.New("intent: already completed")
+	ErrPayloadMismatch = errors.New("intent: idempotency payload mismatch")
 )
 
 type State string
@@ -91,6 +92,9 @@ func (i Intent) Claim(owner string, now time.Time, lease time.Duration) (Intent,
 func (i Intent) Complete(owner, result string, now time.Time) (Intent, error) {
 	if i.State != StateClaimed {
 		if i.State == StateCompleted {
+			if i.SafeResult == result {
+				return i, nil
+			}
 			return Intent{}, ErrAlreadyComplete
 		}
 		return Intent{}, ErrStaleClaim
@@ -104,10 +108,32 @@ func (i Intent) Complete(owner, result string, now time.Time) (Intent, error) {
 }
 
 func (i Intent) Reconcile(owner, progress string, now time.Time) (Intent, error) {
+	if i.State == StateReconciliationNeeded && i.SafeProgress == progress {
+		return i, nil
+	}
 	if i.State != StateClaimed || i.ClaimOwner != owner || i.LeaseExpiresAt == nil || !now.Before(*i.LeaseExpiresAt) {
 		return Intent{}, ErrStaleClaim
 	}
 	i.State, i.SafeProgress = StateReconciliationNeeded, progress
+	return i, nil
+}
+
+// Cancel fences both pending and claimed work. Cancellation is intentionally
+// independent of the worker lease: an operator command must win a race with a
+// worker that has not yet begun its external side effect.
+func (i Intent) Cancel(reason string, now time.Time) (Intent, error) {
+	if now.IsZero() {
+		return Intent{}, ErrInvalidInput
+	}
+	if i.State == StateCanceled && i.SafeResult == reason {
+		return i, nil
+	}
+	if i.State != StatePending && i.State != StateClaimed {
+		return Intent{}, ErrStaleClaim
+	}
+	completed := now.UTC()
+	i.State, i.SafeResult, i.ClaimOwner, i.CompletedAt = StateCanceled, reason, "", &completed
+	i.LeaseExpiresAt = nil
 	return i, nil
 }
 

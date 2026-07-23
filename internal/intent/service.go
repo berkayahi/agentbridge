@@ -13,6 +13,8 @@ type Repository interface {
 	Claim(context.Context, string, string, time.Time, time.Duration) (Intent, error)
 	Complete(context.Context, string, string, string, time.Time) (Intent, error)
 	Reconcile(context.Context, string, string, string, time.Time) (Intent, error)
+	Cancel(context.Context, string, string, time.Time) (Intent, error)
+	CancelByExecution(context.Context, string, string, time.Time) (int, error)
 }
 
 // Service is the application-facing durable intent boundary.
@@ -33,4 +35,10 @@ func (s *Service) Complete(ctx context.Context, id, owner, result string, now ti
 }
 func (s *Service) Reconcile(ctx context.Context, id, owner, progress string, now time.Time) (Intent, error) {
 	return s.repository.Reconcile(ctx, id, owner, progress, now)
+}
+func (s *Service) Cancel(ctx context.Context, id, reason string, now time.Time) (Intent, error) {
+	return s.repository.Cancel(ctx, id, reason, now)
+}
+func (s *Service) CancelByExecution(ctx context.Context, executionID, reason string, now time.Time) (int, error) {
+	return s.repository.CancelByExecution(ctx, executionID, reason, now)
 }

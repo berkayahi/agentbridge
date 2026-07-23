@@ -27,6 +27,9 @@ type BindingInput struct {
 	CreatedAt time.Time
 }
 
+// RestoreBinding is an alias-shaped input for repository adapters.
+type RestoreBinding = BindingInput
+
 func NewBinding(input BindingInput) (Binding, error) {
 	if !validID(input.ID) || strings.TrimSpace(input.RemoteURL) == "" || input.CreatedAt.IsZero() {
 		return Binding{}, ErrInvalidInput

@@ -49,6 +49,10 @@ func (s State) Terminal() bool {
 	return s == StateSucceeded || s == StateFailed || s == StateCanceled
 }
 
+func (s State) Valid() bool {
+	return s == StateQueued || s == StateRunning || s == StateSucceeded || s == StateFailed || s == StateCanceled
+}
+
 // Operation keeps its Git target and idempotency intent immutable. Only its
 // state may advance through the explicit lifecycle below.
 type Operation struct {
@@ -72,6 +76,18 @@ type NewInput struct {
 	CreatedAt      time.Time
 }
 
+// RestoreInput is the persisted representation used by repository adapters.
+type RestoreInput struct {
+	ID             string
+	ExecutionID    string
+	Kind           Kind
+	TargetRef      string
+	ExpectedOldSHA string
+	IdempotencyKey string
+	State          State
+	CreatedAt      time.Time
+}
+
 func New(input NewInput) (Operation, error) {
 	if !validID(input.ID) || !validID(input.ExecutionID) || !input.Kind.Valid() || !validRef(input.TargetRef) ||
 		!validGitObjectID(input.ExpectedOldSHA) || !validID(input.IdempotencyKey) || input.CreatedAt.IsZero() {
@@ -82,6 +98,23 @@ func New(input NewInput) (Operation, error) {
 		expectedOldSHA: strings.ToLower(input.ExpectedOldSHA), idempotencyKey: input.IdempotencyKey,
 		state: StateQueued, createdAt: input.CreatedAt.UTC(),
 	}, nil
+}
+
+// Restore reconstructs an operation after its row has been validated.
+func Restore(input RestoreInput) (Operation, error) {
+	value, err := New(NewInput{
+		ID: input.ID, ExecutionID: input.ExecutionID, Kind: input.Kind,
+		TargetRef: input.TargetRef, ExpectedOldSHA: input.ExpectedOldSHA,
+		IdempotencyKey: input.IdempotencyKey, CreatedAt: input.CreatedAt,
+	})
+	if err != nil || !input.State.Valid() {
+		if err != nil {
+			return Operation{}, err
+		}
+		return Operation{}, ErrInvalidInput
+	}
+	value.state = input.State
+	return value, nil
 }
 
 func (o Operation) ID() string             { return o.id }

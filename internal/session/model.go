@@ -31,11 +31,35 @@ type NewInput struct {
 	CreatedAt    time.Time
 }
 
+// RestoreInput is the persisted representation used by repository adapters.
+type RestoreInput struct {
+	ID           string
+	RuntimeID    string
+	RepositoryID string
+	ActiveTaskID string
+	CreatedAt    time.Time
+}
+
 func New(input NewInput) (Session, error) {
 	if !validID(input.ID) || !validID(input.RuntimeID) || !validID(input.RepositoryID) || input.CreatedAt.IsZero() {
 		return Session{}, ErrInvalidInput
 	}
 	return Session{id: input.ID, runtimeID: input.RuntimeID, repositoryID: input.RepositoryID, createdAt: input.CreatedAt.UTC()}, nil
+}
+
+// Restore reconstructs a session after the repository has checked its row.
+func Restore(input RestoreInput) (Session, error) {
+	value, err := New(NewInput{ID: input.ID, RuntimeID: input.RuntimeID, RepositoryID: input.RepositoryID, CreatedAt: input.CreatedAt})
+	if err != nil {
+		return Session{}, err
+	}
+	if input.ActiveTaskID != "" {
+		value, err = value.BindTask(input.ActiveTaskID)
+		if err != nil {
+			return Session{}, err
+		}
+	}
+	return value, nil
 }
 
 func (s Session) ID() string           { return s.id }

@@ -34,6 +34,17 @@ type NewInput struct {
 	CreatedAt time.Time
 }
 
+// RestoreInput is the persisted representation used by repository adapters.
+// It is intentionally separate from NewInput so storage cannot become part
+// of the task-creation API.
+type RestoreInput struct {
+	ID                string
+	Title             string
+	Prompt            string
+	ActiveExecutionID string
+	CreatedAt         time.Time
+}
+
 func New(input NewInput) (LocalTask, error) {
 	if !validID(input.ID) || strings.TrimSpace(input.Title) == "" || strings.TrimSpace(input.Prompt) == "" || input.CreatedAt.IsZero() {
 		return LocalTask{}, ErrInvalidInput
@@ -44,6 +55,21 @@ func New(input NewInput) (LocalTask, error) {
 		prompt:    input.Prompt,
 		createdAt: input.CreatedAt.UTC(),
 	}, nil
+}
+
+// Restore reconstructs a task after the repository has validated its row.
+func Restore(input RestoreInput) (LocalTask, error) {
+	value, err := New(NewInput{ID: input.ID, Title: input.Title, Prompt: input.Prompt, CreatedAt: input.CreatedAt})
+	if err != nil {
+		return LocalTask{}, err
+	}
+	if input.ActiveExecutionID != "" {
+		value, err = value.BeginExecution(input.ActiveExecutionID)
+		if err != nil {
+			return LocalTask{}, err
+		}
+	}
+	return value, nil
 }
 
 func (t LocalTask) ID() string           { return t.id }

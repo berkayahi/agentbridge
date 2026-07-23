@@ -49,6 +49,24 @@ type NewInput struct {
 	UpdatedAt            time.Time
 }
 
+// RestoreInput is the durable representation accepted by storage adapters.
+type RestoreInput struct {
+	ID                   string
+	LocalTaskID          string
+	SessionID            string
+	RuntimeID            string
+	RepositoryID         string
+	RetryOfExecutionID   string
+	State                State
+	Attempt              uint32
+	FencingEpoch         uint64
+	CommandID            string
+	MaxTransientAttempts uint32
+	PolicySnapshot       []byte
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
 func New(input NewInput) (Execution, error) {
 	if !validID(input.ID) || !validID(input.LocalTaskID) || !validID(input.SessionID) ||
 		!validID(input.RuntimeID) || !validID(input.RepositoryID) || !validID(input.CommandID) || input.FencingEpoch == 0 || len(input.PolicySnapshot) == 0 ||
@@ -69,6 +87,30 @@ func New(input NewInput) (Execution, error) {
 		createdAt:            input.CreatedAt.UTC(),
 		updatedAt:            input.UpdatedAt.UTC(),
 	}, nil
+}
+
+// Restore reconstructs an execution after the repository has validated its
+// foreign keys and durable state.
+func Restore(input RestoreInput) (Execution, error) {
+	value, err := New(NewInput{
+		ID: input.ID, LocalTaskID: input.LocalTaskID, SessionID: input.SessionID,
+		RuntimeID: input.RuntimeID, RepositoryID: input.RepositoryID, CommandID: input.CommandID,
+		FencingEpoch: input.FencingEpoch, MaxTransientAttempts: input.MaxTransientAttempts,
+		PolicySnapshot: input.PolicySnapshot, CreatedAt: input.CreatedAt, UpdatedAt: input.UpdatedAt,
+	})
+	if err != nil || !input.State.Valid() || input.Attempt > input.MaxTransientAttempts && input.State == StateRunning {
+		if err != nil {
+			return Execution{}, err
+		}
+		return Execution{}, ErrInvalidInput
+	}
+	if input.RetryOfExecutionID != "" && !validID(input.RetryOfExecutionID) {
+		return Execution{}, ErrInvalidInput
+	}
+	value.retryOfExecutionID = input.RetryOfExecutionID
+	value.attempt = input.Attempt
+	value.state = input.State
+	return value, nil
 }
 
 func (e Execution) ID() string                   { return e.id }

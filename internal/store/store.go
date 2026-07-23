@@ -5,6 +5,12 @@ import (
 	"errors"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/events"
+	"github.com/berkayahi/agentbridge/internal/execution"
+	"github.com/berkayahi/agentbridge/internal/gitoperation"
+	"github.com/berkayahi/agentbridge/internal/localtask"
+	"github.com/berkayahi/agentbridge/internal/repository"
+	"github.com/berkayahi/agentbridge/internal/session"
 	"github.com/berkayahi/agentbridge/internal/task"
 )
 
@@ -54,4 +60,21 @@ type Store interface {
 	HeartbeatLease(context.Context, string, string, time.Duration) error
 	ReleaseLease(context.Context, string, string) error
 	ExpiredLeases(context.Context) ([]Lease, error)
+}
+
+// Repositories groups the narrow 2.0 repositories that share one transaction.
+// It is deliberately separate from the legacy Store interface so the old
+// daemon can remain source-compatible until the atomic v2 activation.
+type Repositories struct {
+	LocalTasks    localtask.Repository
+	Executions    execution.Repository
+	Sessions      session.Repository
+	Repositories  repository.Repository
+	GitOperations gitoperation.Repository
+	Events        events.Repository
+}
+
+// UnitOfWork is the transaction boundary for v2 state plus durable events.
+type UnitOfWork interface {
+	Within(context.Context, func(Repositories) error) error
 }

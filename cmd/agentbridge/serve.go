@@ -208,5 +208,21 @@ func activateRuntimeMode(ctx context.Context, cfg config.Config, paths runtimePa
 	if _, err := state.Load(modeCtx); err != nil {
 		return fmt.Errorf("managed replay state unavailable: %w", err)
 	}
+	trust, err := state.LoadTrust(modeCtx)
+	if err != nil {
+		return fmt.Errorf("managed command trust unavailable: %w", err)
+	}
+	if err := trust.Validate(); err != nil {
+		trust, err = managed.TrustSetFromEnrollment(record)
+		if err != nil {
+			return fmt.Errorf("managed command trust is not enrolled: %w", err)
+		}
+		if err := state.SaveTrust(modeCtx, trust); err != nil {
+			return fmt.Errorf("persist managed command trust: %w", err)
+		}
+	}
+	if trust.HighestEpoch < record.HighestControllerEpoch {
+		return errors.New("managed command trust epoch is older than enrollment")
+	}
 	return nil
 }

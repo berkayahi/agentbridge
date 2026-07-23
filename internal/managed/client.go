@@ -132,6 +132,7 @@ type PersistentClientConfig struct {
 	State          *FileStateStore
 	WebSocket      WebSocketConfig
 	Identity       deviceidentity.Key
+	Enrollment     *deviceidentity.EnrollmentRecord
 	OrganizationID string
 	DeviceID       string
 	Capabilities   []string
@@ -146,6 +147,14 @@ func NewPersistentClient(config PersistentClientConfig) (*Client, error) {
 	if config.State == nil || !config.Identity.HasPrivate() || config.OrganizationID == "" || config.DeviceID == "" {
 		return nil, ErrInvalidHandshakeSignature
 	}
+	if config.Enrollment != nil {
+		if config.Enrollment.OrganizationID != config.OrganizationID || config.Enrollment.DeviceID != config.DeviceID || config.Enrollment.Fingerprint != config.Identity.Fingerprint() {
+			return nil, ErrInvalidHandshakeSignature
+		}
+		if config.Enrollment.Revoked || config.Enrollment.Quarantined {
+			return nil, ErrRevoked
+		}
+	}
 	if err := ValidateWebSocketURL(config.WebSocket.URL); err != nil {
 		return nil, err
 	}
@@ -154,7 +163,16 @@ func NewPersistentClient(config PersistentClientConfig) (*Client, error) {
 		return nil, err
 	}
 	if err := trust.Validate(); err != nil {
-		return nil, err
+		if config.Enrollment == nil {
+			return nil, err
+		}
+		trust, err = TrustSetFromEnrollment(*config.Enrollment)
+		if err != nil {
+			return nil, err
+		}
+		if err := config.State.SaveTrust(context.Background(), trust); err != nil {
+			return nil, err
+		}
 	}
 	guard, err := NewReplayGuardWithInbox(config.State, config.OrganizationID, config.DeviceID)
 	if err != nil {

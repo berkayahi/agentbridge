@@ -28,25 +28,27 @@ type enrollmentRequestOutput struct {
 }
 
 type enrollmentChallengeInput struct {
-	ClaimID        string    `json:"claim_id"`
-	OrganizationID string    `json:"organization_id"`
-	DeviceID       string    `json:"device_id"`
-	Nonce          string    `json:"nonce"`
-	TrustSetDigest string    `json:"trust_set_digest"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	ClaimID            string            `json:"claim_id"`
+	OrganizationID     string            `json:"organization_id"`
+	DeviceID           string            `json:"device_id"`
+	Nonce              string            `json:"nonce"`
+	TrustSetDigest     string            `json:"trust_set_digest"`
+	CommandSigningKeys map[string][]byte `json:"command_signing_keys,omitempty"`
+	ExpiresAt          time.Time         `json:"expires_at"`
 }
 
 type enrollmentProofOutput struct {
-	Version        int       `json:"version"`
-	ClaimID        string    `json:"claim_id"`
-	OrganizationID string    `json:"organization_id"`
-	DeviceID       string    `json:"device_id"`
-	Nonce          string    `json:"nonce"`
-	PublicKey      string    `json:"device_public_key"`
-	Fingerprint    string    `json:"fingerprint"`
-	Signature      string    `json:"signature"`
-	TrustSetDigest string    `json:"trust_set_digest"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	Version            int               `json:"version"`
+	ClaimID            string            `json:"claim_id"`
+	OrganizationID     string            `json:"organization_id"`
+	DeviceID           string            `json:"device_id"`
+	Nonce              string            `json:"nonce"`
+	PublicKey          string            `json:"device_public_key"`
+	Fingerprint        string            `json:"fingerprint"`
+	Signature          string            `json:"signature"`
+	TrustSetDigest     string            `json:"trust_set_digest"`
+	CommandSigningKeys map[string][]byte `json:"command_signing_keys,omitempty"`
+	ExpiresAt          time.Time         `json:"expires_at"`
 }
 
 func runEnrollCommand(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -117,7 +119,7 @@ func runEnrollCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	record := deviceidentity.EnrollmentRecord{
 		Version: 1, ClaimID: proof.ClaimID, OrganizationID: proof.OrganizationID, DeviceID: proof.DeviceID,
 		Fingerprint: key.Fingerprint(), BrowserFingerprint: claim.BrowserFingerprint,
-		TrustSetDigest: proof.TrustSetDigest, HighestControllerEpoch: 1, Mode: "managed",
+		TrustSetDigest: proof.TrustSetDigest, CommandSigningKeys: proof.CommandSigningKeys, HighestControllerEpoch: 1, Mode: "managed",
 	}
 	if err := deviceidentity.SaveRecord(*recordPath, record); err != nil {
 		fmt.Fprintln(stderr, "agentbridge: unable to persist enrollment record")
@@ -126,7 +128,7 @@ func runEnrollCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	result := enrollmentProofOutput{
 		Version: 1, ClaimID: proof.ClaimID, OrganizationID: proof.OrganizationID, DeviceID: proof.DeviceID,
 		Nonce: proof.Nonce, PublicKey: base64.StdEncoding.EncodeToString(proof.PublicKey), Fingerprint: key.Fingerprint(),
-		Signature: base64.StdEncoding.EncodeToString(proof.Signature), TrustSetDigest: proof.TrustSetDigest, ExpiresAt: proof.ExpiresAt,
+		Signature: base64.StdEncoding.EncodeToString(proof.Signature), TrustSetDigest: proof.TrustSetDigest, CommandSigningKeys: proof.CommandSigningKeys, ExpiresAt: proof.ExpiresAt,
 	}
 	if err := writeEnrollmentOutput(*outputPath, result, stdout); err != nil {
 		fmt.Fprintln(stderr, "agentbridge: unable to write enrollment proof")
@@ -161,7 +163,7 @@ func loadEnrollmentChallenge(path string) (deviceidentity.Challenge, error) {
 	if err := json.NewDecoder(io.LimitReader(file, 16*1024)).Decode(&input); err != nil {
 		return deviceidentity.Challenge{}, err
 	}
-	challenge := deviceidentity.Challenge{ClaimID: strings.TrimSpace(input.ClaimID), OrganizationID: strings.TrimSpace(input.OrganizationID), DeviceID: strings.TrimSpace(input.DeviceID), Nonce: strings.TrimSpace(input.Nonce), TrustSetDigest: strings.TrimSpace(input.TrustSetDigest), ExpiresAt: input.ExpiresAt}
+	challenge := deviceidentity.Challenge{ClaimID: strings.TrimSpace(input.ClaimID), OrganizationID: strings.TrimSpace(input.OrganizationID), DeviceID: strings.TrimSpace(input.DeviceID), Nonce: strings.TrimSpace(input.Nonce), TrustSetDigest: strings.TrimSpace(input.TrustSetDigest), CommandSigningKeys: input.CommandSigningKeys, ExpiresAt: input.ExpiresAt}
 	if err := challenge.Validate(time.Now().UTC()); err != nil {
 		return deviceidentity.Challenge{}, err
 	}

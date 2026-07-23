@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 )
 
 var (
@@ -61,6 +63,24 @@ func (t TrustSet) Validate() error {
 		}
 	}
 	return nil
+}
+
+// TrustSetFromEnrollment converts only the public command-signing roots from
+// an enrollment record. A revoked or quarantined identity can never bootstrap
+// a managed connection, even when its old public keys are still present.
+func TrustSetFromEnrollment(record deviceidentity.EnrollmentRecord) (TrustSet, error) {
+	if record.Revoked || record.Quarantined || record.Mode != "managed" || record.HighestControllerEpoch == 0 {
+		return TrustSet{}, ErrRevoked
+	}
+	active := make(map[string]ed25519.PublicKey, len(record.CommandSigningKeys))
+	for id, key := range record.CommandSigningKeys {
+		active[id] = append(ed25519.PublicKey(nil), key...)
+	}
+	trust := TrustSet{Active: active, HighestEpoch: record.HighestControllerEpoch}
+	if err := trust.Validate(); err != nil {
+		return TrustSet{}, err
+	}
+	return trust, nil
 }
 
 func cloneKeys(input map[string]ed25519.PublicKey) map[string]ed25519.PublicKey {

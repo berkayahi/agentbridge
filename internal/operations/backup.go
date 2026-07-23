@@ -172,6 +172,13 @@ func collectManagedFacts(ctx context.Context, options BackupOptions, manifest *B
 			manifest.DeviceFingerprint = record.Fingerprint
 			manifest.HighestControllerEpoch = record.HighestControllerEpoch
 			manifest.ReEnrollmentRequired = record.Revoked || record.Quarantined
+			if len(record.CommandSigningKeys) > 0 && manifest.ManagedTrust == nil {
+				trust, trustErr := managed.TrustSetFromEnrollment(record)
+				if trustErr != nil {
+					return fmt.Errorf("read enrolled command trust: %w", trustErr)
+				}
+				manifest.ManagedTrust = &trust
+			}
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("read enrollment facts: %w", err)
 		} else if manifest.Mode == string(controller.ModeManaged) {

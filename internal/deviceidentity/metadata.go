@@ -17,24 +17,25 @@ var ErrInvalidRecord = errors.New("device identity: invalid enrollment record")
 // EnrollmentRecord contains only public identity and trust facts. It never
 // contains the private device key or provider/Git credentials.
 type EnrollmentRecord struct {
-	Version                int    `json:"version"`
-	ClaimID                string `json:"claim_id"`
-	OrganizationID         string `json:"organization_id"`
-	DeviceID               string `json:"device_id"`
-	Fingerprint            string `json:"fingerprint"`
-	BrowserFingerprint     string `json:"browser_fingerprint,omitempty"`
-	TrustSetDigest         string `json:"trust_set_digest"`
-	HighestControllerEpoch uint64 `json:"highest_controller_epoch"`
-	Mode                   string `json:"mode"`
-	Revoked                bool   `json:"revoked,omitempty"`
-	Quarantined            bool   `json:"quarantined,omitempty"`
+	Version                int               `json:"version"`
+	ClaimID                string            `json:"claim_id"`
+	OrganizationID         string            `json:"organization_id"`
+	DeviceID               string            `json:"device_id"`
+	Fingerprint            string            `json:"fingerprint"`
+	BrowserFingerprint     string            `json:"browser_fingerprint,omitempty"`
+	TrustSetDigest         string            `json:"trust_set_digest"`
+	CommandSigningKeys     map[string][]byte `json:"command_signing_keys,omitempty"`
+	HighestControllerEpoch uint64            `json:"highest_controller_epoch"`
+	Mode                   string            `json:"mode"`
+	Revoked                bool              `json:"revoked,omitempty"`
+	Quarantined            bool              `json:"quarantined,omitempty"`
 }
 
 func (r EnrollmentRecord) Validate(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if r.Version != 1 || !valid(r.ClaimID) || !valid(r.OrganizationID) || !valid(r.DeviceID) || !valid(r.Fingerprint) || !valid(r.TrustSetDigest) || r.HighestControllerEpoch == 0 || r.Mode != "managed" {
+	if r.Version != 1 || !valid(r.ClaimID) || !valid(r.OrganizationID) || !valid(r.DeviceID) || !valid(r.Fingerprint) || !valid(r.TrustSetDigest) || r.HighestControllerEpoch == 0 || r.Mode != "managed" || validateCommandSigningKeys(r.CommandSigningKeys) != nil {
 		return ErrInvalidRecord
 	}
 	if len(r.Fingerprint) != 64 || strings.ContainsAny(r.Fingerprint, " \t\r\n") {

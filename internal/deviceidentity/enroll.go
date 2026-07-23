@@ -1,6 +1,7 @@
 package deviceidentity
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -23,23 +24,25 @@ type Claim struct {
 }
 
 type Challenge struct {
-	ClaimID        string
-	OrganizationID string
-	DeviceID       string
-	Nonce          string
-	TrustSetDigest string
-	ExpiresAt      time.Time
+	ClaimID            string
+	OrganizationID     string
+	DeviceID           string
+	Nonce              string
+	TrustSetDigest     string
+	CommandSigningKeys map[string][]byte
+	ExpiresAt          time.Time
 }
 
 type Proof struct {
-	ClaimID        string
-	OrganizationID string
-	DeviceID       string
-	Nonce          string
-	PublicKey      []byte
-	Signature      []byte
-	TrustSetDigest string
-	ExpiresAt      time.Time
+	ClaimID            string
+	OrganizationID     string
+	DeviceID           string
+	Nonce              string
+	PublicKey          []byte
+	Signature          []byte
+	TrustSetDigest     string
+	CommandSigningKeys map[string][]byte
+	ExpiresAt          time.Time
 }
 
 func (c Claim) Validate(now time.Time) error {
@@ -50,7 +53,7 @@ func (c Claim) Validate(now time.Time) error {
 }
 
 func (c Challenge) Validate(now time.Time) error {
-	if !valid(c.ClaimID) || !valid(c.OrganizationID) || !valid(c.DeviceID) || strings.TrimSpace(c.Nonce) == "" || strings.TrimSpace(c.TrustSetDigest) == "" || c.ExpiresAt.IsZero() || !now.Before(c.ExpiresAt) {
+	if !valid(c.ClaimID) || !valid(c.OrganizationID) || !valid(c.DeviceID) || strings.TrimSpace(c.Nonce) == "" || strings.TrimSpace(c.TrustSetDigest) == "" || c.ExpiresAt.IsZero() || !now.Before(c.ExpiresAt) || validateCommandSigningKeys(c.CommandSigningKeys) != nil {
 		return ErrInvalidClaim
 	}
 	return nil
@@ -71,14 +74,14 @@ func (k Key) Prove(claim Claim, challenge Challenge, now time.Time) (Proof, erro
 	if err != nil {
 		return Proof{}, err
 	}
-	return Proof{ClaimID: claim.ID, OrganizationID: claim.OrganizationID, DeviceID: claim.DeviceID, Nonce: challenge.Nonce, PublicKey: k.PublicKey(), Signature: signature, TrustSetDigest: challenge.TrustSetDigest, ExpiresAt: challenge.ExpiresAt}, nil
+	return Proof{ClaimID: claim.ID, OrganizationID: claim.OrganizationID, DeviceID: claim.DeviceID, Nonce: challenge.Nonce, PublicKey: k.PublicKey(), Signature: signature, TrustSetDigest: challenge.TrustSetDigest, CommandSigningKeys: clonePublicKeys(challenge.CommandSigningKeys), ExpiresAt: challenge.ExpiresAt}, nil
 }
 
 func VerifyProof(claim Claim, challenge Challenge, proof Proof, now time.Time) error {
 	if err := claim.Validate(now); err != nil {
 		return ErrInvalidProof
 	}
-	if err := challenge.Validate(now); err != nil || proof.ClaimID != claim.ID || proof.OrganizationID != claim.OrganizationID || proof.DeviceID != claim.DeviceID || proof.Nonce != challenge.Nonce || proof.TrustSetDigest != challenge.TrustSetDigest || !now.Before(proof.ExpiresAt) {
+	if err := challenge.Validate(now); err != nil || validateCommandSigningKeys(proof.CommandSigningKeys) != nil || !samePublicKeys(challenge.CommandSigningKeys, proof.CommandSigningKeys) || proof.ClaimID != claim.ID || proof.OrganizationID != claim.OrganizationID || proof.DeviceID != claim.DeviceID || proof.Nonce != challenge.Nonce || proof.TrustSetDigest != challenge.TrustSetDigest || !now.Before(proof.ExpiresAt) {
 		return ErrInvalidProof
 	}
 	key, err := FromPublic(proof.PublicKey)
@@ -111,4 +114,40 @@ func EnrollmentFingerprint(publicKey []byte) string {
 
 func valid(value string) bool {
 	return strings.TrimSpace(value) != "" && len(value) <= 128 && !strings.ContainsAny(value, "\x00\r\n")
+}
+
+func validateCommandSigningKeys(keys map[string][]byte) error {
+	if len(keys) > 64 {
+		return ErrInvalidClaim
+	}
+	for id, key := range keys {
+		if !valid(id) || len(key) != ed25519.PublicKeySize {
+			return ErrInvalidClaim
+		}
+	}
+	return nil
+}
+
+func clonePublicKeys(keys map[string][]byte) map[string][]byte {
+	if keys == nil {
+		return nil
+	}
+	result := make(map[string][]byte, len(keys))
+	for id, key := range keys {
+		result[id] = append([]byte(nil), key...)
+	}
+	return result
+}
+
+func samePublicKeys(left, right map[string][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for id, key := range left {
+		other, ok := right[id]
+		if !ok || string(key) != string(other) {
+			return false
+		}
+	}
+	return true
 }

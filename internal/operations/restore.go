@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/managed"
 )
 
 type RestoreCheckOptions struct {
@@ -84,7 +86,12 @@ func RestoreCheck(ctx context.Context, options RestoreCheckOptions) (RestoreChec
 					recordPath = filepath.Join(filepath.Dir(options.IdentityPath), "enrollment.json")
 				}
 				record, recordErr := deviceidentity.LoadRecord(recordPath)
-				if keyErr == nil && recordErr == nil && record.Fingerprint == key.Fingerprint() && record.OrganizationID == manifest.OrganizationID && record.DeviceID == manifest.DeviceID && record.HighestControllerEpoch >= manifest.HighestControllerEpoch && !record.Revoked && !record.Quarantined {
+				trustMatches := true
+				if manifest.ManagedTrust != nil {
+					recordTrust, trustErr := managed.TrustSetFromEnrollment(record)
+					trustMatches = trustErr == nil && sameTrustSet(*manifest.ManagedTrust, recordTrust)
+				}
+				if keyErr == nil && recordErr == nil && record.Fingerprint == key.Fingerprint() && record.OrganizationID == manifest.OrganizationID && record.DeviceID == manifest.DeviceID && record.HighestControllerEpoch >= manifest.HighestControllerEpoch && !record.Revoked && !record.Quarantined && trustMatches {
 					result.ManagedReady = true
 					result.ReEnrollmentRequired = false
 				}
@@ -94,6 +101,18 @@ func RestoreCheck(ctx context.Context, options RestoreCheckOptions) (RestoreChec
 		return RestoreCheckResult{}, fmt.Errorf("read backup manifest: %w", err)
 	}
 	return result, nil
+}
+
+func sameTrustSet(left, right managed.TrustSet) bool {
+	if left.HighestEpoch != right.HighestEpoch || left.Revoked != right.Revoked || len(left.Active) != len(right.Active) {
+		return false
+	}
+	for id, key := range left.Active {
+		if !bytes.Equal(key, right.Active[id]) {
+			return false
+		}
+	}
+	return true
 }
 
 func loadManifest(path string) (BackupManifest, error) {

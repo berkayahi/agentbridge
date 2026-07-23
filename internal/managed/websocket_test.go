@@ -103,3 +103,31 @@ func TestPersistentClientAdvancesLocalConnectionEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPersistentClientBootstrapsTrustFromEnrollmentRecord(t *testing.T) {
+	key, err := deviceidentity.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformPublic := make(ed25519.PublicKey, ed25519.PublicKeySize)
+	state, err := NewFileStateStore(t.TempDir() + "/managed-state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := deviceidentity.EnrollmentRecord{
+		Version: 1, ClaimID: "claim-1", OrganizationID: "org-1", DeviceID: "device-1",
+		Fingerprint: key.Fingerprint(), TrustSetDigest: "trust-digest", HighestControllerEpoch: 4,
+		Mode: "managed", CommandSigningKeys: map[string][]byte{"platform-1": platformPublic},
+	}
+	if _, err := NewPersistentClient(PersistentClientConfig{
+		State: state, WebSocket: WebSocketConfig{URL: "wss://gateway.example/connect"}, Identity: key,
+		Enrollment: &record, OrganizationID: "org-1", DeviceID: "device-1",
+		Dispatch: Dispatcher{Handlers: map[string]CommandHandler{"command": func(context.Context, Frame) error { return nil }}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	trust, err := state.LoadTrust(context.Background())
+	if err != nil || trust.HighestEpoch != 4 || len(trust.Active["platform-1"]) != ed25519.PublicKeySize {
+		t.Fatalf("bootstrapped trust = %#v err=%v", trust, err)
+	}
+}

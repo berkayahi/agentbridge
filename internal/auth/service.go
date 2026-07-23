@@ -547,11 +547,10 @@ func (s *Service) runRecovery(ctx context.Context, session *recoverySession, nam
 	} else if err == nil {
 		health := s.Health(ctx, session.provider)
 		if health.Kind == HealthHealthy {
-			if resumeErr := s.resumeAffected(ctx, session.provider); resumeErr == nil {
-				status, resultErr = RecoverySucceeded, nil
-			} else {
-				resultErr = resumeErr
-			}
+			// Authentication recovery changes only provider health. Exact task
+			// selection, invariant validation, fencing, and resume are an
+			// explicit follow-up operation owned by ResumeTask.
+			status, resultErr = RecoverySucceeded, nil
 		} else {
 			resultErr = ErrAuthUnhealthy
 		}
@@ -565,7 +564,7 @@ func (s *Service) runRecovery(ctx context.Context, session *recoverySession, nam
 	session.resultErr = resultErr
 	session.mu.Unlock()
 	if status == RecoverySucceeded {
-		if err := s.resolveIncident(context.WithoutCancel(ctx), session.provider, finished); err != nil {
+		if err := s.resolveIfNoAffected(context.WithoutCancel(ctx), session.provider, finished); err != nil {
 			s.logger.Error("could not resolve authentication incident", "provider", session.provider)
 		}
 	} else {
@@ -599,31 +598,50 @@ func (s *Service) hydrateIncident(ctx context.Context, provider task.Provider) e
 	return nil
 }
 
-func (s *Service) resumeAffected(ctx context.Context, provider task.Provider) error {
-	values, err := s.durableAffected(ctx, provider)
+// ResumeTask explicitly selects one authentication-paused task. A successful
+// provider login never resumes a whole incident, and every selected task is
+// revalidated immediately before its durable state transition.
+func (s *Service) ResumeTask(ctx context.Context, principal, id string) error {
+	if err := s.authorizer.AuthorizeRecovery(ctx, principal); err != nil {
+		return ErrForbidden
+	}
+	values, err := s.tasks.NonterminalTasks(ctx)
 	if err != nil {
+		return fmt.Errorf("reload authentication task: %w", err)
+	}
+	var selected task.Task
+	found := false
+	for _, value := range values {
+		if value.ID == id {
+			selected, found = value, true
+			break
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if selected.State != task.AwaitingAuth {
+		return fmt.Errorf("auth: task %s is not awaiting authentication", selected.ID)
+	}
+	if health := s.Health(ctx, selected.Provider); health.Kind != HealthHealthy {
+		return ErrAuthUnhealthy
+	}
+	if err := s.resumer.ValidateResume(ctx, selected); err != nil {
+		_ = s.pauseTask(context.WithoutCancel(ctx), selected, "saved task invariants changed; manual review required")
 		return err
 	}
-	for _, value := range values {
-		if err := s.resumer.ValidateResume(ctx, value); err != nil {
-			if transitionErr := s.pauseTask(ctx, value, "saved task invariants changed; manual review required"); transitionErr != nil {
-				return transitionErr
-			}
-			continue
-		}
-		event := task.Event{ID: s.newID(), TaskID: value.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload("subscription authentication restored"), CreatedAt: s.now()}
-		if err := s.tasks.Transition(ctx, value.ID, task.Running, event); err != nil {
-			return fmt.Errorf("resume task %s: %w", value.ID, err)
-		}
-		value.State = task.Running
-		if err := s.resumer.ResumeTask(ctx, value); err != nil {
-			if transitionErr := s.pauseTask(ctx, value, "saved provider session could not be resumed safely"); transitionErr != nil {
-				return transitionErr
-			}
-			continue
-		}
+	event := task.Event{ID: s.newID(), TaskID: selected.ID, Type: task.EventStateTransitioned, Visibility: task.VisibilityUser, Payload: statePayload("subscription authentication restored; operator selected resume"), CreatedAt: s.now()}
+	if err := s.tasks.Transition(ctx, selected.ID, task.Running, event); err != nil {
+		return fmt.Errorf("resume task %s: %w", selected.ID, err)
 	}
-	return nil
+	selected.State = task.Running
+	if err := s.resumer.ResumeTask(ctx, selected); err != nil {
+		if transitionErr := s.pauseTask(context.WithoutCancel(ctx), selected, "saved provider session could not be resumed safely"); transitionErr != nil {
+			return fmt.Errorf("resume task %s: %w; pause task: %v", selected.ID, err, transitionErr)
+		}
+		return err
+	}
+	return s.resolveIfNoAffected(context.WithoutCancel(ctx), selected.Provider, s.now())
 }
 
 func (s *Service) pauseAffected(ctx context.Context, provider task.Provider, reason string) error {

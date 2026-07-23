@@ -19,6 +19,13 @@ dashboard can supervise recovery while unrelated healthy work remains visible.
 5. Confirm the official CLI status, close the incident, and explicitly resume
    the intended paused task.
 
+The successful recovery result only marks provider authentication healthy. The
+resume action must name one exact task ID; AgentBridge reloads that task,
+rechecks its saved provider session/worktree invariants, transitions only that
+task, and pauses it again if the provider session cannot be safely restored.
+Other tasks in the incident remain awaiting authentication until separately
+selected.
+
 Each CLI owns and persists its subscription session files. AgentBridge does
 not copy provider sessions into its configuration, database, systemd
 credentials, Telegram messages, logs, or backups.

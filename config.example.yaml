@@ -12,6 +12,12 @@ telegram:
     - 123456789
   paired_chat_id: 123456789
 
+spool:
+  max_bytes: 67108864
+  warning_watermark_bytes: 50331648
+  critical_watermark_bytes: 58720256
+  critical_reserve_bytes: 8388608
+
 providers:
   codex:
     executable: /usr/local/bin/codex

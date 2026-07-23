@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 
+	"github.com/berkayahi/agentbridge/internal/spool"
 	"github.com/goccy/go-yaml"
 )
 
@@ -17,6 +18,35 @@ type Config struct {
 	Telegram          TelegramConfig               `yaml:"telegram"`
 	Providers         map[string]ProviderConfig    `yaml:"providers"`
 	Repositories      map[string]RepositoryProfile `yaml:"repositories"`
+	Spool             SpoolConfig                  `yaml:"spool"`
+}
+
+type SpoolConfig struct {
+	MaxBytes               int64 `yaml:"max_bytes"`
+	WarningWatermarkBytes  int64 `yaml:"warning_watermark_bytes"`
+	CriticalWatermarkBytes int64 `yaml:"critical_watermark_bytes"`
+	CriticalReserveBytes   int64 `yaml:"critical_reserve_bytes"`
+}
+
+func (c SpoolConfig) Normalize() SpoolConfig {
+	defaults := spool.DefaultConfig()
+	if c.MaxBytes <= 0 {
+		c.MaxBytes = defaults.MaxBytes
+	}
+	if c.WarningWatermarkBytes <= 0 {
+		c.WarningWatermarkBytes = defaults.WarningWatermarkBytes
+	}
+	if c.CriticalWatermarkBytes <= 0 {
+		c.CriticalWatermarkBytes = defaults.CriticalWatermarkBytes
+	}
+	if c.CriticalReserveBytes <= 0 {
+		c.CriticalReserveBytes = defaults.CriticalReserveBytes
+	}
+	return c
+}
+
+func (c SpoolConfig) Domain() spool.Config {
+	return spool.Config{MaxBytes: c.MaxBytes, WarningWatermarkBytes: c.WarningWatermarkBytes, CriticalWatermarkBytes: c.CriticalWatermarkBytes, CriticalReserveBytes: c.CriticalReserveBytes}
 }
 
 type ServerConfig struct {
@@ -77,6 +107,10 @@ func Load(path string) (Config, error) {
 		for name := range cfg.Repositories {
 			cfg.DefaultRepository = name
 		}
+	}
+	cfg.Spool = cfg.Spool.Normalize()
+	if err := cfg.Spool.Domain().Validate(); err != nil {
+		return Config{}, fmt.Errorf("spool: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err

@@ -397,6 +397,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status, code = http.StatusBadRequest, "repository_not_configured"
 	case errors.Is(err, ErrRepositoryAmbiguous):
 		status, code = http.StatusConflict, "repository_ambiguous"
+	case errors.Is(err, ErrDeliveryNotEnabled):
+		status, code = http.StatusConflict, "delivery_not_enabled"
 	case errors.Is(err, ErrStaleRevision):
 		status, code = http.StatusConflict, "stale_revision"
 	case errors.Is(err, ErrIdempotencyConflict):

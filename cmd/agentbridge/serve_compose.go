@@ -79,6 +79,9 @@ type composedDaemon struct {
 	// Tailscale dashboard. The owner-only local API is then the whole surface,
 	// so Run supervises it directly.
 	desktopOnly bool
+	// startProgress runs the local decision pump under the serve context, so a
+	// finished local turn advances instead of being reported as still working.
+	startProgress func(context.Context)
 
 	monitorMu      sync.Mutex
 	monitorCancel  context.CancelFunc
@@ -99,6 +102,9 @@ func (d *composedDaemon) Start(ctx context.Context) error {
 	d.serveMu.Unlock()
 	if d.localExecutor != nil {
 		d.localExecutor.SetContext(serveCtx)
+	}
+	if d.startProgress != nil {
+		d.startProgress(serveCtx)
 	}
 	if deviceServer == nil && d.localHandler != nil {
 		server, err := localcontrol.ListenUnix(d.localAPIPath, d.localHandler)
@@ -508,12 +514,14 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		return fail(err, providerClosers...)
 	}
 	localExecutor.progress = localService
+	progressStarter := localService.StartProgress
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		control.Close()
 		return fail(err, providerClosers...)
 	}
 	daemon.localAPIPath, daemon.localHandler, daemon.localExecutor = paths.localAPI, localHandler, localExecutor
+	daemon.startProgress = progressStarter
 	daemon.deviceServer, daemon.deviceCert, daemon.deviceKey = deviceServer, cfg.DeviceAgent.TLSCertPath, cfg.DeviceAgent.TLSKeyPath
 	application, err := bridgeapp.New(bridgeapp.Config{
 		DefaultRepository: cfg.DefaultRepository, Listen: cfg.Server.Listen, QueueSize: 16,
@@ -739,6 +747,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		return closeOnError(err, providerClosers...)
 	}
 	localExecutor.progress = localService
+	progressStarter := localService.StartProgress
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		return closeOnError(err, providerClosers...)
@@ -752,6 +761,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		kernel: bridgeKernel, controller: bridgeController, runtimes: runtimes, control: control,
 		closers: daemonClosers, localExecutor: localExecutor, localAPIPath: paths.localAPI,
 		localHandler: localHandler, providers: providerNames, desktopOnly: true,
+		startProgress: progressStarter,
 	}, nil
 }
 

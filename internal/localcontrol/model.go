@@ -33,6 +33,7 @@ var (
 	ErrCommitRequired               = errors.New("localcontrol: commit is required")
 	ErrRepositoryNotConfigured      = errors.New("localcontrol: repository remote is not configured")
 	ErrRepositoryAmbiguous          = errors.New("localcontrol: repository remote maps to multiple configured profiles")
+	ErrDeliveryNotEnabled           = errors.New("localcontrol: repository delivery is not enabled")
 )
 
 // RepositoryProfile is a configured, executable repository binding. The

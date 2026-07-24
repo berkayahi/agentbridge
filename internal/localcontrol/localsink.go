@@ -47,8 +47,15 @@ func (s *Service) ProjectProviderEvent(ctx context.Context, taskID string, event
 	if created.IsZero() {
 		created = s.clock().UTC()
 	}
-	_, err = authority.AppendLocalProviderEvent(ctx, taskID, eventID, "provider_event", payload, created.UTC())
-	return err
+	if _, err := authority.AppendLocalProviderEvent(ctx, taskID, eventID, "provider_event", payload, created.UTC()); err != nil {
+		return err
+	}
+	// A turn-ending observation also has to advance the task, but not on this
+	// goroutine: see StartProgress.
+	if decision := providerDecision(providerType); decision != "" {
+		return s.enqueueDecision(localDecision{taskID: taskID, kind: decision, detail: decisionDetail(event.Payload)})
+	}
+	return nil
 }
 
 func providerEventPayload(payload []byte) []byte {

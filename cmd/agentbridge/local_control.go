@@ -15,6 +15,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/config"
 	bridgeapp "github.com/berkayahi/agentbridge/internal/controller/standalone"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	bridgegit "github.com/berkayahi/agentbridge/internal/git"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/managed"
@@ -489,6 +490,11 @@ func (c localCommitter) Commit(ctx context.Context, view localcontrol.TaskView) 
 	}
 	commit, err := c.operations.delivery.Commit(ctx, task, workspace)
 	if err != nil {
+		// Committing writes to the repository and is opt-in per profile. Report
+		// that as an actionable refusal rather than an opaque failure.
+		if errors.Is(err, bridgegit.ErrDeliveryDisabled) {
+			return localcontrol.CommitReceipt{}, errors.Join(localcontrol.ErrDeliveryNotEnabled, err)
+		}
 		return localcontrol.CommitReceipt{}, err
 	}
 	ref, err := c.operations.delivery.Push(ctx, task, workspace, commit)

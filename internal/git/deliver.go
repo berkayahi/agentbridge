@@ -155,23 +155,34 @@ func (d Delivery) Push(ctx context.Context, request DeliveryRequest, commitSHA s
 	return DeliveryResult{CommitSHA: commitSHA, PushRef: request.Profile.AllowedRef}, nil
 }
 
-func (d Delivery) validate(request DeliveryRequest, requireVerifier bool) error {
+// validate gates a delivery request. verifyOnly requests gather evidence: they
+// read the isolated worktree and run the repository's own configured checks,
+// produce no external effect, and are therefore not subject to the delivery
+// opt-in or the push-ref policy. Commit and push act on the repository and
+// remain fully gated.
+func (d Delivery) validate(request DeliveryRequest, verifyOnly bool) error {
+	if err := request.Profile.RepositoryProfile.Validate(); err != nil {
+		return err
+	}
+	if d.Git == nil {
+		return ErrUnsafeDelivery
+	}
+	if verifyOnly {
+		if d.Verifier == nil {
+			return ErrUnsafeDelivery
+		}
+		return validateWorkspace(request.Profile, request.Workspace)
+	}
 	if !request.Profile.Enabled {
 		return ErrDeliveryDisabled
 	}
 	if err := request.Profile.Validate(); err != nil {
 		return err
 	}
-	if d.Git == nil || requireVerifier && d.Verifier == nil {
-		return ErrUnsafeDelivery
-	}
 	if !validCommitMessage(request.CommitMessage) {
 		return ErrInvalidCommitMessage
 	}
-	if err := validateWorkspace(request.Profile, request.Workspace); err != nil {
-		return err
-	}
-	return nil
+	return validateWorkspace(request.Profile, request.Workspace)
 }
 
 func (d Delivery) scanChangedFiles(ctx context.Context, worktree string) error {

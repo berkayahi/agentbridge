@@ -25,6 +25,10 @@ type Service struct {
 	commandMu sync.Mutex
 	replayMu  sync.Mutex
 
+	progressOnce sync.Once
+	progressMu   sync.Mutex
+	decisions    chan localDecision
+
 	store      AuthorityStore
 	identity   deviceidentity.Key
 	runtimes   RuntimeCatalog

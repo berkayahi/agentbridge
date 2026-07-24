@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -348,6 +349,30 @@ func (e *localRuntimeExecutor) Cancel(ctx context.Context, view localcontrol.Tas
 	} else {
 		return err
 	}
+}
+
+// repositoryCatalog reports the configured profiles from the same map the
+// executor resolves against, so the authority can never register a repository
+// id that repositoryTarget would later refuse.
+type repositoryCatalog struct {
+	workspace *workspaceAdapter
+}
+
+func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.RepositoryProfile, error) {
+	if c.workspace == nil {
+		return nil, localcontrol.ErrNotConfigured
+	}
+	ids := make([]string, 0, len(c.workspace.profiles))
+	for id := range c.workspace.profiles {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	result := make([]localcontrol.RepositoryProfile, 0, len(ids))
+	for _, id := range ids {
+		profile := c.workspace.profiles[id]
+		result = append(result, localcontrol.RepositoryProfile{ID: id, Remote: profile.Remote, BaseRef: profile.BaseRef})
+	}
+	return result, nil
 }
 
 type localRepositoryTarget struct {

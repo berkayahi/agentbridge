@@ -28,6 +28,7 @@ type Service struct {
 	store      AuthorityStore
 	identity   deviceidentity.Key
 	runtimes   RuntimeCatalog
+	catalog    RepositoryCatalog
 	controller CommandController
 	executor   Executor
 	verifier   Verifier
@@ -51,7 +52,7 @@ func New(config Config) (*Service, error) {
 		config.NewID = defaultID
 	}
 	return &Service{
-		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, controller: config.Controller,
+		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
@@ -98,13 +99,73 @@ func (s *Service) RegisterRepository(ctx context.Context, request RegisterReposi
 		return RepositoryResponse{}, err
 	}
 	now := s.clock().UTC()
-	value := Repository{ID: s.newID("repository"), Remote: remote, CreatedAt: now}
+	// A configured catalog is authoritative: the executor resolves work against
+	// configured profile ids, so registration resolves to one instead of
+	// minting an id that could never start a task. Without a catalog (embedded
+	// and test compositions) the authority keeps allocating its own id.
+	id := s.newID("repository")
+	if s.catalog != nil {
+		profile, err := s.resolveRepositoryProfile(ctx, remote)
+		if err != nil {
+			return RepositoryResponse{}, err
+		}
+		existing, err := s.store.GetRepository(ctx, profile.ID)
+		if err == nil {
+			// The boot binding already owns this row; resolution has no side
+			// effect, so return the durable binding as-is.
+			return RepositoryResponse{Repository: existing}, nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return RepositoryResponse{}, err
+		}
+		id = profile.ID
+	}
+	value := Repository{ID: id, Remote: remote, CreatedAt: now}
 	event := localEvent(s.newID("event"), "repository", value.ID, "", 1, "repository_registered", map[string]any{"repository_id": value.ID}, now)
 	response := RepositoryResponse{Repository: value}
 	if err := s.persistRepositoryCreation(ctx, request.IdempotencyKey, payload, value, event, response); err != nil {
 		return RepositoryResponse{}, err
 	}
 	return response, nil
+}
+
+// ListRepositories reports the configured repository profiles so a client can
+// offer real choices. It fails closed without a catalog rather than inventing
+// a list the executor could not honour.
+func (s *Service) ListRepositories(ctx context.Context) (RepositoriesResponse, error) {
+	if s == nil || s.catalog == nil {
+		return RepositoriesResponse{}, ErrNotConfigured
+	}
+	profiles, err := s.catalog.RepositoryProfiles(ctx)
+	if err != nil {
+		return RepositoriesResponse{}, err
+	}
+	if profiles == nil {
+		profiles = []RepositoryProfile{}
+	}
+	return RepositoriesResponse{Repositories: profiles}, nil
+}
+
+func (s *Service) resolveRepositoryProfile(ctx context.Context, remote string) (RepositoryProfile, error) {
+	profiles, err := s.catalog.RepositoryProfiles(ctx)
+	if err != nil {
+		return RepositoryProfile{}, err
+	}
+	var match RepositoryProfile
+	found := false
+	for _, profile := range profiles {
+		if profile.Remote != remote && profile.ID != remote {
+			continue
+		}
+		if found {
+			return RepositoryProfile{}, fmt.Errorf("repository remote %q: %w", remote, ErrRepositoryAmbiguous)
+		}
+		match, found = profile, true
+	}
+	if !found {
+		return RepositoryProfile{}, fmt.Errorf("repository remote %q: %w", remote, ErrRepositoryNotConfigured)
+	}
+	return match, nil
 }
 
 func (s *Service) CreateBoard(ctx context.Context, request CreateBoardRequest) (BoardResponse, error) {

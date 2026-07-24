@@ -48,6 +48,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/devices/{id}/unreachable", a.unreachableDevice)
 	mux.HandleFunc("POST /v1/devices/{id}/revoke", a.revokeDevice)
 	mux.HandleFunc("POST /v1/projects", a.createProject)
+	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/boards", a.createBoard)
 	mux.HandleFunc("POST /v1/tasks", a.createTask)
@@ -147,6 +148,11 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := a.service.CreateProject(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
+}
+
+func (a *API) listRepositories(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.ListRepositories(r.Context())
+	writeResult(w, http.StatusOK, response, err)
 }
 
 func (a *API) registerRepository(w http.ResponseWriter, r *http.Request) {
@@ -379,6 +385,10 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status, code = http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, ErrUnknownProvider):
 		status, code = http.StatusBadRequest, "unknown_provider"
+	case errors.Is(err, ErrRepositoryNotConfigured):
+		status, code = http.StatusBadRequest, "repository_not_configured"
+	case errors.Is(err, ErrRepositoryAmbiguous):
+		status, code = http.StatusConflict, "repository_ambiguous"
 	case errors.Is(err, ErrStaleRevision):
 		status, code = http.StatusConflict, "stale_revision"
 	case errors.Is(err, ErrIdempotencyConflict):
@@ -399,7 +409,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status, code = http.StatusForbidden, "device_revoked"
 	case errors.Is(err, ErrDeviceNotPaired), errors.Is(err, ErrDeviceFence):
 		status, code = http.StatusConflict, "device_not_ready"
-	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrInvalidTransition), errors.Is(err, ErrVerificationRequired), errors.Is(err, ErrCommitRequired):
+	case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrInvalidTransition), errors.Is(err, ErrVerificationRequired), errors.Is(err, ErrCommitRequired),
+		errors.Is(err, ErrTaskOwnedByAnotherController):
 		status, code = http.StatusConflict, "conflict"
 	}
 	writeError(w, status, code)

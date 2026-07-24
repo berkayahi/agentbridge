@@ -26,7 +26,25 @@ var (
 	ErrApprovalNotPending           = errors.New("localcontrol: approval is not pending")
 	ErrVerificationRequired         = errors.New("localcontrol: verification is required")
 	ErrCommitRequired               = errors.New("localcontrol: commit is required")
+	ErrRepositoryNotConfigured      = errors.New("localcontrol: repository remote is not configured")
+	ErrRepositoryAmbiguous          = errors.New("localcontrol: repository remote maps to multiple configured profiles")
 )
+
+// RepositoryProfile is a configured, executable repository binding. The
+// executor resolves work against these ids, so the authority must never hand
+// out any other id: a task bound to an unresolvable repository cannot start.
+type RepositoryProfile struct {
+	ID      string `json:"id"`
+	Remote  string `json:"remote,omitempty"`
+	BaseRef string `json:"base_ref,omitempty"`
+}
+
+// RepositoryCatalog reports the configured repository profiles. It is the one
+// source of truth shared by the authority and the executor; the authority uses
+// it to resolve registrations and the executor uses it to prepare worktrees.
+type RepositoryCatalog interface {
+	RepositoryProfiles(ctx context.Context) ([]RepositoryProfile, error)
+}
 
 type Project struct {
 	ID        string    `json:"id"`
@@ -217,6 +235,9 @@ type ProjectResponse struct {
 type RepositoryResponse struct {
 	Repository Repository `json:"repository"`
 }
+type RepositoriesResponse struct {
+	Repositories []RepositoryProfile `json:"repositories"`
+}
 type BoardResponse struct {
 	Board Board `json:"board"`
 }
@@ -354,6 +375,7 @@ type Config struct {
 	Store               AuthorityStore
 	Identity            deviceidentity.Key
 	Runtimes            RuntimeCatalog
+	Repositories        RepositoryCatalog
 	Controller          CommandController
 	Executor            Executor
 	Verifier            Verifier

@@ -54,12 +54,55 @@ type localRuntimeExecutor struct {
 
 // observationSink records provider evidence in the execution journal and then
 // projects it onto the local task, so a keeper can watch a bee work.
+//
+// It also releases the runtime session once her turn ends. The session is only
+// needed while she can still be steered or interrupted; holding it afterwards
+// leaked one entry per bee for the life of the process, which for a hive left
+// open all day is a slow leak of exactly the thing that grows with use.
 func (e *localRuntimeExecutor) observationSink(view localcontrol.TaskView) kernel.EventSink {
 	durable := kernel.NewDurableEventSink(e.store)
 	if e.progress == nil {
 		return durable
 	}
-	return localcontrol.NewLocalObservationSink(durable, e.progress, view.ID)
+	return localcontrol.NewLocalObservationSink(sessionReleasingSink{inner: durable, executor: e, taskID: view.ID}, e.progress, view.ID)
+}
+
+// sessionReleasingSink drops the held session when the provider reports the turn
+// is over. It wraps the durable sink rather than the projection so evidence is
+// still committed first.
+type sessionReleasingSink struct {
+	inner    kernel.EventSink
+	executor *localRuntimeExecutor
+	taskID   string
+}
+
+func (s sessionReleasingSink) Append(ctx context.Context, event kernel.Event) error {
+	err := s.inner.Append(ctx, event)
+	switch event.Type {
+	case "provider_completed", "provider_error":
+		s.executor.releaseSession(s.taskID)
+	}
+	return err
+}
+
+func (e *localRuntimeExecutor) releaseSession(taskID string) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	delete(e.sessions, taskID)
+	e.mu.Unlock()
+}
+
+// HeldSessions reports how many provider sessions this executor is holding. It
+// exists so a leak is observable rather than a matter of belief.
+func (e *localRuntimeExecutor) HeldSessions() int {
+	if e == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.sessions)
 }
 
 func newLocalRuntimeExecutor(data *sqlite.RuntimeStore, runtimes *bridgeRuntime.Registry, workspace *workspaceAdapter, models map[workmodel.Provider]string, approvalUser string) *localRuntimeExecutor {

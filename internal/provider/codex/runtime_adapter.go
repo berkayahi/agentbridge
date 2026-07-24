@@ -28,7 +28,7 @@ func (a *RuntimeAdapter) Start(ctx context.Context, request bridgeRuntime.StartR
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}
-	go bridgeRuntime.RelayProviderEvents(ctx, request.ExecutionID, events, sink)
+	go bridgeRuntime.RelayProviderEventsLogged(ctx, request.ExecutionID, events, sink, nil)
 	return bridgeRuntime.RuntimeSession(session, a.ID()), nil
 }
 func (a *RuntimeAdapter) Resume(ctx context.Context, request bridgeRuntime.ResumeRequest, sink kernel.EventSink) (bridgeRuntime.Session, error) {
@@ -44,7 +44,7 @@ func (a *RuntimeAdapter) Resume(ctx context.Context, request bridgeRuntime.Resum
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}
-	go bridgeRuntime.RelayProviderEvents(ctx, request.ExecutionID, events, sink)
+	go bridgeRuntime.RelayProviderEventsLogged(ctx, request.ExecutionID, events, sink, nil)
 	return bridgeRuntime.RuntimeSession(session, a.ID()), nil
 }
 func (a *RuntimeAdapter) Steer(ctx context.Context, session bridgeRuntime.Session, input kernel.Input) error {

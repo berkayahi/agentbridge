@@ -29,6 +29,7 @@ type Service struct {
 	identity   deviceidentity.Key
 	runtimes   RuntimeCatalog
 	catalog    RepositoryCatalog
+	providers  ProviderCatalog
 	controller CommandController
 	executor   Executor
 	verifier   Verifier
@@ -52,7 +53,8 @@ func New(config Config) (*Service, error) {
 		config.NewID = defaultID
 	}
 	return &Service{
-		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories, controller: config.Controller,
+		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
+		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
@@ -144,6 +146,21 @@ func (s *Service) ListRepositories(ctx context.Context) (RepositoriesResponse, e
 		profiles = []RepositoryProfile{}
 	}
 	return RepositoriesResponse{Repositories: profiles}, nil
+}
+
+// ListProviders reports the configured runtimes and their default models.
+func (s *Service) ListProviders(ctx context.Context) (ProvidersResponse, error) {
+	if s == nil || s.providers == nil {
+		return ProvidersResponse{}, ErrNotConfigured
+	}
+	providers, err := s.providers.ProviderProfiles(ctx)
+	if err != nil {
+		return ProvidersResponse{}, err
+	}
+	if providers == nil {
+		providers = []ProviderInfo{}
+	}
+	return ProvidersResponse{Providers: providers}, nil
 }
 
 func (s *Service) resolveRepositoryProfile(ctx context.Context, remote string) (RepositoryProfile, error) {

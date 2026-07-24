@@ -46,6 +46,21 @@ type RepositoryCatalog interface {
 	RepositoryProfiles(ctx context.Context) ([]RepositoryProfile, error)
 }
 
+// ProviderInfo describes a runtime this host can actually dispatch to. Available
+// is reported rather than filtered so a client can explain why a runtime cannot
+// be chosen instead of silently omitting it.
+type ProviderInfo struct {
+	ID           string `json:"id"`
+	DefaultModel string `json:"default_model,omitempty"`
+	Available    bool   `json:"available"`
+}
+
+// ProviderCatalog reports the configured provider runtimes and their default
+// models, so a client never has to hardcode a provider list or guess a model.
+type ProviderCatalog interface {
+	ProviderProfiles(ctx context.Context) ([]ProviderInfo, error)
+}
+
 type Project struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
@@ -238,6 +253,9 @@ type RepositoryResponse struct {
 type RepositoriesResponse struct {
 	Repositories []RepositoryProfile `json:"repositories"`
 }
+type ProvidersResponse struct {
+	Providers []ProviderInfo `json:"providers"`
+}
 type BoardResponse struct {
 	Board Board `json:"board"`
 }
@@ -376,6 +394,7 @@ type Config struct {
 	Identity            deviceidentity.Key
 	Runtimes            RuntimeCatalog
 	Repositories        RepositoryCatalog
+	Providers           ProviderCatalog
 	Controller          CommandController
 	Executor            Executor
 	Verifier            Verifier

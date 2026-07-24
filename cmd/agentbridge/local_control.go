@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/approval"
+	"github.com/berkayahi/agentbridge/internal/config"
 	bridgeapp "github.com/berkayahi/agentbridge/internal/controller/standalone"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
@@ -371,6 +372,29 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 	for _, id := range ids {
 		profile := c.workspace.profiles[id]
 		result = append(result, localcontrol.RepositoryProfile{ID: id, Remote: profile.Remote, BaseRef: profile.BaseRef})
+	}
+	return result, nil
+}
+
+// providerCatalog reports the configured runtimes with their default model and
+// whether the executable is actually present, so a client can explain an
+// unavailable runtime instead of offering a choice that cannot be dispatched.
+type providerCatalog struct {
+	providers map[string]config.ProviderConfig
+}
+
+func (c providerCatalog) ProviderProfiles(context.Context) ([]localcontrol.ProviderInfo, error) {
+	ids := make([]string, 0, len(c.providers))
+	for id := range c.providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	result := make([]localcontrol.ProviderInfo, 0, len(ids))
+	for _, id := range ids {
+		value := c.providers[id]
+		info, err := os.Stat(value.Executable)
+		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+		result = append(result, localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Available: available})
 	}
 	return result, nil
 }

@@ -494,8 +494,8 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
-		Repositories: repositoryCatalog{workspace: workspace},
-		Verifier:     localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers},
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
 	if err != nil {
@@ -730,8 +730,8 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
-		Repositories: repositoryCatalog{workspace: workspace},
-		Verifier:     localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers},
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
 	if err != nil {

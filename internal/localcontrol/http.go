@@ -48,6 +48,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/devices/{id}/unreachable", a.unreachableDevice)
 	mux.HandleFunc("POST /v1/devices/{id}/revoke", a.revokeDevice)
 	mux.HandleFunc("POST /v1/projects", a.createProject)
+	mux.HandleFunc("GET /v1/providers", a.listProviders)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/boards", a.createBoard)
@@ -148,6 +149,11 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := a.service.CreateProject(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
+}
+
+func (a *API) listProviders(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.ListProviders(r.Context())
+	writeResult(w, http.StatusOK, response, err)
 }
 
 func (a *API) listRepositories(w http.ResponseWriter, r *http.Request) {

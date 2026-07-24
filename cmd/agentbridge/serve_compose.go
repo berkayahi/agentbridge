@@ -515,6 +515,13 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	}
 	localExecutor.progress = localService
 	progressStarter := localService.StartProgress
+	// A restart kills every native provider session, so a task left mid-flight is
+	// nobody's work any more. Pause it before serving rather than reporting a bee
+	// that is not in the air.
+	if err := localService.RecoverLocalTasks(ctx); err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		control.Close()
@@ -748,6 +755,12 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	}
 	localExecutor.progress = localService
 	progressStarter := localService.StartProgress
+	// A restart kills every native provider session, so a task left mid-flight is
+	// nobody's work any more. Pause it before serving rather than reporting a bee
+	// that is not in the air.
+	if err := localService.RecoverLocalTasks(ctx); err != nil {
+		return closeOnError(err, providerClosers...)
+	}
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		return closeOnError(err, providerClosers...)

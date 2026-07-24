@@ -160,7 +160,7 @@ func serveDaemonWithBuilderAndMode(ctx context.Context, configPath, mode string,
 	}
 	defer releaseDatabaseLock()
 	var token config.Credential
-	if cfg.Mode != string(controller.ModeManaged) && !cfg.DeviceAgent.Enabled {
+	if cfg.Mode != string(controller.ModeManaged) && !cfg.DeviceAgent.Enabled && !cfg.DesktopOnly() {
 		token, err = (config.CredentialReader{}).Read("telegram_bot_token")
 		if err != nil {
 			return err

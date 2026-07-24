@@ -75,6 +75,10 @@ type composedDaemon struct {
 	closers       []io.Closer
 	providers     []workmodel.Provider
 	listen        string
+	// desktopOnly marks a controller that composes no Telegram adapter and no
+	// Tailscale dashboard. The owner-only local API is then the whole surface,
+	// so Run supervises it directly.
+	desktopOnly bool
 
 	monitorMu      sync.Mutex
 	monitorCancel  context.CancelFunc
@@ -169,6 +173,38 @@ func (d *composedDaemon) Run(ctx context.Context) error {
 				return errors.New("device-agent WSS server stopped unexpectedly")
 			}
 			return fmt.Errorf("device-agent WSS server: %w", err)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	// A desktop-only controller has no Telegram adapter and no dashboard, so the
+	// owner-only local API is the whole surface: supervise it here so an
+	// unexpected listener exit fails the lifecycle instead of leaving a
+	// misleadingly healthy process.
+	if d.desktopOnly {
+		d.serveMu.Lock()
+		localDone := d.localDone
+		d.serveMu.Unlock()
+		if d.localHandler == nil || localDone == nil {
+			return errors.New("desktop-only controller has no local transport")
+		}
+		if d.auth != nil {
+			monitorCtx, cancel := context.WithCancel(ctx)
+			monitorDone := make(chan error, 1)
+			d.monitorMu.Lock()
+			d.monitorCancel, d.monitorDone = cancel, monitorDone
+			d.monitorMu.Unlock()
+			go func() { monitorDone <- d.auth.Monitor(monitorCtx, 5*time.Minute, d.providers...) }()
+		}
+		select {
+		case err := <-localDone:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if err == nil || errors.Is(err, http.ErrServerClosed) {
+				return errors.New("local API server stopped unexpectedly")
+			}
+			return fmt.Errorf("local API server: %w", err)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -356,6 +392,9 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	}
 	if cfg.DeviceAgent.Enabled {
 		return buildHeadlessDeviceDaemon(ctx, cfg, paths, environment)
+	}
+	if cfg.DesktopOnly() {
+		return buildDesktopDaemon(ctx, cfg, paths, environment)
 	}
 	data, err := openStandaloneStore(ctx, paths.database)
 	if err != nil {
@@ -603,6 +642,114 @@ func buildHeadlessDeviceDaemon(ctx context.Context, cfg config.Config, paths run
 	return &composedDaemon{
 		runtimes: runtimes, control: control, closers: daemonClosers, localExecutor: localExecutor,
 		deviceServer: deviceServer, deviceCert: cfg.DeviceAgent.TLSCertPath, deviceKey: cfg.DeviceAgent.TLSKeyPath,
+	}, nil
+}
+
+// buildDesktopDaemon composes the owner-facing Mac controller: provider
+// runtimes, the owner-only control socket, the local SQLite authority, and the
+// authenticated local API. Telegram and the Tailscale dashboard are absent by
+// construction, so no bot credential or identity allowlist is required.
+//
+// Provider authentication recovery is deliberately not composed here: the
+// recovery surface is the Tailscale dashboard, which this process does not run.
+// An expired subscription surfaces as a failed execution and the keeper
+// re-authenticates the CLI directly.
+func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, environment []string) (daemonRuntime, error) {
+	data, err := openStandaloneStore(ctx, paths.database)
+	if err != nil {
+		return nil, err
+	}
+	controllerIdentity, err := loadOrCreateDeviceKey(paths.controllerKey)
+	if err != nil {
+		_ = data.Close()
+		return nil, fmt.Errorf("load local controller identity: %w", err)
+	}
+	fail := func(cause error, closers ...io.Closer) (daemonRuntime, error) {
+		for _, closer := range closers {
+			_ = closer.Close()
+		}
+		_ = data.Close()
+		return nil, cause
+	}
+	for id, profile := range cfg.Repositories {
+		if err := data.EnsureRepositoryBinding(ctx, id, profile.Remote); err != nil {
+			return fail(err)
+		}
+	}
+	_, callbackSecret, err := randomSecrets()
+	if err != nil {
+		return fail(err)
+	}
+	redactor := security.NewRedactor(security.Config{})
+	messenger := headlessMessenger{}
+	approvalBroker, err := approval.New(approval.Config{
+		Store: data, Messenger: messenger, Signer: telegram.NewCallbackSigner(callbackSecret, nil),
+		Redactor: redactor, AllowNonNumericUserIDs: true, NoExternalPresentation: true,
+		AuthorizeUser: func(value string) bool { return strings.TrimSpace(value) != "" },
+	})
+	if err != nil {
+		return fail(err)
+	}
+	claudeUsage := claude.NewUsageCache()
+	control := controlsocket.NewServer(paths.controlSocket, controlHandler{
+		store: data, messenger: messenger, claudeUsage: claudeUsage, approvals: approvalBroker, redactor: redactor,
+	})
+	if err := control.Start(); err != nil {
+		return fail(err)
+	}
+	closeOnError := func(cause error, closers ...io.Closer) (daemonRuntime, error) {
+		control.Close()
+		return fail(cause, closers...)
+	}
+	authCommands := auth.ExecCommandRunner{Executables: configuredExecutables(cfg), Environment: environment}
+	_, runtimes, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	profiles := composeProfiles(cfg, paths)
+	workspace := &workspaceAdapter{
+		profiles: profiles, manager: bridgegit.WorkspaceManager{Git: bridgegit.Runner{}, Port: data},
+		processes: procTaskInspector{root: "/proc", maxEntries: 4096},
+	}
+	delivery := &deliveryAdapter{profiles: profiles, config: cfg.Repositories, git: bridgegit.Runner{}}
+	models := make(map[workmodel.Provider]string, len(cfg.Providers))
+	for name, value := range cfg.Providers {
+		models[workmodel.Provider(name)] = value.Model
+	}
+	localSecret, err := loadLocalAPISecret(paths.localAPISecret)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	bridgeKernel, err := kernel.New(kernel.Config{Work: data, Owner: "desktop-runtime", IntentTTL: 24 * time.Hour})
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	bridgeController := bridgeapp.NewKernelController(bridgeKernel)
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor.approvals = approvalBroker
+	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
+	localService, err := localcontrol.New(localcontrol.Config{
+		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
+		Repositories: repositoryCatalog{workspace: workspace},
+		Verifier:     localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
+	})
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	providerNames := make([]workmodel.Provider, 0, len(cfg.Providers))
+	for name := range cfg.Providers {
+		providerNames = append(providerNames, workmodel.Provider(name))
+	}
+	daemonClosers := append(append([]io.Closer(nil), providerClosers...), data)
+	return &composedDaemon{
+		kernel: bridgeKernel, controller: bridgeController, runtimes: runtimes, control: control,
+		closers: daemonClosers, localExecutor: localExecutor, localAPIPath: paths.localAPI,
+		localHandler: localHandler, providers: providerNames, desktopOnly: true,
 	}, nil
 }
 

@@ -24,9 +24,21 @@ func (c Config) Validate() error {
 	// It must be valid without a Telegram credential, dashboard listener, or
 	// Tailscale identity allowlist; those are owner/controller concerns.
 	headlessDevice := c.Mode == "standalone" && c.DeviceAgent.Enabled
+	// A desktop-only controller drives the owner-only local API and runs no
+	// Telegram adapter and no Tailscale dashboard, so it must not be forced to
+	// declare credentials for adapters it does not compose. A partially written
+	// Telegram block is a mistake rather than a desktop install, so it still
+	// falls through to full validation below.
+	desktopOnly := c.DesktopOnly()
 	if !headlessDevice {
 		if err := validateListen(c.Server.Listen); err != nil {
 			return fmt.Errorf("server listen: %w", err)
+		}
+		if desktopOnly {
+			if len(c.Server.AllowedTailscaleIdentities) > 0 {
+				return errors.New("server allowed_tailscale_identities requires a configured telegram controller")
+			}
+			return c.validateRuntime()
 		}
 		if len(c.Server.AllowedTailscaleIdentities) == 0 {
 			return errors.New("server allowed_tailscale_identities must not be empty")
@@ -45,6 +57,22 @@ func (c Config) Validate() error {
 			return err
 		}
 	}
+	return c.validateRuntime()
+}
+
+// DesktopOnly reports a standalone controller that composes no Telegram adapter
+// and no Tailscale dashboard. It is true only when the Telegram block is
+// entirely absent: any single Telegram field means the operator intended a
+// Telegram controller, and a partial block must fail rather than silently
+// disable remote access.
+func (c Config) DesktopOnly() bool {
+	if c.Mode != "standalone" || c.DeviceAgent.Enabled {
+		return false
+	}
+	return !c.Telegram.PrivateChatOnly && len(c.Telegram.AllowedUserIDs) == 0 && c.Telegram.PairedChatID == 0
+}
+
+func (c Config) validateRuntime() error {
 	if len(c.Providers) == 0 {
 		return errors.New("providers must not be empty")
 	}

@@ -365,6 +365,78 @@ func (s *RuntimeStore) AppendLocalEvent(ctx context.Context, value localcontrol.
 	return stored, nil
 }
 
+// ListProjects reports every local project, newest first, so a client can show
+// the hive instead of only what it created in this session.
+func (s *RuntimeStore) ListProjects(ctx context.Context) ([]localcontrol.Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, revision, created_at, updated_at FROM local_projects ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list local projects: %w", err)
+	}
+	defer rows.Close()
+	values := make([]localcontrol.Project, 0)
+	for rows.Next() {
+		var value localcontrol.Project
+		var created, updated string
+		if err := rows.Scan(&value.ID, &value.Name, &value.Revision, &created, &updated); err != nil {
+			return nil, fmt.Errorf("scan local project: %w", err)
+		}
+		if value.CreatedAt, err = parseTimestamp(created); err != nil {
+			return nil, err
+		}
+		if value.UpdatedAt, err = parseTimestamp(updated); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+// ListBoards reports the boards of one project in creation order.
+func (s *RuntimeStore) ListBoards(ctx context.Context, projectID string) ([]localcontrol.Board, error) {
+	if strings.TrimSpace(projectID) == "" {
+		return nil, fmt.Errorf("list local boards: %w", localcontrol.ErrInvalidRequest)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, revision, created_at, updated_at FROM local_boards WHERE project_id = ? ORDER BY created_at, id`, projectID)
+	if err != nil {
+		return nil, fmt.Errorf("list local boards: %w", err)
+	}
+	defer rows.Close()
+	values := make([]localcontrol.Board, 0)
+	for rows.Next() {
+		var value localcontrol.Board
+		var created, updated string
+		if err := rows.Scan(&value.ID, &value.ProjectID, &value.Name, &value.Revision, &created, &updated); err != nil {
+			return nil, fmt.Errorf("scan local board: %w", err)
+		}
+		if value.CreatedAt, err = parseTimestamp(created); err != nil {
+			return nil, err
+		}
+		if value.UpdatedAt, err = parseTimestamp(updated); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+// ListLocalEventsSince reads the whole local event log from a cursor. One feed
+// keeps a client's cost constant in the number of tasks, and it is the only way
+// project, board, repository and device events are readable at all: those rows
+// carry no task id, so the per-task query can never return them.
+func (s *RuntimeStore) ListLocalEventsSince(ctx context.Context, after uint64, limit int) ([]localcontrol.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT cursor, task_cursor, id, resource_type, resource_id, COALESCE(local_task_id, ''), revision, event_type, payload, created_at
+		FROM local_control_events WHERE cursor > ? ORDER BY cursor LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list local events: %w", err)
+	}
+	defer rows.Close()
+	return scanLocalEvents(rows)
+}
+
 // AppendLocalProviderEvent projects one provider observation onto a local task.
 // It is idempotent by the provider's deterministic event id, so a relay retry or
 // a restart replays without duplicating the task's flight log. The task's
@@ -462,7 +534,11 @@ func (s *RuntimeStore) ListLocalEvents(ctx context.Context, taskID string, after
 		return nil, fmt.Errorf("list local events: %w", err)
 	}
 	defer rows.Close()
-	values := make([]localcontrol.Event, 0, limit)
+	return scanLocalEvents(rows)
+}
+
+func scanLocalEvents(rows *sql.Rows) ([]localcontrol.Event, error) {
+	values := make([]localcontrol.Event, 0)
 	for rows.Next() {
 		var value localcontrol.Event
 		var cursor, taskCursor int64

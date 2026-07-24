@@ -26,6 +26,13 @@ type ListFilter struct {
 	RepoProfileID string
 	States        []workmodel.State
 	Limit         int
+	// ControllerOwner scopes a listing to one controller's tasks. A local client
+	// must never be shown tasks owned by the standalone controller: every action
+	// on them would be refused.
+	ControllerOwner workmodel.TaskController
+	ProjectID       string
+	BoardID         string
+	TargetDeviceID  string
 }
 
 type Lease struct {

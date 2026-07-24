@@ -262,6 +262,43 @@ type RepositoriesResponse struct {
 type ProvidersResponse struct {
 	Providers []ProviderInfo `json:"providers"`
 }
+type ProjectsResponse struct {
+	Projects []Project `json:"projects"`
+}
+type BoardsResponse struct {
+	Boards []Board `json:"boards"`
+}
+type TasksResponse struct {
+	Tasks []TaskView `json:"tasks"`
+}
+
+// HiveResponse is the whole local event log from a cursor. One feed keeps a
+// client's cost constant in the number of tasks and is the only way non-task
+// events are readable.
+type HiveResponse struct {
+	Events     []Event `json:"events"`
+	NextCursor uint64  `json:"next_cursor,omitempty"`
+}
+
+// TaskFilter scopes a task listing. An empty filter lists this controller's
+// tasks, newest first.
+type TaskFilter struct {
+	ProjectID      string
+	BoardID        string
+	RepositoryID   string
+	TargetDeviceID string
+	States         []workmodel.State
+	Limit          int
+}
+
+// LocalListingAuthority reads the hive rather than one task. It is an optional
+// store capability: without it a client can only see what it created itself.
+type LocalListingAuthority interface {
+	ListProjects(ctx context.Context) ([]Project, error)
+	ListBoards(ctx context.Context, projectID string) ([]Board, error)
+	ListTasks(ctx context.Context, filter store.ListFilter) ([]workmodel.Task, error)
+	ListLocalEventsSince(ctx context.Context, after uint64, limit int) ([]Event, error)
+}
 type BoardResponse struct {
 	Board Board `json:"board"`
 }

@@ -164,11 +164,36 @@ func (s *RuntimeStore) Task(ctx context.Context, id string) (workmodel.Task, err
 }
 
 func (s *RuntimeStore) ListTasks(ctx context.Context, filter store.ListFilter) ([]workmodel.Task, error) {
-	query := runtimeTaskColumns + ` WHERE 1 = 1`
-	args := make([]any, 0, len(filter.States)+2)
+	query := runtimeTaskColumns
+	// Board and device predicates live in the local-control projections, so they
+	// are joined only when asked for: the standalone listing must keep its plan.
+	if filter.ProjectID != "" || filter.BoardID != "" {
+		query += ` LEFT JOIN local_task_contexts c ON c.local_task_id = l.id`
+	}
+	if filter.TargetDeviceID != "" {
+		query += ` LEFT JOIN local_task_devices d ON d.local_task_id = l.id`
+	}
+	query += ` WHERE 1 = 1`
+	args := make([]any, 0, len(filter.States)+6)
 	if filter.RepoProfileID != "" {
 		query += ` AND l.repo_profile_id = ?`
 		args = append(args, filter.RepoProfileID)
+	}
+	if filter.ControllerOwner != "" {
+		query += ` AND l.controller_owner = ?`
+		args = append(args, filter.ControllerOwner)
+	}
+	if filter.ProjectID != "" {
+		query += ` AND c.project_id = ?`
+		args = append(args, filter.ProjectID)
+	}
+	if filter.BoardID != "" {
+		query += ` AND c.board_id = ?`
+		args = append(args, filter.BoardID)
+	}
+	if filter.TargetDeviceID != "" {
+		query += ` AND d.device_id = ?`
+		args = append(args, filter.TargetDeviceID)
 	}
 	if len(filter.States) > 0 {
 		query += ` AND l.state IN (` + placeholders(len(filter.States)) + `)`

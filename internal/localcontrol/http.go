@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/store"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 const maxLocalRequestBytes = 1 << 20
@@ -47,7 +48,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/devices/{id}/reachable", a.reachableDevice)
 	mux.HandleFunc("POST /v1/devices/{id}/unreachable", a.unreachableDevice)
 	mux.HandleFunc("POST /v1/devices/{id}/revoke", a.revokeDevice)
+	mux.HandleFunc("GET /v1/events", a.observeHive)
+	mux.HandleFunc("GET /v1/projects", a.listProjects)
 	mux.HandleFunc("POST /v1/projects", a.createProject)
+	mux.HandleFunc("GET /v1/boards", a.listBoards)
+	mux.HandleFunc("GET /v1/tasks", a.listTasks)
 	mux.HandleFunc("GET /v1/providers", a.listProviders)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
@@ -151,6 +156,48 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := a.service.CreateProject(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
+}
+
+func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.ListProjects(r.Context())
+	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) listBoards(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.ListBoards(r.Context(), strings.TrimSpace(r.URL.Query().Get("project_id")))
+	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) listTasks(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	filter := TaskFilter{
+		ProjectID:      strings.TrimSpace(query.Get("project_id")),
+		BoardID:        strings.TrimSpace(query.Get("board_id")),
+		RepositoryID:   strings.TrimSpace(query.Get("repository_id")),
+		TargetDeviceID: strings.TrimSpace(query.Get("device_id")),
+		Limit:          parseLimit(query.Get("limit")),
+	}
+	for _, state := range query["state"] {
+		value := workmodel.State(strings.TrimSpace(state))
+		if !value.Valid() {
+			writeServiceError(w, ErrInvalidRequest)
+			return
+		}
+		filter.States = append(filter.States, value)
+	}
+	response, err := a.service.ListTasks(r.Context(), filter)
+	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) observeHive(w http.ResponseWriter, r *http.Request) {
+	raw := strings.TrimSpace(r.URL.Query().Get("after_cursor"))
+	after, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil && raw != "" {
+		writeError(w, http.StatusBadRequest, "invalid_cursor")
+		return
+	}
+	response, serviceErr := a.service.ObserveHive(r.Context(), after, parseLimit(r.URL.Query().Get("limit")))
+	writeResult(w, http.StatusOK, response, serviceErr)
 }
 
 func (a *API) listProviders(w http.ResponseWriter, r *http.Request) {

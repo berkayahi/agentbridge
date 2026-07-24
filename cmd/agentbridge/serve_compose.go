@@ -507,6 +507,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
+	localExecutor.progress = localService
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		control.Close()
@@ -737,6 +738,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
+	localExecutor.progress = localService
 	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
 	if err != nil {
 		return closeOnError(err, providerClosers...)

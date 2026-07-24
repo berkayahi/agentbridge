@@ -41,9 +41,23 @@ type localRuntimeExecutor struct {
 	// provider identity without weakening provider-side checks.
 	approvalUser string
 
+	// progress makes locally executed work observable on the task's own event
+	// log. Without it a local run is durable but invisible.
+	progress localcontrol.LocalProgress
+
 	mu       sync.Mutex
 	ctx      context.Context
 	sessions map[string]bridgeRuntime.Session
+}
+
+// observationSink records provider evidence in the execution journal and then
+// projects it onto the local task, so a keeper can watch a bee work.
+func (e *localRuntimeExecutor) observationSink(view localcontrol.TaskView) kernel.EventSink {
+	durable := kernel.NewDurableEventSink(e.store)
+	if e.progress == nil {
+		return durable
+	}
+	return localcontrol.NewLocalObservationSink(durable, e.progress, view.ID)
 }
 
 func newLocalRuntimeExecutor(data *sqlite.RuntimeStore, runtimes *bridgeRuntime.Registry, workspace *workspaceAdapter, models map[workmodel.Provider]string, approvalUser string) *localRuntimeExecutor {
@@ -213,7 +227,7 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	session, err := adapter.Start(startCtx, bridgeRuntime.StartRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, WorkingDirectory: workspace.Path,
 		Model: model, Input: kernel.Input{Text: input},
-	}, kernel.NewDurableEventSink(e.store))
+	}, e.observationSink(view))
 	if err != nil {
 		return err
 	}
@@ -273,7 +287,7 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 			Native: provider.Session{ID: providerSessionID, TaskID: providerTaskID, ExternalID: task.ProviderSessionID, ThreadID: task.ProviderThreadID, Provider: view.Provider},
 		},
 		Input: kernel.Input{Text: input},
-	}, kernel.NewDurableEventSink(e.store))
+	}, e.observationSink(view))
 	if err != nil {
 		return err
 	}

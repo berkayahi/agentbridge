@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -360,6 +361,54 @@ func (s *RuntimeStore) AppendLocalEvent(ctx context.Context, value localcontrol.
 	}
 	if err := tx.Commit(); err != nil {
 		return localcontrol.Event{}, fmt.Errorf("commit append local event: %w", err)
+	}
+	return stored, nil
+}
+
+// AppendLocalProviderEvent projects one provider observation onto a local task.
+// It is idempotent by the provider's deterministic event id, so a relay retry or
+// a restart replays without duplicating the task's flight log. The task's
+// current revision is stamped inside the transaction: the row describes the task
+// as it was observed, and no revision is computed by a caller.
+//
+// Only a locally controlled task is projected onto. A task owned by the
+// standalone controller keeps its own event lineage.
+func (s *RuntimeStore) AppendLocalProviderEvent(ctx context.Context, taskID, eventID, eventType string, payload []byte, createdAt time.Time) (localcontrol.Event, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(taskID) == "" || strings.TrimSpace(eventID) == "" || strings.TrimSpace(eventType) == "" || createdAt.IsZero() {
+		return localcontrol.Event{}, fmt.Errorf("append local provider event: %w", localcontrol.ErrInvalidRequest)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return localcontrol.Event{}, fmt.Errorf("begin append local provider event: %w", err)
+	}
+	defer tx.Rollback()
+	existing, err := loadLocalEventByIDTx(ctx, tx, eventID)
+	if err == nil {
+		if existing.TaskID != taskID {
+			return localcontrol.Event{}, fmt.Errorf("append local provider event: %w", localcontrol.ErrIdempotencyConflict)
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return localcontrol.Event{}, fmt.Errorf("read local provider event: %w", err)
+	}
+	var revision int64
+	var owner string
+	if err := tx.QueryRowContext(ctx, `SELECT revision, COALESCE(controller_owner, '') FROM local_tasks WHERE id = ?`, taskID).Scan(&revision, &owner); err != nil {
+		return localcontrol.Event{}, runtimeNotFound("read local provider event task", err)
+	}
+	if owner != string(workmodel.TaskControllerLocal) {
+		return localcontrol.Event{}, fmt.Errorf("append local provider event: %w", localcontrol.ErrTaskOwnedByAnotherController)
+	}
+	stored, err := insertLocalEventTx(ctx, tx, localcontrol.Event{
+		ID: eventID, ResourceType: "task", ResourceID: taskID, TaskID: taskID,
+		Revision: revision, Type: eventType, Payload: payload, CreatedAt: createdAt.UTC(),
+	})
+	if err != nil {
+		return localcontrol.Event{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return localcontrol.Event{}, fmt.Errorf("commit append local provider event: %w", err)
 	}
 	return stored, nil
 }

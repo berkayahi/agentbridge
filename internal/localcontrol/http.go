@@ -74,7 +74,9 @@ func (a *API) Handler() http.Handler {
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// A host version-gates the engine before it trusts this contract, so the
+	// API version is reported alongside liveness.
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "local_api_version": APIVersion})
 }
 
 func (a *API) listDevices(w http.ResponseWriter, r *http.Request) {

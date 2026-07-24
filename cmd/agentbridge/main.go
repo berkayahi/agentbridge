@@ -169,6 +169,13 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		}
 		return 0
 	}
+	if len(args) == 4 && args[0] == "paths" && args[1] == "--data-dir" && args[3] == "--json" {
+		if err := reportRuntimePaths(stdout, args[2]); err != nil {
+			fmt.Fprintln(stderr, "agentbridge: "+err.Error())
+			return 1
+		}
+		return 0
+	}
 	if len(args) == 3 && args[0] == "migrate" && args[1] == "--database" && strings.TrimSpace(args[2]) != "" {
 		if deps.runMigrate == nil {
 			fmt.Fprintln(stderr, "agentbridge: migration is unavailable")
@@ -181,7 +188,7 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair device --challenge <path> --data-dir <dir> --name <name> --endpoint <wss-url> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair device --challenge <path> --data-dir <dir> --name <name> --endpoint <wss-url> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge paths --data-dir <dir> --json | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 

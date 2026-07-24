@@ -16,6 +16,11 @@ import (
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
+// APIVersion is the local control contract version. It increases when a client
+// would need to change: a host compares it before trusting this API, so an
+// engine that is too old fails a version gate instead of failing mid-flight.
+const APIVersion = 1
+
 var (
 	ErrInvalidRequest               = errors.New("localcontrol: invalid request")
 	ErrUnknownProvider              = errors.New("localcontrol: unknown provider")

@@ -56,6 +56,24 @@ func TestReconcilePausesRunningTaskWhenWorkspaceInvariantChanged(t *testing.T) {
 	}
 }
 
+func TestLocalControllerTaskIsLeftAloneByReconcile(t *testing.T) {
+	fixture := newFixture(t, nil)
+	value := seededTask("local-owner", workmodel.Queued)
+	value.ControllerOwner = workmodel.TaskControllerLocal
+	if err := fixture.store.CreateTask(context.Background(), value, workmodel.Event{ID: "created", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, CreatedAt: value.CreatedAt}); err != nil {
+		t.Fatal(err)
+	}
+	fixture.start(t)
+	time.Sleep(20 * time.Millisecond)
+	got, err := fixture.store.Task(context.Background(), value.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != workmodel.Queued {
+		t.Fatalf("locally owned task state = %s, want queued", got.State)
+	}
+}
+
 func TestStartDoesNotDeadlockWhenReconciliationExceedsQueueCapacity(t *testing.T) {
 	fixture := newFixture(t, nil)
 	fixture.app.config.QueueSize = 1

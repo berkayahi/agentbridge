@@ -21,6 +21,25 @@ func TestLoadAcceptsGenericSafeProfile(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsHeadlessDeviceWithoutControllerTransports(t *testing.T) {
+	cfg, err := Load(writeConfig(t, headlessDeviceYAML))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.DeviceAgent.Enabled {
+		t.Fatal("device_agent.enabled = false, want true")
+	}
+}
+
+func TestLoadStillRequiresControllerTransportsOutsideHeadlessMode(t *testing.T) {
+	withoutTelegram := strings.Replace(validYAML, `telegram:
+  private_chat_only: true
+  allowed_user_ids: [123456789]
+  paired_chat_id: 123456789
+`, "", 1)
+	assertLoadError(t, withoutTelegram, "telegram")
+}
+
 func TestLoadRequiresExplicitDefaultForMultipleRepositories(t *testing.T) {
 	second := `
   second-app:
@@ -299,4 +318,32 @@ repositories:
     delivery:
       enabled: true
       allowed_ref: refs/heads/staging
+`
+
+const headlessDeviceYAML = `mode: standalone
+device_agent:
+  enabled: true
+  listen: 0.0.0.0:8788
+  organization_id: local
+  device_id: build-pi
+  identity_path: /srv/agentbridge/device-key.json
+  controller_public_key_path: /srv/agentbridge/controller.pub
+  tls_cert_path: /etc/agentbridge/device.crt
+  tls_key_path: /etc/agentbridge/device.key
+  results_path: /srv/agentbridge/device-results.json
+  replay_state_path: /srv/agentbridge/device-replay.json
+  connection_epoch: 1
+  controller_epoch: 1
+providers:
+  codex:
+    executable: /usr/local/bin/codex
+    model: gpt-5.6-terra
+repositories:
+  sample-app:
+    checkout_path: /srv/agentbridge/checkouts/sample-app
+    remote: origin
+    base_ref: refs/heads/staging
+    verification:
+      - argv: ["go", "test", "./..."]
+        dir: .
 `

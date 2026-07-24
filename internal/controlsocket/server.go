@@ -161,6 +161,16 @@ func (s *Server) acceptLoop() {
 	}
 }
 
+// ValidateOwner exposes the same peer-credential check used by the provider
+// control socket to other owner-only local transports. Filesystem permissions
+// protect the socket path; this check protects each accepted connection.
+func ValidateOwner(conn *net.UnixConn) error {
+	if conn == nil {
+		return ErrUnauthorized
+	}
+	return validatePeerUID(conn, os.Getuid())
+}
+
 func (s *Server) handleConn(conn *net.UnixConn) {
 	defer s.wg.Done()
 	defer func() {

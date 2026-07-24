@@ -8,7 +8,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/store"
 )
 
-func (s *Store) AcquireLease(ctx context.Context, repoProfileID, ownerID string, ttl time.Duration) (bool, error) {
+func (s *LegacyStore) AcquireLease(ctx context.Context, repoProfileID, ownerID string, ttl time.Duration) (bool, error) {
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO repository_leases (repo_profile_id, owner_id, acquired_at, heartbeat_at, expires_at)
@@ -32,7 +32,7 @@ func (s *Store) AcquireLease(ctx context.Context, repoProfileID, ownerID string,
 	return changed == 1, nil
 }
 
-func (s *Store) HeartbeatLease(ctx context.Context, repoProfileID, ownerID string, ttl time.Duration) error {
+func (s *LegacyStore) HeartbeatLease(ctx context.Context, repoProfileID, ownerID string, ttl time.Duration) error {
 	now := time.Now().UTC()
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE repository_leases SET heartbeat_at = ?, expires_at = ?
@@ -45,7 +45,7 @@ func (s *Store) HeartbeatLease(ctx context.Context, repoProfileID, ownerID strin
 	return requireLeaseOwner(result, "heartbeat")
 }
 
-func (s *Store) ReleaseLease(ctx context.Context, repoProfileID, ownerID string) error {
+func (s *LegacyStore) ReleaseLease(ctx context.Context, repoProfileID, ownerID string) error {
 	result, err := s.db.ExecContext(ctx, "DELETE FROM repository_leases WHERE repo_profile_id = ? AND owner_id = ?", repoProfileID, ownerID)
 	if err != nil {
 		return fmt.Errorf("release lease: %w", err)
@@ -64,7 +64,7 @@ func requireLeaseOwner(result interface{ RowsAffected() (int64, error) }, action
 	return nil
 }
 
-func (s *Store) ExpiredLeases(ctx context.Context) ([]store.Lease, error) {
+func (s *LegacyStore) ExpiredLeases(ctx context.Context) ([]store.Lease, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT repo_profile_id, owner_id, acquired_at, heartbeat_at, expires_at
 		FROM repository_leases WHERE expires_at <= ? ORDER BY expires_at, repo_profile_id`, timestamp(time.Now()))

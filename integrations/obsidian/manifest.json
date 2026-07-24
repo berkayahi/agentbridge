@@ -1,0 +1,9 @@
+{
+  "id": "kovan-local",
+  "name": "Kovan Local",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Project Kovan tasks from the authenticated local Desktop host without making Obsidian authoritative.",
+  "author": "Kovan",
+  "isDesktopOnly": true
+}

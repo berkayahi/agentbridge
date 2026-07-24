@@ -459,7 +459,7 @@ func TestOpenUpgradesLegacyAttachmentChecksumSchema(t *testing.T) {
 	}
 }
 
-func openStore(t *testing.T, path string) *storesqlite.Store {
+func openStore(t *testing.T, path string) *storesqlite.LegacyStore {
 	t.Helper()
 	db, err := storesqlite.Open(context.Background(), path)
 	if err != nil {

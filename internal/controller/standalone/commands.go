@@ -237,6 +237,9 @@ func (a *App) retryTask(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := requireStandaloneTask(previous); err != nil {
+		return "", err
+	}
 	if previous.State != workmodel.Failed && previous.State != workmodel.Paused {
 		return "", fmt.Errorf("app: task %s in state %s cannot be retried: %w", id, previous.State, store.ErrInvalidTransition)
 	}

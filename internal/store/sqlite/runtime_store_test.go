@@ -57,7 +57,7 @@ func TestRuntimeStorePersistsStandaloneTaskInV2Lineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.State != workmodel.Running || got.Revision != 4 || got.RepoProfileID != value.RepoProfileID || got.Provider != value.Provider || got.TelegramChatID != 42 || got.TelegramMessageID != 99 || got.BaseSHA != "base-sha" {
+	if got.State != workmodel.Running || got.Revision != 4 || got.RepoProfileID != value.RepoProfileID || got.Provider != value.Provider || got.ControllerOwner != workmodel.TaskControllerStandalone || got.TelegramChatID != 42 || got.TelegramMessageID != 99 || got.BaseSHA != "base-sha" {
 		t.Fatalf("task projection = %#v", got)
 	}
 	events, err := data.Events(ctx, value.ID)
@@ -75,7 +75,7 @@ func TestRuntimeStorePersistsStandaloneTaskInV2Lineage(t *testing.T) {
 	if err := data.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM migration_ledger").Scan(&v2Ledgers); err != nil {
 		t.Fatal(err)
 	}
-	if legacyTables != 0 || v2Ledgers != 1 {
+	if legacyTables != 0 || v2Ledgers != 9 {
 		t.Fatalf("legacy tables=%d v2 ledgers=%d", legacyTables, v2Ledgers)
 	}
 	if err := data.Close(); err != nil {
@@ -89,5 +89,47 @@ func TestRuntimeStorePersistsStandaloneTaskInV2Lineage(t *testing.T) {
 	defer reopened.Close()
 	if got, err := reopened.Task(ctx, value.ID); err != nil || got.State != workmodel.Running {
 		t.Fatalf("reopened task = %#v, err = %v", got, err)
+	}
+}
+
+func TestRuntimeStoreUpsertSessionReusesCanonicalActiveTaskSession(t *testing.T) {
+	ctx := context.Background()
+	data, err := OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "provider-session.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+
+	now := time.Unix(1_700_000_100, 0).UTC()
+	if err := data.EnsureRepositoryBinding(ctx, "repo-1", "origin"); err != nil {
+		t.Fatal(err)
+	}
+	value := workmodel.Task{ID: "task-1", RepoProfileID: "repo-1", Title: "Provider session", Prompt: "start", State: workmodel.Queued, Provider: workmodel.CodexSubscription, CreatedAt: now, UpdatedAt: now}
+	if err := data.CreateTask(ctx, value, workmodel.Event{ID: "event-1", TaskID: value.ID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, Payload: []byte(`{}`), CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+
+	providerSession := workmodel.Session{
+		ID: "thread-1", TaskID: value.ID, Provider: value.Provider,
+		ProviderSessionID: "thread-1", ProviderThreadID: "thread-1", Status: "running", Resumable: true,
+		CreatedAt: now.Add(time.Second), UpdatedAt: now.Add(time.Second),
+	}
+	if err := data.UpsertSession(ctx, providerSession); err != nil {
+		t.Fatal(err)
+	}
+
+	var count int
+	if err := data.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE local_task_id = ?`, value.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("session rows for task = %d, want canonical row only", count)
+	}
+	var id, activeTask, providerSessionID, providerThreadID, status string
+	if err := data.db.QueryRowContext(ctx, `SELECT id, active_local_task_id, provider_session_id, provider_thread_id, status FROM sessions WHERE local_task_id = ?`, value.ID).Scan(&id, &activeTask, &providerSessionID, &providerThreadID, &status); err != nil {
+		t.Fatal(err)
+	}
+	if id != value.ID+"-session" || activeTask != value.ID || providerSessionID != "thread-1" || providerThreadID != "thread-1" || status != "running" {
+		t.Fatalf("canonical session = id=%q active=%q provider=%q thread=%q status=%q", id, activeTask, providerSessionID, providerThreadID, status)
 	}
 }

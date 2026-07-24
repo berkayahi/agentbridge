@@ -10,7 +10,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
-func (s *Store) SaveAttachment(ctx context.Context, value workmodel.Attachment) error {
+func (s *LegacyStore) SaveAttachment(ctx context.Context, value workmodel.Attachment) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO attachments (id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -22,7 +22,7 @@ func (s *Store) SaveAttachment(ctx context.Context, value workmodel.Attachment) 
 	return nil
 }
 
-func (s *Store) Attachments(ctx context.Context, taskID string) ([]workmodel.Attachment, error) {
+func (s *LegacyStore) Attachments(ctx context.Context, taskID string) ([]workmodel.Attachment, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, kind, name, media_type, storage_path, size_bytes, sha256, created_at
 		FROM attachments WHERE task_id = ? ORDER BY created_at, id`, taskID)
@@ -46,7 +46,7 @@ func (s *Store) Attachments(ctx context.Context, taskID string) ([]workmodel.Att
 	return values, rows.Err()
 }
 
-func (s *Store) UpsertSession(ctx context.Context, value workmodel.Session) error {
+func (s *LegacyStore) UpsertSession(ctx context.Context, value workmodel.Session) error {
 	if err := upsertSession(ctx, s.db, value); err != nil {
 		return fmt.Errorf("upsert session: %w", err)
 	}
@@ -71,7 +71,7 @@ func upsertSession(ctx context.Context, db execer, value workmodel.Session) erro
 	return err
 }
 
-func (s *Store) ResumableSessions(ctx context.Context) ([]workmodel.Session, error) {
+func (s *LegacyStore) ResumableSessions(ctx context.Context) ([]workmodel.Session, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, provider, provider_session_id, provider_thread_id,
 		       status, resumable, created_at, updated_at
@@ -110,7 +110,7 @@ func scanSession(row scanner) (workmodel.Session, error) {
 	return value, nil
 }
 
-func (s *Store) UpsertApproval(ctx context.Context, value workmodel.Approval) error {
+func (s *LegacyStore) UpsertApproval(ctx context.Context, value workmodel.Approval) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO approvals (
 			id, task_id, kind, status, request_payload, decision_payload,
@@ -130,7 +130,7 @@ func (s *Store) UpsertApproval(ctx context.Context, value workmodel.Approval) er
 	return nil
 }
 
-func (s *Store) PendingApprovals(ctx context.Context) ([]workmodel.Approval, error) {
+func (s *LegacyStore) PendingApprovals(ctx context.Context) ([]workmodel.Approval, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, kind, status, request_payload, decision_payload,
 		       requested_at, expires_at, resolved_at
@@ -184,7 +184,7 @@ func nullableBytes(value []byte) any {
 	return value
 }
 
-func (s *Store) UpsertAuthIncident(ctx context.Context, value workmodel.AuthIncident) error {
+func (s *LegacyStore) UpsertAuthIncident(ctx context.Context, value workmodel.AuthIncident) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO auth_incidents (id, task_id, provider, status, redacted_detail, detected_at, resolved_at)
 		VALUES (?, NULL, ?, ?, ?, ?, ?)
@@ -200,7 +200,7 @@ func (s *Store) UpsertAuthIncident(ctx context.Context, value workmodel.AuthInci
 	return nil
 }
 
-func (s *Store) OpenAuthIncident(ctx context.Context, provider workmodel.Provider) (workmodel.AuthIncident, error) {
+func (s *LegacyStore) OpenAuthIncident(ctx context.Context, provider workmodel.Provider) (workmodel.AuthIncident, error) {
 	var value workmodel.AuthIncident
 	var detail []byte
 	var detected string

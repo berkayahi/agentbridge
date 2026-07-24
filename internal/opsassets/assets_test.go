@@ -50,9 +50,29 @@ func TestServiceIsHardenedAndRestartable(t *testing.T) {
 	}
 }
 
+func TestHeadlessDeviceServiceHasNoControllerTransports(t *testing.T) {
+	service := readAsset(t, "deploy/systemd/agentbridge-device-agent.service")
+	for _, property := range []string{
+		"Restart=always",
+		"ExecStartPre=%h/.local/bin/agentbridge doctor --config %h/.config/agentbridge/config.yaml",
+		"ExecStart=%h/.local/bin/agentbridge serve --config %h/.config/agentbridge/config.yaml",
+		"AGENTBRIDGE_DATA_DIR=%h/.local/share/agentbridge",
+	} {
+		if !strings.Contains(service, property) {
+			t.Errorf("headless service is missing %q", property)
+		}
+	}
+	for _, forbidden := range []string{"LoadCredential=telegram_bot_token:", "AGENTBRIDGE_LISTEN=", "agentbridge local-api"} {
+		if strings.Contains(service, forbidden) {
+			t.Errorf("headless service contains controller transport %q", forbidden)
+		}
+	}
+}
+
 func TestUserUnitsAvoidCapabilityBoundingSetFailures(t *testing.T) {
 	for _, asset := range []string{
 		"deploy/systemd/agentbridge.service",
+		"deploy/systemd/agentbridge-device-agent.service",
 		"deploy/systemd/agentbridge-backup.service",
 	} {
 		unit := readAsset(t, asset)
@@ -88,6 +108,33 @@ func TestPiSmokeFindsPerUserInstalledCommands(t *testing.T) {
 	if !strings.Contains(script, `PATH="$HOME/.local/bin:$PATH"`) {
 		t.Error("Pi smoke script must add the per-user install directory to PATH")
 	}
+	for _, fragment := range []string{
+		"AGENTBRIDGE_PI_NONCE",
+		"AGENTBRIDGE_PI_ATTESTATION_PATH",
+		"AGENTBRIDGE_SERVICE_NAME",
+		"manifest_artifact_digest",
+		"preflight_pass",
+		"chmod 0700 -- \"$attestation_dir\"",
+		"vertical_slice",
+		"reconnect",
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Errorf("Pi smoke script is missing controlled evidence field %q", fragment)
+		}
+	}
+	acceptance := readAsset(t, "scripts/pi-acceptance.sh")
+	for _, fragment := range []string{
+		"agentbridge.pi.vertical-slice.v1",
+		"agentbridge.pi.acceptance.v1",
+		"AGENTBRIDGE_SERVICE_NAME",
+		"preflight_sha256",
+		"duplicate_commit_receipts",
+		"RUN_PI_ACCEPTANCE",
+	} {
+		if !strings.Contains(acceptance, fragment) {
+			t.Errorf("Pi acceptance verifier is missing %q", fragment)
+		}
+	}
 }
 
 func TestAuthRecoveryIsInteractiveAndDashboardSupervised(t *testing.T) {
@@ -118,23 +165,44 @@ func TestAuthRecoveryIsInteractiveAndDashboardSupervised(t *testing.T) {
 	}
 }
 
-func TestBackupUsesSQLiteOnlineBackupAndSafeRetention(t *testing.T) {
+func TestBackupWrapperDelegatesToSchemaAwareV2Command(t *testing.T) {
 	script := readAsset(t, "scripts/backup.sh")
-	required := []string{
-		".backup",
-		"PRAGMA integrity_check",
-		"EVENT_RETENTION_DAYS:-30",
-		"ARTIFACT_RETENTION_DAYS:-7",
-		"PINNED_TASKS_FILE",
-		"state NOT IN ('queued','preparing','running','awaiting_approval','awaiting_auth','verifying','committing','pushing','paused')",
-	}
-	for _, fragment := range required {
+	for _, fragment := range []string{
+		`exec "$agentbridge_bin" backup --database "$database" --output "$backup_dir"`,
+		"command -v",
+		"umask 077",
+	} {
 		if !strings.Contains(script, fragment) {
-			t.Errorf("backup and retention script is missing %q", fragment)
+			t.Errorf("backup wrapper is missing %q", fragment)
 		}
 	}
-	if strings.Contains(script, "cp \"$DATABASE_PATH\"") {
-		t.Error("live SQLite database must not be copied directly")
+	if strings.Contains(script, "sqlite3") || strings.Contains(script, "cp \"$DATABASE_PATH\"") {
+		t.Error("backup wrapper must not query or copy the live SQLite database")
+	}
+
+	implementation := readAsset(t, "internal/operations/backup.go")
+	for _, fragment := range []string{
+		`"VACUUM INTO '"`,
+		`"PRAGMA integrity_check"`,
+		`"agentbridge-2.0"`,
+		"SchemaFingerprint",
+	} {
+		if !strings.Contains(implementation, fragment) {
+			t.Errorf("v2 backup implementation is missing %q", fragment)
+		}
+	}
+	retention := readAsset(t, "internal/operations/retention.go")
+	backupCommand := readAsset(t, "cmd/agentbridge/backup.go")
+	for _, fragment := range []string{
+		"applyRetention",
+		"PINNED_TASKS_FILE",
+		"execution_events",
+		"attachments",
+		"worktree_path",
+	} {
+		if !strings.Contains(retention+backupCommand+script, fragment) {
+			t.Errorf("v2 retention implementation is missing %q", fragment)
+		}
 	}
 }
 
@@ -145,6 +213,7 @@ func TestPublicAssetsContainNoPrivateDeploymentData(t *testing.T) {
 		"CODE_OF_CONDUCT.md",
 		"SECURITY.md",
 		"deploy/systemd/agentbridge.service",
+		"deploy/systemd/agentbridge-device-agent.service",
 		"deploy/systemd/agentbridge-backup.service",
 		"deploy/systemd/agentbridge-backup.timer",
 		"deploy/install.sh",
@@ -152,6 +221,7 @@ func TestPublicAssetsContainNoPrivateDeploymentData(t *testing.T) {
 		"scripts/backup.sh",
 		"scripts/restore-check.sh",
 		"scripts/pi-smoke.sh",
+		"scripts/pi-acceptance.sh",
 		"docs/architecture.md",
 		"docs/operations.md",
 		"docs/auth-recovery.md",

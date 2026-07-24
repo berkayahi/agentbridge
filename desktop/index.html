@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Kovan local-first control room for AgentBridge" />
+    <title>Kovan — Local control room</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="grain" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="rail">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div>
+            <div class="brand-name">Kovan</div>
+            <div class="brand-caption">local control room</div>
+          </div>
+        </div>
+
+        <div class="authority-pill"><span class="pulse"></span><span>LOCAL AUTHORITY</span><strong>v2</strong></div>
+
+        <div class="rail-section">
+          <div class="eyebrow">Workspace</div>
+          <button class="workspace-switcher" id="workspace-switcher" type="button">
+            <span class="workspace-icon">⌂</span>
+            <span class="workspace-name" id="workspace-name">Untitled workspace</span>
+            <span class="chevron">⌄</span>
+          </button>
+        </div>
+
+        <nav class="nav-list" aria-label="Main navigation">
+          <button class="nav-item active" type="button"><span class="nav-icon">◈</span><span>Command board</span><kbd>⌘ 1</kbd></button>
+          <button class="nav-item" type="button"><span class="nav-icon">◌</span><span>Activity stream</span><span class="nav-count" id="activity-count">0</span></button>
+          <button class="nav-item" type="button"><span class="nav-icon">◇</span><span>Repositories</span></button>
+        </nav>
+
+        <div class="rail-section boards-section">
+          <div class="section-heading"><span class="eyebrow">Boards</span><button class="small-action" id="new-board" type="button" aria-label="Create a board">+</button></div>
+          <div class="board-list" id="board-list">
+            <button class="board-row selected" type="button"><span class="board-dot amber"></span><span>Build queue</span><span class="board-total">—</span></button>
+            <button class="board-row" type="button"><span class="board-dot blue"></span><span>Experiments</span><span class="board-total">—</span></button>
+          </div>
+        </div>
+
+        <div class="rail-footer">
+          <button class="device-card" id="device-card" type="button" aria-label="Manage execution devices"><span class="device-orb"></span><div><strong>Mac · local</strong><span>ready for work</span></div><span class="device-menu">···</span></button>
+          <div class="rail-links"><button type="button">Settings</button><button type="button">Keyboard</button></div>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="breadcrumb"><span>Build queue</span><i>/</i><strong>Today</strong></div>
+          <div class="topbar-actions"><span class="sync-status" id="sync-status"><span class="sync-dot"></span> synced just now</span><button class="icon-button" type="button" aria-label="Search">⌕</button><button class="avatar" type="button" aria-label="Open operator menu">BK</button></div>
+        </header>
+
+        <section class="hero reveal-1">
+          <div>
+            <div class="hero-kicker"><span class="line"></span> Wednesday · 23 July 2026</div>
+            <h1>Run the room<span class="accent-dot">.</span></h1>
+            <p>One calm surface for work that deserves a durable trail.</p>
+          </div>
+          <div class="hero-meta"><div class="meta-label">Controller</div><div class="meta-value">AgentBridge <span>·</span> standalone v2</div><div class="meta-sub">SQLite authority · owner-only transport</div></div>
+        </section>
+
+        <section class="stats-grid reveal-2" aria-label="Workspace summary">
+          <div class="stat-card"><span class="stat-label">In motion</span><strong id="stat-running">01</strong><span class="stat-note">active execution</span></div>
+          <div class="stat-card"><span class="stat-label">Awaiting you</span><strong id="stat-approval">00</strong><span class="stat-note">approval decisions</span></div>
+          <div class="stat-card warm"><span class="stat-label">Completed today</span><strong id="stat-completed">00</strong><span class="stat-note">verified checkpoints</span></div>
+          <div class="stat-card quiet"><span class="stat-label">Event cursor</span><strong id="stat-cursor">—</strong><span class="stat-note">durable local stream</span></div>
+        </section>
+
+        <section class="content-grid reveal-3">
+          <div class="board-column">
+            <div class="section-heading board-heading"><div><div class="eyebrow">Active board</div><h2>Build queue <span id="task-count">1 task</span></h2></div><button class="new-task-button" id="open-composer" type="button"><span>＋</span> New task <kbd>N</kbd></button></div>
+            <div class="task-stack" id="task-stack"></div>
+            <div class="empty-board" id="empty-board" hidden><div class="empty-glyph">＋</div><h3>Nothing is asking for attention.</h3><p>Start with a small, explicit task. Kovan will keep the trail.</p><button class="text-button" type="button" data-open-composer>create the first task <span>↗</span></button></div>
+          </div>
+
+          <aside class="inspector" aria-label="Task details">
+            <div class="inspector-top"><div><div class="eyebrow">Selected task</div><h2 id="inspector-title">No task selected</h2></div><button class="icon-button subtle" type="button" aria-label="More task options">···</button></div>
+            <div class="inspector-state" id="inspector-state"><span class="state-dot"></span><span>Waiting for a task</span></div>
+            <div class="inspector-section"><div class="eyebrow">Durable lineage</div><dl class="lineage-list"><div><dt>Task</dt><dd id="lineage-task">—</dd></div><div><dt>Revision</dt><dd id="lineage-revision">—</dd></div><div><dt>Execution</dt><dd id="lineage-execution">—</dd></div><div><dt>Repository</dt><dd id="lineage-repository">—</dd></div></dl></div>
+            <div class="inspector-section stream-section"><div class="section-heading"><div class="eyebrow">Event stream</div><span class="cursor-badge" id="cursor-badge">cursor —</span></div><div class="event-stream" id="event-stream"><div class="stream-empty">Events will appear here<br />after the first command.</div></div></div>
+            <div class="inspector-footer"><span class="lock-icon">⌁</span><span>Actions are authenticated locally<br />and owned by AgentBridge.</span></div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="modal" id="setup-modal">
+      <form method="dialog" class="modal-card" id="setup-form">
+        <button class="modal-close" value="cancel" type="submit" aria-label="Close">×</button>
+        <div class="eyebrow">First arrangement</div><h2>Give this room a name.</h2><p class="modal-intro">The controller will allocate canonical IDs. Paths stay inside AgentBridge.</p>
+        <label>Project name<input name="project" value="Kovan workspace" required maxlength="120" /></label>
+        <label>Approved repository remote<input name="remote" value="origin" required maxlength="256" /></label>
+        <label>Board name<input name="board" value="Build queue" required maxlength="120" /></label>
+        <div class="modal-actions"><button class="ghost-button" value="cancel" type="submit">cancel</button><button class="primary-button" value="default" type="submit">create workspace <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="task-modal">
+      <form method="dialog" class="modal-card task-modal-card" id="task-form">
+        <button class="modal-close" value="cancel" type="submit" aria-label="Close">×</button>
+        <div class="eyebrow">New local task</div><h2>What should move?</h2><p class="modal-intro">A task starts queued. Every transition becomes an observable, durable event.</p>
+        <label>Prompt<textarea name="prompt" rows="4" placeholder="Describe the change, investigation, or experiment…" required></textarea></label>
+        <div class="form-row"><label>Title <span class="optional">optional</span><input name="title" placeholder="Derived from prompt" maxlength="120" /></label><label>Runtime<select name="provider"><option value="codex">Codex subscription</option><option value="claude">Claude subscription</option></select></label></div>
+        <label>Execution device<select name="target_device" id="target-device"><option value="local-mac">Mac · local</option></select></label>
+        <div class="modal-actions"><button class="ghost-button" value="cancel" type="submit">cancel</button><button class="primary-button" value="default" type="submit">queue task <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="pair-modal">
+      <form method="dialog" class="modal-card pair-modal-card" id="pair-form">
+        <button class="modal-close" value="cancel" type="submit" aria-label="Close">×</button>
+        <div class="eyebrow">Execution device</div><h2>Bring a Pi into the room.</h2>
+        <p class="modal-intro">The controller keeps authority. The Pi only receives signed, typed work and returns evidence.</p>
+        <div class="pair-fields">
+          <label>Device ID<input name="device_id" placeholder="build-pi" required maxlength="128" /></label>
+          <label>Display name<input name="name" placeholder="Build Pi" required maxlength="120" /></label>
+          <label>WSS endpoint<input name="endpoint" placeholder="wss://pi.tailnet/agentbridge" required /></label>
+        </div>
+        <div class="pair-step" id="pair-challenge-step">
+          <div class="pair-step-heading"><span>01 · Create a one-time challenge</span><span class="pair-status" id="pair-challenge-status">waiting</span></div>
+          <p>Generate the challenge here, then move its JSON to the Pi. It expires quickly and is bound to this browser session.</p>
+          <div class="pair-actions"><button class="ghost-button" id="create-pair-challenge" value="challenge" type="submit">create challenge <span>↗</span></button></div>
+          <textarea id="pair-challenge-json" rows="5" readonly placeholder="The controller challenge will appear here."></textarea>
+          <div class="pair-copy-row"><span id="pair-challenge-expiry">No challenge yet.</span><button class="text-button" id="copy-pair-challenge" type="button">copy challenge</button></div>
+        </div>
+        <div class="pair-step" id="pair-proof-step" hidden>
+          <div class="pair-step-heading"><span>02 · Confirm the device proof</span><span class="pair-status" id="pair-proof-status">waiting</span></div>
+          <p>On the Pi, run <code>agentbridge pair device</code> with the challenge file. Paste the resulting JSON below.</p>
+          <textarea name="proof_json" id="pair-proof-json" rows="7" placeholder="Paste the owner-only pair request JSON from the Pi."></textarea>
+          <div class="pair-fingerprint" id="pair-fingerprint" hidden><span class="device-orb"></span><div><span>Device fingerprint</span><strong id="pair-fingerprint-value">—</strong></div></div>
+          <label class="confirm-row"><input type="checkbox" id="pair-confirm-fingerprint" /> I verified this fingerprint on the Pi.</label>
+        </div>
+        <div class="modal-actions"><button class="ghost-button" value="cancel" type="submit">cancel</button><button class="primary-button" id="complete-pairing" value="complete" type="submit" disabled>pair device <span>↗</span></button></div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="device-modal">
+      <form method="dialog" class="modal-card device-modal-card" id="device-form">
+        <button class="modal-close" value="cancel" type="submit" aria-label="Close">×</button>
+        <div class="eyebrow">Execution devices</div><h2>Choose the hands.</h2>
+        <p class="modal-intro">The Mac stays the local authority. Paired devices receive only signed, typed work.</p>
+        <div class="managed-device-list" id="managed-device-list"></div>
+        <div class="device-rotate-panel" id="device-rotate-panel" hidden>
+          <div class="pair-step-heading"><span>Rotate device key</span><span class="pair-status" id="device-rotate-status">waiting</span></div>
+          <p>Paste the new public key after the device has installed it. The controller will advance the connection epoch and fence old links.</p>
+          <label>New public key <span class="optional">base64</span><input id="device-rotate-key" autocomplete="off" placeholder="32-byte Ed25519 public key" /></label>
+          <div class="pair-fingerprint" id="device-rotate-fingerprint" hidden><span class="device-orb"></span><div><span>New fingerprint</span><strong id="device-rotate-fingerprint-value">—</strong></div></div>
+          <label class="confirm-row"><input type="checkbox" id="device-rotate-confirm" /> I verified the new fingerprint on the device.</label>
+          <div class="pair-actions"><button class="primary-button" id="rotate-device" type="button" disabled>rotate key <span>↗</span></button></div>
+        </div>
+        <div class="modal-actions"><button class="ghost-button" id="open-pairing" type="button">pair a Pi <span>＋</span></button><button class="primary-button" value="cancel" type="submit">done</button></div>
+      </form>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>

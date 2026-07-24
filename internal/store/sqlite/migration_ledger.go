@@ -58,34 +58,103 @@ type migrationLedgerQueryer interface {
 }
 
 func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQueryer) error {
-	checksum, err := executionKernelChecksum()
+	executionChecksum, err := executionKernelChecksum()
 	if err != nil {
 		return err
 	}
-	var rows int
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM migration_ledger").Scan(&rows); err != nil {
-		return fmt.Errorf("count migration ledger: %w", err)
+	localChecksum, err := localControlChecksum()
+	if err != nil {
+		return err
 	}
-	if rows != 1 {
-		return ErrUnknownLineage
+	deviceChecksum, err := deviceRoutingChecksum()
+	if err != nil {
+		return err
 	}
-	var version int
-	var name, gotChecksum, fingerprint, appliedAt string
-	if err := db.QueryRowContext(ctx, `SELECT version, name, checksum, structural_fingerprint, applied_at FROM migration_ledger`).Scan(&version, &name, &gotChecksum, &fingerprint, &appliedAt); err != nil {
+	linkChecksum, err := deviceLinkChecksum()
+	if err != nil {
+		return err
+	}
+	backfillChecksum, err := localBackfillChecksum()
+	if err != nil {
+		return err
+	}
+	deviceCommandSchemaChecksum, err := deviceCommandChecksum()
+	if err != nil {
+		return err
+	}
+	taskCursorSchemaChecksum, err := taskCursorChecksum()
+	if err != nil {
+		return err
+	}
+	remoteCursorSchemaChecksum, err := remoteCursorChecksum()
+	if err != nil {
+		return err
+	}
+	controllerOwnerSchemaChecksum, err := controllerOwnerChecksum()
+	if err != nil {
+		return err
+	}
+	expected := map[int]struct {
+		name     string
+		checksum string
+	}{
+		executionKernelVersion: {name: executionKernelName, checksum: executionChecksum},
+		localControlVersion:    {name: localControlName, checksum: localChecksum},
+		deviceRoutingVersion:   {name: deviceRoutingName, checksum: deviceChecksum},
+		deviceLinkVersion:      {name: deviceLinkName, checksum: linkChecksum},
+		localBackfillVersion:   {name: localBackfillName, checksum: backfillChecksum},
+		deviceCommandVersion:   {name: deviceCommandName, checksum: deviceCommandSchemaChecksum},
+		taskCursorVersion:      {name: taskCursorName, checksum: taskCursorSchemaChecksum},
+		remoteCursorVersion:    {name: remoteCursorName, checksum: remoteCursorSchemaChecksum},
+		controllerOwnerVersion: {name: controllerOwnerName, checksum: controllerOwnerSchemaChecksum},
+	}
+	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum, structural_fingerprint, applied_at FROM migration_ledger ORDER BY version`)
+	if err != nil {
 		return fmt.Errorf("read migration ledger: %w", err)
 	}
-	if version != executionKernelVersion || name != executionKernelName || gotChecksum != checksum || fingerprint == "" || appliedAt == "" {
-		return ErrUnknownLineage
+	defer rows.Close()
+	versions := make([]int, 0, len(expected))
+	var latestFingerprint string
+	for rows.Next() {
+		var version int
+		var name, gotChecksum, fingerprint, appliedAt string
+		if err := rows.Scan(&version, &name, &gotChecksum, &fingerprint, &appliedAt); err != nil {
+			return fmt.Errorf("scan migration ledger: %w", err)
+		}
+		want, ok := expected[version]
+		if !ok || name != want.name || gotChecksum != want.checksum || fingerprint == "" || appliedAt == "" {
+			return ErrUnknownLineage
+		}
+		if _, err := time.Parse(time.RFC3339Nano, appliedAt); err != nil {
+			return ErrUnknownLineage
+		}
+		versions = append(versions, version)
+		latestFingerprint = fingerprint
 	}
-	if _, err := time.Parse(time.RFC3339Nano, appliedAt); err != nil {
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate migration ledger: %w", err)
+	}
+	if len(versions) == 0 || versions[0] != executionKernelVersion || !strictlyIncreasing(versions) || !contiguousMigrationVersions(versions) {
 		return ErrUnknownLineage
 	}
 	current, err := schemaFingerprint(ctx, db)
 	if err != nil {
 		return err
 	}
-	if current != fingerprint {
+	if current != latestFingerprint {
 		return ErrUnknownLineage
 	}
 	return nil
+}
+
+func contiguousMigrationVersions(versions []int) bool {
+	if len(versions) == 0 || versions[0] != executionKernelVersion {
+		return false
+	}
+	for index := 1; index < len(versions); index++ {
+		if versions[index] != versions[index-1]+1 {
+			return false
+		}
+	}
+	return versions[len(versions)-1] <= controllerOwnerVersion
 }

@@ -47,7 +47,7 @@ type Config struct {
 }
 
 type Store interface {
-	store.Store
+	store.RuntimeStore
 	SaveWorkspace(context.Context, string, string, string) error
 	SaveTelegramMessage(context.Context, string, int64) error
 	SaveProviderSession(context.Context, string, workmodel.Session) error
@@ -130,14 +130,18 @@ type App struct {
 	newID  func() string
 	idMu   sync.Mutex
 
-	mu           sync.Mutex
-	started      bool
-	closed       bool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	queue        chan queuedTask
-	scheduler    *scheduler.Scheduler
-	active       map[string]activeTask
+	mu        sync.Mutex
+	started   bool
+	closed    bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	queue     chan queuedTask
+	scheduler *scheduler.Scheduler
+	active    map[string]activeTask
+	// starting closes the race between a provider returning a session and its
+	// registration in active; auth suspension waits on startChanged first.
+	starting     map[workmodel.Provider]int
+	startChanged chan struct{}
 	wg           sync.WaitGroup
 	closeOnce    sync.Once
 	shutdownDone chan struct{}
@@ -168,7 +172,7 @@ func New(config Config, deps Dependencies) (*App, error) {
 	if config.QueueSize < 1 {
 		config.QueueSize = 16
 	}
-	return &App{config: config, deps: deps, newID: config.NewID, queue: make(chan queuedTask, config.QueueSize), active: make(map[string]activeTask), pending: make(map[int64]pendingPrompt), shutdownDone: make(chan struct{})}, nil
+	return &App{config: config, deps: deps, newID: config.NewID, queue: make(chan queuedTask, config.QueueSize), active: make(map[string]activeTask), starting: make(map[workmodel.Provider]int), startChanged: make(chan struct{}), pending: make(map[int64]pendingPrompt), shutdownDone: make(chan struct{})}, nil
 }
 
 func randomID() string {
@@ -525,6 +529,9 @@ func (a *App) execute(job queuedTask) {
 	if err != nil {
 		return
 	}
+	if !standaloneOwnsTask(value) {
+		return
+	}
 	ctx, cancel := context.WithCancelCause(a.ctx)
 	defer cancel(nil)
 	permit, err := a.scheduler.Acquire(ctx, scheduler.Request{TaskID: value.ID, Repository: value.RepoProfileID})
@@ -590,14 +597,17 @@ func (a *App) execute(job queuedTask) {
 		a.executionFailure(ctx, value, err)
 		return
 	}
+	a.beginProviderStart(value.Provider)
 	session, stream, err := p.Start(ctx, provider.StartRequest{TaskID: taskID, Input: input, WorkingDirectory: workspace.Path, Model: a.config.Models[value.Provider]})
 	if err != nil {
+		a.endProviderStart(value.Provider)
 		a.executionFailure(ctx, value, err)
 		return
 	}
 	done := make(chan struct{})
 	defer close(done)
 	a.rememberActive(value.ID, p, session, cancel, done)
+	a.endProviderStart(value.Provider)
 	defer func() {
 		if _, ok := a.takeActive(value.ID); !ok {
 			return
@@ -655,14 +665,17 @@ func (a *App) resume(ctx context.Context, value workmodel.Task, cancel context.C
 		input = "Continue the interrupted task from the durable session."
 	}
 	input = agentContext(value, value.WorktreePath, input)
+	a.beginProviderStart(value.Provider)
 	session, stream, err := p.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: saved, Input: provider.Input{Text: input}})
 	if err != nil {
+		a.endProviderStart(value.Provider)
 		a.pause(value, "saved provider session could not be resumed safely")
 		return
 	}
 	done := make(chan struct{})
 	defer close(done)
 	a.rememberActive(value.ID, p, session, cancel, done)
+	a.endProviderStart(value.Provider)
 	defer func() {
 		if _, ok := a.takeActive(value.ID); !ok {
 			return
@@ -1004,6 +1017,9 @@ func (a *App) cancelTask(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := requireStandaloneTask(value); err != nil {
+		return err
+	}
 	event := a.event(id, workmodel.EventStateTransitioned, workmodel.VisibilityUser, map[string]any{"state": workmodel.Canceled, "action": "canceled by operator"})
 	if err := a.deps.Store.Transition(ctx, id, workmodel.Canceled, event); err != nil {
 		return err
@@ -1128,6 +1144,24 @@ func (a *App) rememberActive(id string, p provider.Provider, session provider.Se
 	a.active[id] = activeTask{provider: p, session: session, cancel: cancel, done: done}
 	a.mu.Unlock()
 }
+
+func (a *App) beginProviderStart(providerName workmodel.Provider) {
+	a.mu.Lock()
+	a.starting[providerName]++
+	a.mu.Unlock()
+}
+
+func (a *App) endProviderStart(providerName workmodel.Provider) {
+	a.mu.Lock()
+	if count := a.starting[providerName]; count <= 1 {
+		delete(a.starting, providerName)
+	} else {
+		a.starting[providerName] = count - 1
+	}
+	close(a.startChanged)
+	a.startChanged = make(chan struct{})
+	a.mu.Unlock()
+}
 func (a *App) takeActive(id string) (activeTask, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1140,15 +1174,28 @@ func (a *App) takeActive(id string) (activeTask, bool) {
 // durable task state. auth.Service owns the subsequent Running -> AwaitingAuth
 // transition, so recovery cannot race an old session.
 func (a *App) SuspendProvider(ctx context.Context, providerName workmodel.Provider) error {
-	a.mu.Lock()
-	active := make([]activeTask, 0)
-	for id, value := range a.active {
-		if value.provider.Name() == providerName {
-			active = append(active, value)
-			delete(a.active, id)
+	var active []activeTask
+	for {
+		a.mu.Lock()
+		if a.starting[providerName] == 0 {
+			active = make([]activeTask, 0)
+			for id, value := range a.active {
+				if value.provider.Name() == providerName {
+					active = append(active, value)
+					delete(a.active, id)
+				}
+			}
+			a.mu.Unlock()
+			break
+		}
+		changed := a.startChanged
+		a.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	a.mu.Unlock()
 	for _, value := range active {
 		value.cancel(errAuthSuspended)
 		_ = value.provider.Interrupt(ctx, value.session)

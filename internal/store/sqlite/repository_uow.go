@@ -7,7 +7,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/store"
 )
 
-func (s *Store) Repositories() store.Repositories {
+func (s *RuntimeStore) Repositories() store.Repositories {
 	return repositoriesFor(s.db)
 }
 
@@ -22,7 +22,7 @@ func repositoriesFor(db v2Querier) store.Repositories {
 
 // Within executes a v2 unit of work and commits every repository mutation and
 // durable event together.
-func (s *Store) Within(ctx context.Context, fn func(store.Repositories) error) error {
+func (s *RuntimeStore) Within(ctx context.Context, fn func(store.Repositories) error) error {
 	if fn == nil {
 		return fmt.Errorf("sqlite unit of work: callback is nil")
 	}
@@ -40,4 +40,4 @@ func (s *Store) Within(ctx context.Context, fn func(store.Repositories) error) e
 	return nil
 }
 
-var _ store.UnitOfWork = (*Store)(nil)
+var _ store.UnitOfWork = (*RuntimeStore)(nil)

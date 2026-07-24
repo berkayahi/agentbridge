@@ -23,7 +23,7 @@ func TestRunVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code = %d, want 0", code)
 	}
-	if got, want := stdout.String(), "agentbridge dev (commit unknown, built unknown)\n"; got != want {
+	if got, want := stdout.String(), "agentbridge dev (build unknown, commit unknown, built unknown)\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if got := stderr.String(); got != "" {
@@ -171,7 +171,7 @@ func TestRunInvalidArguments(t *testing.T) {
 	if got := stdout.String(); got != "" {
 		t.Fatalf("stdout = %q, want empty", got)
 	}
-	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
+	if got, want := stderr.String(), "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair device --challenge <path> --data-dir <dir> --name <name> --endpoint <wss-url> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline\n"; got != want {
 		t.Fatalf("stderr = %q, want %q", got, want)
 	}
 }

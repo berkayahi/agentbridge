@@ -104,8 +104,10 @@ func TestAdapterResumesSteersAndInterruptsExactV2Methods(t *testing.T) {
 func TestApprovalIsPersistedBeforeEventAndDecisionIsCorrelated(t *testing.T) {
 	rpc := newFakeRPC()
 	var order []string
+	var requestID provider.ID
 	approvals := approvalSinkFunc(func(_ context.Context, approval ApprovalRequest) error {
 		order = append(order, "persist")
+		requestID = approval.ID
 		return nil
 	})
 	adapter := NewAdapter(rpc, AdapterConfig{
@@ -135,7 +137,7 @@ func TestApprovalIsPersistedBeforeEventAndDecisionIsCorrelated(t *testing.T) {
 		t.Fatalf("order = %v", order)
 	}
 
-	wrong := provider.ApprovalDecision{RequestID: provider.MustID("approval-1"), TaskID: taskID, UserID: "intruder", Allow: true}
+	wrong := provider.ApprovalDecision{RequestID: requestID, TaskID: taskID, UserID: "intruder", Allow: true}
 	if err := adapter.ResolveApproval(context.Background(), wrong); !errors.Is(err, ErrApprovalRejected) {
 		t.Fatalf("wrong-user error = %v", err)
 	}
@@ -145,6 +147,25 @@ func TestApprovalIsPersistedBeforeEventAndDecisionIsCorrelated(t *testing.T) {
 	}
 	if err := adapter.ResolveApproval(context.Background(), wrong); !errors.Is(err, ErrApprovalNotPending) {
 		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestApprovalIDScopesProviderRequestIDs(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	first, err := approvalID(provider.MustID("task-1"), "0", "touch /tmp/one", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := approvalID(provider.MustID("task-2"), "0", "touch /tmp/one", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := approvalID(provider.MustID("task-1"), "0", "touch /tmp/one", now.Add(time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || first == third || second == third {
+		t.Fatalf("approval IDs collided: first=%s second=%s third=%s", first, second, third)
 	}
 }
 

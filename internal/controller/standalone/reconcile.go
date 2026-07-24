@@ -31,6 +31,9 @@ func (a *App) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("load nonterminal tasks: %w", err)
 	}
 	for _, value := range values {
+		if !standaloneOwnsTask(value) {
+			continue
+		}
 		switch value.State {
 		case workmodel.Queued:
 			if err := a.enqueue(queuedTask{id: value.ID}); err != nil {
@@ -75,6 +78,9 @@ func (a *App) Reconcile(ctx context.Context) error {
 
 // ValidateResume implements the authentication recovery safety gate.
 func (a *App) ValidateResume(ctx context.Context, value workmodel.Task) error {
+	if err := requireStandaloneTask(value); err != nil {
+		return err
+	}
 	if value.State != workmodel.AwaitingAuth {
 		return errors.New("app: task is not awaiting authentication")
 	}
@@ -107,6 +113,9 @@ func (a *App) validateResumeEvidence(ctx context.Context, value workmodel.Task) 
 // ResumeTask schedules provider resume after auth.Service durably transitions
 // AwaitingAuth back to Running. The goroutine is owned by App shutdown.
 func (a *App) ResumeTask(ctx context.Context, value workmodel.Task) error {
+	if err := requireStandaloneTask(value); err != nil {
+		return err
+	}
 	if value.State != workmodel.Running {
 		return errors.New("app: recovered task is not running")
 	}

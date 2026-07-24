@@ -31,6 +31,14 @@ type HandshakeTransport interface {
 	PerformHandshake(context.Context, Handshake) (Handshake, error)
 }
 
+// HandshakeAcceptor is the server side of the signed handshake. The peer
+// sends its signed handshake first; the acceptor validates the envelope
+// shape, replies with its own signed handshake, and leaves identity/trust
+// verification to the owning protocol boundary.
+type HandshakeAcceptor interface {
+	AcceptHandshake(context.Context, Handshake) (Handshake, error)
+}
+
 type ConnectionOptions struct {
 	LocalHandshake   Handshake
 	RequireHandshake bool

@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +30,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/events"
 	bridgegit "github.com/berkayahi/agentbridge/internal/git"
 	"github.com/berkayahi/agentbridge/internal/kernel"
+	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/process"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/claude"
@@ -44,28 +48,134 @@ import (
 
 const maxAttachmentBytes = 20 << 20
 
+// The device execution projection has no Telegram presentation. The positive
+// value keeps the shared approval record shape valid; headlessMessenger never
+// sends it to an external service.
+const headlessApprovalChatID int64 = 1
+
 type composedDaemon struct {
-	application *bridgeapp.App
-	kernel      *kernel.Kernel
-	controller  *bridgeapp.Controller
-	runtimes    *bridgeRuntime.Registry
-	telegram    *telegram.Client
-	dashboard   *web.Server
-	control     *controlsocket.Server
-	auth        *auth.Service
-	closers     []io.Closer
-	providers   []workmodel.Provider
-	listen      string
+	application   *bridgeapp.App
+	kernel        *kernel.Kernel
+	controller    *bridgeapp.Controller
+	runtimes      *bridgeRuntime.Registry
+	telegram      *telegram.Client
+	dashboard     *web.Server
+	control       *controlsocket.Server
+	auth          *auth.Service
+	localAPI      *localcontrol.UnixServer
+	localAPIPath  string
+	localHandler  http.Handler
+	localDone     chan error
+	localExecutor *localRuntimeExecutor
+	deviceServer  *http.Server
+	deviceCert    string
+	deviceKey     string
+	deviceDone    chan error
+	serveCancel   context.CancelFunc
+	closers       []io.Closer
+	providers     []workmodel.Provider
+	listen        string
 
 	monitorMu      sync.Mutex
 	monitorCancel  context.CancelFunc
 	monitorDone    chan error
+	serveMu        sync.Mutex
 	dependencyOnce sync.Once
 	dependencyErr  error
 }
 
-func (d *composedDaemon) Start(context.Context) error { return nil }
+func (d *composedDaemon) Start(ctx context.Context) error {
+	if d == nil {
+		return nil
+	}
+	serveCtx, cancel := context.WithCancel(ctx)
+	d.serveMu.Lock()
+	d.serveCancel = cancel
+	deviceServer := d.deviceServer
+	d.serveMu.Unlock()
+	if d.localExecutor != nil {
+		d.localExecutor.SetContext(serveCtx)
+	}
+	if deviceServer == nil && d.localHandler != nil {
+		server, err := localcontrol.ListenUnix(d.localAPIPath, d.localHandler)
+		if err != nil {
+			cancel()
+			return err
+		}
+		d.serveMu.Lock()
+		d.localAPI = server
+		d.localDone = make(chan error, 1)
+		localDone := d.localDone
+		d.serveMu.Unlock()
+		go func() { localDone <- server.Serve() }()
+	}
+	if deviceServer == nil && d.localHandler == nil {
+		cancel()
+		return errors.New("daemon has no local or device transport")
+	}
+	if deviceServer != nil {
+		listener, err := net.Listen("tcp", deviceServer.Addr)
+		if err != nil {
+			cancel()
+			_ = d.closeLocalAPI(context.Background())
+			return fmt.Errorf("listen device-agent WSS: %w", err)
+		}
+		certificate, err := tls.LoadX509KeyPair(d.deviceCert, d.deviceKey)
+		if err != nil {
+			cancel()
+			_ = listener.Close()
+			_ = d.closeLocalAPI(context.Background())
+			return fmt.Errorf("load device-agent TLS certificate: %w", err)
+		}
+		listener = tls.NewListener(listener, &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
+		})
+		d.serveMu.Lock()
+		d.deviceDone = make(chan error, 1)
+		deviceDone := d.deviceDone
+		d.serveMu.Unlock()
+		go func() { deviceDone <- deviceServer.Serve(listener) }()
+	}
+	go func() {
+		<-serveCtx.Done()
+		_ = d.closeLocalAPI(context.Background())
+		_ = d.closeDeviceServer(context.Background())
+	}()
+	return nil
+}
 func (d *composedDaemon) Run(ctx context.Context) error {
+	// A device-agent process is an execution endpoint, not a second standalone
+	// controller. Its shadow task rows are evidence/session state for the
+	// signed WSS handler; starting App would reconcile those rows and launch a
+	// duplicate provider worker (and would expose Telegram/Desktop authority on
+	// the Pi). Keep the process headless and wait only on the device listener.
+	d.serveMu.Lock()
+	deviceServer, deviceDone := d.deviceServer, d.deviceDone
+	d.serveMu.Unlock()
+	if deviceServer != nil {
+		if deviceDone == nil {
+			return errors.New("device-agent WSS server has not started")
+		}
+		select {
+		case err := <-deviceDone:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if errors.Is(err, http.ErrServerClosed) {
+				return errors.New("device-agent WSS server stopped unexpectedly")
+			}
+			if err == nil {
+				return errors.New("device-agent WSS server stopped unexpectedly")
+			}
+			return fmt.Errorf("device-agent WSS server: %w", err)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if d.auth == nil || d.application == nil || d.telegram == nil || d.dashboard == nil {
+		return errors.New("standalone controller is not configured")
+	}
 	monitorCtx, cancel := context.WithCancel(ctx)
 	monitorDone := make(chan error, 1)
 	d.monitorMu.Lock()
@@ -75,7 +185,79 @@ func (d *composedDaemon) Run(ctx context.Context) error {
 	return d.application.Run(ctx, d.telegram, fiberRuntime{app: d.dashboard.App()})
 }
 func (d *composedDaemon) Shutdown(ctx context.Context) error {
-	return errors.Join(d.application.Shutdown(ctx), d.closeDependencies(ctx))
+	if d == nil {
+		return nil
+	}
+	d.serveMu.Lock()
+	cancel := d.serveCancel
+	d.serveCancel = nil
+	d.serveMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	// Stop authenticated local/device transports before App closes the shared
+	// SQLite store; otherwise a request racing shutdown can write after the
+	// store has already been closed.
+	transportErr := errors.Join(d.closeLocalAPI(ctx), d.closeDeviceServer(ctx))
+	var applicationErr error
+	if d.application != nil {
+		applicationErr = d.application.Shutdown(ctx)
+	}
+	return errors.Join(transportErr, applicationErr, d.closeDependencies(ctx))
+}
+
+func (d *composedDaemon) closeLocalAPI(ctx context.Context) error {
+	if d == nil {
+		return nil
+	}
+	d.serveMu.Lock()
+	server, done := d.localAPI, d.localDone
+	d.localAPI, d.localDone = nil, nil
+	d.serveMu.Unlock()
+	if server == nil {
+		return nil
+	}
+	err := server.Close(ctx)
+	if done != nil {
+		select {
+		case serveErr := <-done:
+			if err == nil {
+				err = serveErr
+			}
+		case <-ctx.Done():
+			if err == nil {
+				err = ctx.Err()
+			}
+		}
+	}
+	return err
+}
+
+func (d *composedDaemon) closeDeviceServer(ctx context.Context) error {
+	if d == nil {
+		return nil
+	}
+	d.serveMu.Lock()
+	server, done := d.deviceServer, d.deviceDone
+	d.deviceServer, d.deviceDone = nil, nil
+	d.serveMu.Unlock()
+	if server == nil {
+		return nil
+	}
+	err := server.Shutdown(ctx)
+	if done != nil {
+		select {
+		case serveErr := <-done:
+			if err == nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				err = serveErr
+			}
+		case <-ctx.Done():
+			if err == nil {
+				err = ctx.Err()
+			}
+		}
+	}
+	return err
 }
 
 func (d *composedDaemon) closeDependencies(ctx context.Context) error {
@@ -120,13 +302,69 @@ func openStandaloneStore(ctx context.Context, path string) (*sqlite.RuntimeStore
 	return sqlite.OpenV2RuntimeWithRuntimeLock(ctx, path)
 }
 
+func loadLocalAPISecret(path string) ([]byte, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		info, err := os.Lstat(path)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return nil, errors.New("local API secret is not a regular file")
+			}
+			if info.Mode().Perm() != 0o600 {
+				if err := os.Chmod(path, 0o600); err != nil {
+					return nil, fmt.Errorf("secure local API secret: %w", err)
+				}
+			}
+			secret, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fmt.Errorf("read local API secret: %w", err)
+			}
+			if len(secret) < 32 {
+				return nil, errors.New("local API secret is too short")
+			}
+			return secret, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("inspect local API secret: %w", err)
+		}
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, fmt.Errorf("generate local API secret: %w", err)
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("create local API secret: %w", err)
+		}
+		if _, err := file.Write(secret); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return nil, fmt.Errorf("write local API secret: %w", err)
+		}
+		if err := file.Close(); err != nil {
+			return nil, fmt.Errorf("close local API secret: %w", err)
+		}
+		return secret, nil
+	}
+	return nil, errors.New("local API secret creation raced repeatedly")
+}
+
 func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, credential config.Credential, environment []string) (daemonRuntime, error) {
 	if cfg.Mode == "managed" {
 		return buildManagedDaemon(ctx, cfg, paths)
 	}
+	if cfg.DeviceAgent.Enabled {
+		return buildHeadlessDeviceDaemon(ctx, cfg, paths, environment)
+	}
 	data, err := openStandaloneStore(ctx, paths.database)
 	if err != nil {
 		return nil, err
+	}
+	controllerIdentity, err := loadOrCreateDeviceKey(paths.controllerKey)
+	if err != nil {
+		_ = data.Close()
+		return nil, fmt.Errorf("load local controller identity: %w", err)
 	}
 	fail := func(cause error, closers ...io.Closer) (daemonRuntime, error) {
 		for _, closer := range closers {
@@ -207,6 +445,35 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	daemon := &composedDaemon{
 		kernel: bridgeKernel, controller: bridgeController, runtimes: runtimes, telegram: client, control: control, closers: providerClosers,
 	}
+	localSecret, err := loadLocalAPISecret(paths.localAPISecret)
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor.approvals = approvalBroker
+	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
+	localService, err := localcontrol.New(localcontrol.Config{
+		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
+	})
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
+	deviceServer, err := composeDeviceAgent(cfg.DeviceAgent, data, localExecutor, localVerifier{operations: localOperations}, localCommitter{operations: localOperations})
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
+	localHandler, err := localcontrol.NewHTTPHandler(localService, localSecret)
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
+	daemon.localAPIPath, daemon.localHandler, daemon.localExecutor = paths.localAPI, localHandler, localExecutor
+	daemon.deviceServer, daemon.deviceCert, daemon.deviceKey = deviceServer, cfg.DeviceAgent.TLSCertPath, cfg.DeviceAgent.TLSKeyPath
 	application, err := bridgeapp.New(bridgeapp.Config{
 		DefaultRepository: cfg.DefaultRepository, Listen: cfg.Server.Listen, QueueSize: 16,
 		Models: models, DeploymentURLs: deployments,
@@ -263,6 +530,98 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	return daemon, nil
 }
 
+// buildHeadlessDeviceDaemon composes only the provider/runtime, owner-only
+// control socket, local SQLite projection, and signed device WSS endpoint.
+// Telegram, dashboard, standalone reconciliation, and the owner local API
+// are deliberately absent from this process.
+func buildHeadlessDeviceDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, environment []string) (daemonRuntime, error) {
+	data, err := openStandaloneStore(ctx, paths.database)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(cause error, closers ...io.Closer) (daemonRuntime, error) {
+		for _, closer := range closers {
+			_ = closer.Close()
+		}
+		_ = data.Close()
+		return nil, cause
+	}
+	for id, profile := range cfg.Repositories {
+		if err := data.EnsureRepositoryBinding(ctx, id, profile.Remote); err != nil {
+			return fail(err)
+		}
+	}
+	_, callbackSecret, err := randomSecrets()
+	if err != nil {
+		return fail(err)
+	}
+	redactor := security.NewRedactor(security.Config{})
+	messenger := headlessMessenger{}
+	approvalBroker, err := approval.New(approval.Config{
+		Store: data, Messenger: messenger, Signer: telegram.NewCallbackSigner(callbackSecret, nil),
+		Redactor: redactor, AllowNonNumericUserIDs: true, NoExternalPresentation: true,
+		AuthorizeUser: func(value string) bool { return strings.TrimSpace(value) != "" },
+	})
+	if err != nil {
+		return fail(err)
+	}
+	claudeUsage := claude.NewUsageCache()
+	control := controlsocket.NewServer(paths.controlSocket, controlHandler{
+		store: data, messenger: messenger, claudeUsage: claudeUsage, approvals: approvalBroker, redactor: redactor,
+	})
+	if err := control.Start(); err != nil {
+		return fail(err)
+	}
+	closeOnError := func(cause error, closers ...io.Closer) (daemonRuntime, error) {
+		control.Close()
+		return fail(cause, closers...)
+	}
+	authCommands := auth.ExecCommandRunner{Executables: configuredExecutables(cfg), Environment: environment}
+	_, runtimes, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	profiles := composeProfiles(cfg, paths)
+	workspace := &workspaceAdapter{
+		profiles: profiles, manager: bridgegit.WorkspaceManager{Git: bridgegit.Runner{}, Port: data},
+		processes: procTaskInspector{root: "/proc", maxEntries: 4096},
+	}
+	delivery := &deliveryAdapter{profiles: profiles, config: cfg.Repositories, git: bridgegit.Runner{}}
+	models := make(map[workmodel.Provider]string, len(cfg.Providers))
+	for name, value := range cfg.Providers {
+		models[workmodel.Provider(name)] = value.Model
+	}
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor.approvals = approvalBroker
+	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
+	deviceServer, err := composeDeviceAgent(cfg.DeviceAgent, data, localExecutor, localVerifier{operations: localOperations}, localCommitter{operations: localOperations})
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
+	daemonClosers := append(append([]io.Closer(nil), providerClosers...), data)
+	return &composedDaemon{
+		runtimes: runtimes, control: control, closers: daemonClosers, localExecutor: localExecutor,
+		deviceServer: deviceServer, deviceCert: cfg.DeviceAgent.TLSCertPath, deviceKey: cfg.DeviceAgent.TLSKeyPath,
+	}, nil
+}
+
+// headlessMessenger is a local sink for the shared approval/control contract.
+// Controller decisions arrive over the authenticated device link; nothing is
+// published to Telegram from a paired device.
+type headlessMessenger struct{}
+
+func (headlessMessenger) Send(context.Context, telegram.Message) (telegram.MessageRef, error) {
+	return telegram.MessageRef{}, nil
+}
+
+func (headlessMessenger) Edit(context.Context, telegram.MessageRef, telegram.Message) error {
+	return nil
+}
+
+func (headlessMessenger) AnswerCallback(context.Context, string, string) error { return nil }
+
+func (headlessMessenger) SendDocument(context.Context, telegram.Document) error { return nil }
+
 func randomSecrets() ([]byte, []byte, error) {
 	csrf, callback := make([]byte, 32), make([]byte, 32)
 	if _, err := rand.Read(csrf); err != nil {
@@ -280,6 +639,13 @@ func configuredExecutables(cfg config.Config) map[string]string {
 		values[name] = providerConfig.Executable
 	}
 	return values
+}
+
+func configuredApprovalUser(cfg config.Config) string {
+	if len(cfg.Telegram.AllowedUserIDs) > 0 && cfg.Telegram.AllowedUserIDs[0] > 0 {
+		return strconv.FormatInt(cfg.Telegram.AllowedUserIDs[0], 10)
+	}
+	return localcontrol.LocalAuthorityUserID
 }
 
 func claudeSubscriptionAuthChecker(commands auth.CommandRunner, now func() time.Time) claude.AuthChecker {
@@ -319,7 +685,7 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		closers = append(closers, process)
 		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
-			ApprovalUser: func(provider.ID) string { return strconv.FormatInt(cfg.Telegram.AllowedUserIDs[0], 10) },
+			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },
 		})
 		providers[workmodel.CodexSubscription] = adapter
 		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
@@ -450,8 +816,15 @@ func (h controlHandler) Handle(ctx context.Context, request controlsocket.Reques
 		if strings.TrimSpace(input.ProviderRequestID) == "" {
 			input.ProviderRequestID = randomProviderRequestID()
 		}
+		chatID := value.TelegramChatID
+		if chatID == 0 {
+			// Headless device projections have no Telegram presentation row. The
+			// broker still requires a positive scoped chat slot, which the
+			// headless messenger consumes locally and never transmits.
+			chatID = headlessApprovalChatID
+		}
 		result, err := h.approvals.Request(ctx, approval.Request{
-			TaskID: value.ID, ChatID: value.TelegramChatID, ProviderRequestID: input.ProviderRequestID,
+			TaskID: value.ID, ChatID: chatID, ProviderRequestID: input.ProviderRequestID,
 			Kind: input.Kind, Summary: input.Summary,
 		})
 		return result, err
@@ -778,4 +1151,4 @@ func (v verificationPort) Verify(ctx context.Context, worktree string) error {
 }
 
 var _ fs.FS = os.DirFS("/")
-var _ store.Store = (*sqlite.RuntimeStore)(nil)
+var _ store.RuntimeStore = (*sqlite.RuntimeStore)(nil)

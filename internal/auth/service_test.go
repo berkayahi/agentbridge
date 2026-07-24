@@ -244,7 +244,7 @@ func TestAuthIncidentSuspendsLiveProviderBeforeDurableTransition(t *testing.T) {
 	}
 }
 
-func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
+func TestRecoverySuccessRequiresExplicitResumeForAffectedTasks(t *testing.T) {
 	t.Parallel()
 	tasks := &fakeTaskStore{tasks: []workmodel.Task{
 		{ID: "task-1", Provider: workmodel.CodexSubscription, State: workmodel.Running, BaseSHA: "abc", WorktreePath: "/tmp/w1", ProviderSessionID: "session-1"},
@@ -264,7 +264,7 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 	svc := newTestService(t, Options{
 		Commands: commands, Tasks: tasks, Resumer: resumer, PTY: login,
 		Authorizer: fakeAuthorizer{"tailscale-user": true},
-		NewID:      sequenceIDs("incident", "event-1", "event-2", "recovery", "event-3", "event-4"),
+		NewID:      sequenceIDs("event-1", "event-2", "incident", "recovery", "resume-event-1", "resume-event-2"),
 	})
 	if _, err := svc.CheckProvider(context.Background(), workmodel.CodexSubscription); err != nil {
 		t.Fatal(err)
@@ -284,8 +284,19 @@ func TestRecoverySuccessValidatesAndResumesAffectedTasks(t *testing.T) {
 	if view.Status != RecoverySucceeded || view.Transcript != "" {
 		t.Fatalf("view = %#v; finished transcript must be erased", view)
 	}
+	if got := tasks.states(); got["task-1"] != workmodel.AwaitingAuth || got["task-2"] != workmodel.AwaitingAuth {
+		t.Fatalf("states after login = %v", got)
+	}
+	if len(resumer.validated) != 0 || len(resumer.resumed) != 0 {
+		t.Fatalf("login resumed tasks implicitly: validated = %v, resumed = %v", resumer.validated, resumer.resumed)
+	}
+	for _, taskID := range []string{"task-1", "task-2"} {
+		if err := svc.ResumeTask(context.Background(), "tailscale-user", taskID); err != nil {
+			t.Fatalf("explicit resume %s: %v", taskID, err)
+		}
+	}
 	if got := tasks.states(); got["task-1"] != workmodel.Running || got["task-2"] != workmodel.Running {
-		t.Fatalf("states = %v", got)
+		t.Fatalf("states after explicit resume = %v", got)
 	}
 	if fmt.Sprint(resumer.validated) != "[task-1 task-2]" || fmt.Sprint(resumer.resumed) != "[task-1 task-2]" {
 		t.Fatalf("validated = %v, resumed = %v", resumer.validated, resumer.resumed)
@@ -317,6 +328,12 @@ func TestRecoveryValidationFailurePausesTaskWithSafeReason(t *testing.T) {
 	}
 	if err := svc.WaitRecovery(context.Background(), id); err != nil {
 		t.Fatal(err)
+	}
+	if got := tasks.states()["task-1"]; got != workmodel.AwaitingAuth {
+		t.Fatalf("state after login = %q", got)
+	}
+	if err := svc.ResumeTask(context.Background(), "operator", "task-1"); err == nil {
+		t.Fatal("explicit resume unexpectedly succeeded for invalid worktree")
 	}
 	if got := tasks.states()["task-1"]; got != workmodel.Paused {
 		t.Fatalf("state = %q", got)
@@ -380,8 +397,17 @@ func TestRecoveryRehydratesDurableAwaitingAuthTasksAfterRestart(t *testing.T) {
 	if err := svc.WaitRecovery(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
+	if got := tasks.states()["task-1"]; got != workmodel.AwaitingAuth {
+		t.Fatalf("state after login = %q", got)
+	}
+	if len(resumer.resumed) != 0 {
+		t.Fatalf("resumed implicitly = %v", resumer.resumed)
+	}
+	if err := svc.ResumeTask(context.Background(), "operator", "task-1"); err != nil {
+		t.Fatalf("explicit resume: %v", err)
+	}
 	if got := tasks.states()["task-1"]; got != workmodel.Running {
-		t.Fatalf("state = %q", got)
+		t.Fatalf("state after explicit resume = %q", got)
 	}
 	if fmt.Sprint(resumer.resumed) != "[task-1]" {
 		t.Fatalf("resumed = %v", resumer.resumed)

@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/berkayahi/agentbridge/internal/operations"
 )
@@ -41,7 +43,40 @@ func runBackupCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 	if strings.TrimSpace(*managedStatePath) == "" {
 		*managedStatePath = filepath.Join(dataDir, "managed-state.json")
 	}
-	result, err := operations.Backup(ctx, operations.BackupOptions{Database: databasePath, Output: strings.TrimSpace(*output), IdentityPath: strings.TrimSpace(*identityPath), RecordPath: strings.TrimSpace(*recordPath), ModePath: strings.TrimSpace(*modePath), ManagedStatePath: strings.TrimSpace(*managedStatePath)})
+	attachmentRoot := strings.TrimSpace(os.Getenv("ATTACHMENT_ROOT"))
+	if attachmentRoot == "" {
+		attachmentRoot = filepath.Join(dataDir, "attachments")
+	}
+	worktreeRoot := strings.TrimSpace(os.Getenv("WORKTREE_ROOT"))
+	if worktreeRoot == "" {
+		worktreeRoot = filepath.Join(dataDir, "worktrees")
+	}
+	pinnedTasksPath := strings.TrimSpace(os.Getenv("PINNED_TASKS_FILE"))
+	if pinnedTasksPath == "" {
+		pinnedTasksPath = filepath.Join(dataDir, "pinned-task-ids")
+	}
+	eventRetention, err := retentionDuration("EVENT_RETENTION_DAYS", 30)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentbridge:", err)
+		return 2
+	}
+	artifactRetention, err := retentionDuration("ARTIFACT_RETENTION_DAYS", 7)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentbridge:", err)
+		return 2
+	}
+	backupRetention, err := retentionDuration("BACKUP_RETENTION_DAYS", 14)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentbridge:", err)
+		return 2
+	}
+	result, err := operations.Backup(ctx, operations.BackupOptions{
+		Database: databasePath, Output: strings.TrimSpace(*output),
+		IdentityPath: strings.TrimSpace(*identityPath), RecordPath: strings.TrimSpace(*recordPath),
+		ModePath: strings.TrimSpace(*modePath), ManagedStatePath: strings.TrimSpace(*managedStatePath),
+		AttachmentRoot: attachmentRoot, WorktreeRoot: worktreeRoot, PinnedTasksPath: pinnedTasksPath,
+		EventRetention: eventRetention, ArtifactRetention: artifactRetention, BackupRetention: backupRetention,
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, "agentbridge: backup failed")
 		return 1
@@ -50,4 +85,16 @@ func runBackupCommand(ctx context.Context, args []string, stdout, stderr io.Writ
 		return 1
 	}
 	return 0
+}
+
+func retentionDuration(name string, defaultDays int) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		value = strconv.Itoa(defaultDays)
+	}
+	days, err := strconv.Atoi(value)
+	if err != nil || days < 1 {
+		return 0, fmt.Errorf("%s must be a positive integer", name)
+	}
+	return time.Duration(days) * 24 * time.Hour, nil
 }

@@ -17,24 +17,33 @@ func (c Config) Validate() error {
 	if err := c.Managed.validate(c.Mode); err != nil {
 		return err
 	}
-	if err := validateListen(c.Server.Listen); err != nil {
-		return fmt.Errorf("server listen: %w", err)
-	}
-	if len(c.Server.AllowedTailscaleIdentities) == 0 {
-		return errors.New("server allowed_tailscale_identities must not be empty")
-	}
-	identities := make(map[string]struct{}, len(c.Server.AllowedTailscaleIdentities))
-	for _, identity := range c.Server.AllowedTailscaleIdentities {
-		if identity == "" || identity != strings.TrimSpace(identity) {
-			return errors.New("server allowed_tailscale_identities must contain trimmed, nonempty values")
-		}
-		if _, exists := identities[identity]; exists {
-			return errors.New("server allowed_tailscale_identities must not contain duplicates")
-		}
-		identities[identity] = struct{}{}
-	}
-	if err := c.Telegram.validate(); err != nil {
+	if err := c.DeviceAgent.validate(c.Mode); err != nil {
 		return err
+	}
+	// A paired device is an execution endpoint, not a standalone controller.
+	// It must be valid without a Telegram credential, dashboard listener, or
+	// Tailscale identity allowlist; those are owner/controller concerns.
+	headlessDevice := c.Mode == "standalone" && c.DeviceAgent.Enabled
+	if !headlessDevice {
+		if err := validateListen(c.Server.Listen); err != nil {
+			return fmt.Errorf("server listen: %w", err)
+		}
+		if len(c.Server.AllowedTailscaleIdentities) == 0 {
+			return errors.New("server allowed_tailscale_identities must not be empty")
+		}
+		identities := make(map[string]struct{}, len(c.Server.AllowedTailscaleIdentities))
+		for _, identity := range c.Server.AllowedTailscaleIdentities {
+			if identity == "" || identity != strings.TrimSpace(identity) {
+				return errors.New("server allowed_tailscale_identities must contain trimmed, nonempty values")
+			}
+			if _, exists := identities[identity]; exists {
+				return errors.New("server allowed_tailscale_identities must not contain duplicates")
+			}
+			identities[identity] = struct{}{}
+		}
+		if err := c.Telegram.validate(); err != nil {
+			return err
+		}
 	}
 	if len(c.Providers) == 0 {
 		return errors.New("providers must not be empty")
@@ -97,6 +106,36 @@ func (m ManagedConfig) validate(mode string) error {
 	return nil
 }
 
+func (d DeviceAgentConfig) validate(mode string) error {
+	if !d.Enabled {
+		return nil
+	}
+	if mode != "standalone" {
+		return errors.New("device_agent requires standalone mode")
+	}
+	if err := validateDeviceListen(d.Listen); err != nil {
+		return fmt.Errorf("device_agent listen: %w", err)
+	}
+	for name, value := range map[string]string{"organization_id": d.OrganizationID, "device_id": d.DeviceID} {
+		if value == "" || value != strings.TrimSpace(value) || strings.ContainsAny(value, "\x00\r\n") || len(value) > 128 {
+			return fmt.Errorf("device_agent %s must be a trimmed nonempty identifier", name)
+		}
+	}
+	for name, path := range map[string]string{
+		"identity_path": d.IdentityPath, "controller_public_key_path": d.ControllerPublicKeyPath,
+		"tls_cert_path": d.TLSCertPath, "tls_key_path": d.TLSKeyPath,
+		"results_path": d.ResultsPath, "replay_state_path": d.ReplayStatePath,
+	} {
+		if path == "" || !filepath.IsAbs(path) {
+			return fmt.Errorf("device_agent %s must be absolute", name)
+		}
+	}
+	if d.ConnectionEpoch == 0 || d.ControllerEpoch == 0 {
+		return errors.New("device_agent epochs must be positive")
+	}
+	return nil
+}
+
 func supportedCodexModel(model string) bool {
 	parts := codexModelPattern.FindStringSubmatch(model)
 	if len(parts) != 4 {
@@ -123,6 +162,21 @@ func validateListen(address string) error {
 		return errors.New("must be a loopback address with a valid port")
 	}
 	return nil
+}
+
+func validateDeviceListen(address string) error {
+	host, portText, err := net.SplitHostPort(address)
+	if err != nil || strings.TrimSpace(host) == "" {
+		return errors.New("must bind to a valid TCP address")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("must bind to a valid TCP port")
+	}
+	if host == "0.0.0.0" || host == "::" || host == "localhost" || net.ParseIP(host) != nil {
+		return nil
+	}
+	return errors.New("host must be an IP address, localhost, or wildcard")
 }
 
 func (t TelegramConfig) validate() error {

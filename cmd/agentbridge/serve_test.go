@@ -5,18 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/approval"
 	"github.com/berkayahi/agentbridge/internal/config"
+	bridgeapp "github.com/berkayahi/agentbridge/internal/controller/standalone"
 	"github.com/berkayahi/agentbridge/internal/controlsocket"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/codex"
+	providerfake "github.com/berkayahi/agentbridge/internal/provider/fake"
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 	"github.com/berkayahi/agentbridge/internal/telegram"
@@ -242,6 +246,55 @@ func TestServeDaemonLoadsCredentialAndPreparedPathsBeforeComposition(t *testing.
 	}
 }
 
+func TestServeDaemonHeadlessSkipsTelegramCredential(t *testing.T) {
+	clearProviderAPIKeyEnvironment(t)
+	root := t.TempDir()
+	t.Setenv("CREDENTIALS_DIRECTORY", filepath.Join(root, "missing-credentials"))
+	t.Setenv("AGENTBRIDGE_DATA_DIR", filepath.Join(root, "state"))
+	configPath := filepath.Join(root, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`mode: standalone
+device_agent:
+  enabled: true
+  listen: 127.0.0.1:8788
+  organization_id: local
+  device_id: build-pi
+  identity_path: /srv/agentbridge/device-key.json
+  controller_public_key_path: /srv/agentbridge/controller.pub
+  tls_cert_path: /etc/agentbridge/device.crt
+  tls_key_path: /etc/agentbridge/device.key
+  results_path: /srv/agentbridge/device-results.json
+  replay_state_path: /srv/agentbridge/device-replay.json
+  connection_epoch: 1
+  controller_epoch: 1
+providers:
+  codex: {executable: /usr/local/bin/codex, model: gpt-5.6-terra}
+repositories:
+  sample:
+    checkout_path: /srv/sample
+    remote: origin
+    base_ref: refs/heads/staging
+    verification: [{argv: [go, test, ./...], dir: .}]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	err := serveDaemonWithBuilder(ctx, configPath, func(_ context.Context, cfg config.Config, _ runtimePaths, token config.Credential, _ []string) (daemonRuntime, error) {
+		called = true
+		if !cfg.DeviceAgent.Enabled || token.Value() != "" {
+			t.Fatalf("headless composition inputs = enabled:%v token:%q", cfg.DeviceAgent.Enabled, token.Value())
+		}
+		return &fakeDaemonRuntime{running: make(chan struct{}), stopped: make(chan struct{})}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("daemon builder was not called")
+	}
+}
+
 func writeServeConfig(t *testing.T, path string) {
 	t.Helper()
 	value := `server:
@@ -298,6 +351,115 @@ func TestRunDaemonLifecyclePropagatesServiceFailureAfterShutdown(t *testing.T) {
 	}
 	if runtime.calls() != "start,run,shutdown" {
 		t.Fatalf("calls=%q", runtime.calls())
+	}
+}
+
+func TestComposedDaemonDeviceAgentRunDoesNotStartStandaloneController(t *testing.T) {
+	deviceDone := make(chan error, 1)
+	d := &composedDaemon{deviceServer: &http.Server{}, deviceDone: deviceDone}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := d.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("device-agent run error = %v, want context cancellation", err)
+	}
+}
+
+func TestComposedDaemonDeviceAgentRunPropagatesListenerFailure(t *testing.T) {
+	want := errors.New("listener failed")
+	deviceDone := make(chan error, 1)
+	deviceDone <- want
+	d := &composedDaemon{deviceServer: &http.Server{}, deviceDone: deviceDone}
+	if err := d.Run(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("device-agent run error = %v, want listener failure", err)
+	}
+}
+
+func TestComposedDaemonHeadlessStartDoesNotOpenOwnerLocalAPI(t *testing.T) {
+	root := t.TempDir()
+	localAPIPath := filepath.Join(root, "local-api.sock")
+	d := &composedDaemon{
+		localAPIPath: localAPIPath,
+		deviceServer: &http.Server{Addr: "127.0.0.1:0"},
+		deviceCert:   filepath.Join(root, "missing.crt"),
+		deviceKey:    filepath.Join(root, "missing.key"),
+	}
+	err := d.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "device-agent TLS certificate") {
+		t.Fatalf("headless start error = %v, want device TLS error", err)
+	}
+	if _, statErr := os.Stat(localAPIPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("headless start created owner local API path: stat error = %v", statErr)
+	}
+}
+
+func TestComposedDaemonConcurrentTransportShutdown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	tempRoot, err := os.MkdirTemp("/tmp", "agentbridge-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempRoot) })
+	d := &composedDaemon{
+		localAPIPath: filepath.Join(tempRoot, "local-api.sock"),
+		localHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	}
+	if err := d.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	shutdownDone := make(chan error, 1)
+	go func() {
+		<-start
+		shutdownDone <- d.Shutdown(context.Background())
+	}()
+	go func() {
+		<-start
+		cancel()
+	}()
+	close(start)
+	if err := <-shutdownDone; err != nil {
+		t.Fatalf("concurrent shutdown: %v", err)
+	}
+}
+
+func TestComposedDaemonStopsLocalTransportBeforeApplicationStore(t *testing.T) {
+	ctx := context.Background()
+	tempRoot, err := os.MkdirTemp("/tmp", "ab-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tempRoot) })
+	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(tempRoot, "controller.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localAPIPath := filepath.Join(tempRoot, "run", "local-api.sock")
+	store := &shutdownProbeStore{RuntimeStore: data, socketPath: localAPIPath}
+	application, err := bridgeapp.New(bridgeapp.Config{DefaultRepository: "sample"}, bridgeapp.Dependencies{
+		Store: store, Messenger: headlessMessenger{},
+		Providers: map[workmodel.Provider]provider.Provider{
+			workmodel.CodexSubscription: providerfake.New(workmodel.CodexSubscription, provider.MustID("shutdown-session"), nil),
+		},
+		Workspace: shutdownWorkspace{}, Delivery: shutdownDelivery{}, Files: fstest.MapFS{},
+	})
+	if err != nil {
+		_ = data.Close()
+		t.Fatal(err)
+	}
+	d := &composedDaemon{
+		application:  application,
+		localAPIPath: localAPIPath,
+		localHandler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
+	}
+	if err := d.Start(ctx); err != nil {
+		_ = data.Close()
+		t.Fatal(err)
+	}
+	if err := d.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if store.socketPresent {
+		t.Fatal("application store closed while the local API socket was still present")
 	}
 }
 
@@ -503,6 +665,46 @@ type fakeDaemonRuntime struct {
 	startErr error
 	running  chan struct{}
 	stopped  chan struct{}
+}
+
+type shutdownProbeStore struct {
+	*sqlite.RuntimeStore
+	socketPath    string
+	socketPresent bool
+}
+
+func (s *shutdownProbeStore) Close() error {
+	_, err := os.Stat(s.socketPath)
+	s.socketPresent = !errors.Is(err, os.ErrNotExist)
+	return s.RuntimeStore.Close()
+}
+
+type shutdownWorkspace struct{}
+
+func (shutdownWorkspace) Prepare(context.Context, string, string) (bridgeapp.Workspace, error) {
+	return bridgeapp.Workspace{BaseSHA: "base", Path: "/tmp/worktree"}, nil
+}
+
+func (shutdownWorkspace) Inspect(context.Context, workmodel.Task) (bridgeapp.WorkspaceInspection, error) {
+	return bridgeapp.WorkspaceInspection{Exists: true, BaseMatches: true}, nil
+}
+
+type shutdownDelivery struct{}
+
+func (shutdownDelivery) Changed(context.Context, workmodel.Task, bridgeapp.Workspace) (bool, error) {
+	return false, nil
+}
+
+func (shutdownDelivery) Verify(context.Context, workmodel.Task, bridgeapp.Workspace) error {
+	return nil
+}
+
+func (shutdownDelivery) Commit(context.Context, workmodel.Task, bridgeapp.Workspace) (string, error) {
+	return "shutdown-commit", nil
+}
+
+func (shutdownDelivery) Push(context.Context, workmodel.Task, bridgeapp.Workspace, string) (string, error) {
+	return "refs/heads/shutdown", nil
 }
 
 type fakeLiveApplication struct {

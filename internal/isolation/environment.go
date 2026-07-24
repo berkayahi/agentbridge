@@ -35,7 +35,10 @@ func FilterEnvironment(base []string, policy EnvironmentPolicy) []string {
 		values[name] = value
 	}
 	for name, value := range policy.Extra {
-		if safeEnvironmentName(name) && !isCredentialEnvironment(name) {
+		// Extra values are explicitly supplied by the trusted process boundary;
+		// this is different from allowing an inherited AGENTBRIDGE_* scope or
+		// provider credential through the base environment.
+		if safeEnvironmentName(name) {
 			values[name] = value
 		}
 	}

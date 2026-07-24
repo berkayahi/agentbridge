@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 
 	"github.com/berkayahi/agentbridge/internal/kernel"
@@ -34,7 +36,24 @@ func RelayProviderEvents(ctx context.Context, executionID string, source <-chan 
 			if err != nil || sink == nil {
 				return
 			}
-			_ = sink.Append(ctx, kernel.Event{ID: value.ID.String(), ExecutionID: executionID, Type: kernel.EventType("provider_" + string(value.Type)), Visibility: "user", ProviderEventID: value.ID.String(), Payload: payload, CreatedAt: value.CreatedAt})
+			eventID := durableProviderEventID(executionID, value)
+			_ = sink.Append(ctx, kernel.Event{ID: eventID, ExecutionID: executionID, Type: kernel.EventType("provider_" + string(value.Type)), Visibility: "user", ProviderEventID: eventID, Payload: payload, CreatedAt: value.CreatedAt})
 		}
 	}
+}
+
+func durableProviderEventID(executionID string, value provider.Event) string {
+	if value.ID.Valid() {
+		return value.ID.String()
+	}
+	payload, err := json.Marshal(value)
+	if err != nil {
+		payload = []byte(string(value.Type) + "\x00" + value.Message + "\x00" + value.Tool + "\x00" + value.Path)
+	}
+	digestInput := make([]byte, 0, len(executionID)+1+len(payload))
+	digestInput = append(digestInput, executionID...)
+	digestInput = append(digestInput, 0)
+	digestInput = append(digestInput, payload...)
+	digest := sha256.Sum256(digestInput)
+	return "provider-" + hex.EncodeToString(digest[:16])
 }

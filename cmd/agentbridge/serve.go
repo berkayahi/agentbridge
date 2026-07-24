@@ -42,14 +42,17 @@ func runDaemonLifecycle(ctx context.Context, runtime daemonRuntime) error {
 }
 
 type runtimePaths struct {
-	data          string
-	database      string
-	attachments   string
-	worktrees     string
-	runtime       string
-	controlSocket string
-	claudeConfig  string
-	mcpConfig     string
+	data           string
+	database       string
+	attachments    string
+	worktrees      string
+	runtime        string
+	controllerKey  string
+	controlSocket  string
+	localAPI       string
+	localAPISecret string
+	claudeConfig   string
+	mcpConfig      string
 }
 
 func deriveRuntimePaths(dataDir string) (runtimePaths, error) {
@@ -60,7 +63,8 @@ func deriveRuntimePaths(dataDir string) (runtimePaths, error) {
 	return runtimePaths{
 		data: data, database: filepath.Join(data, "agentbridge.db"),
 		attachments: filepath.Join(data, "attachments"), worktrees: filepath.Join(data, "worktrees"),
-		runtime: filepath.Join(data, "run"), controlSocket: filepath.Join(data, "run", "control.sock"),
+		runtime: filepath.Join(data, "run"), controllerKey: filepath.Join(data, "local-controller-key.json"), controlSocket: filepath.Join(data, "run", "control.sock"),
+		localAPI: filepath.Join(data, "run", "local-api.sock"), localAPISecret: filepath.Join(data, "run", "local-api.secret"),
 		claudeConfig: filepath.Join(data, "claude"), mcpConfig: filepath.Join(data, "mcp"),
 	}, nil
 }
@@ -156,7 +160,7 @@ func serveDaemonWithBuilderAndMode(ctx context.Context, configPath, mode string,
 	}
 	defer releaseDatabaseLock()
 	var token config.Credential
-	if cfg.Mode != string(controller.ModeManaged) {
+	if cfg.Mode != string(controller.ModeManaged) && !cfg.DeviceAgent.Enabled {
 		token, err = (config.CredentialReader{}).Read("telegram_bot_token")
 		if err != nil {
 			return err

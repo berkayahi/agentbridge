@@ -112,6 +112,29 @@ func TestBrokerRejectsMismatchesUnauthorizedUsersAndReplays(t *testing.T) {
 	}
 }
 
+func TestBrokerAllowsAuthenticatedLocalAuthorityIdentityWhenConfigured(t *testing.T) {
+	store := &recordingStore{}
+	messenger := newRecordingMessenger(store)
+	broker := mustBroker(t, Config{
+		Store: store, Messenger: messenger, NewID: func() string { return "la" },
+		AllowNonNumericUserIDs: true, NoExternalPresentation: true,
+		AuthorizeUser: func(userID string) bool { return userID == "desktop" },
+	})
+	resultCh := make(chan requestResult, 1)
+	go func() {
+		result, err := broker.Request(context.Background(), Request{TaskID: "task-local-long-id", ChatID: 1, ProviderRequestID: "provider-local", Kind: "write", Summary: "edit file"})
+		resultCh <- requestResult{result: result, err: err}
+	}()
+	messenger.next(t)
+	if err := broker.HandleDecision(context.Background(), "task-local-long-id", "la", "desktop", true); err != nil {
+		t.Fatal(err)
+	}
+	completed := <-resultCh
+	if completed.err != nil || !completed.result.Approved {
+		t.Fatalf("result = %#v, error = %v", completed.result, completed.err)
+	}
+}
+
 func TestBrokerDoesNotReleaseBeforeDurableDecisionEvent(t *testing.T) {
 	store := &recordingStore{eventErr: errors.New("event write failed")}
 	messenger := newRecordingMessenger(store)

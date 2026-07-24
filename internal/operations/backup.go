@@ -25,13 +25,19 @@ import (
 )
 
 type BackupOptions struct {
-	Database         string
-	Output           string
-	IdentityPath     string
-	RecordPath       string
-	ModePath         string
-	ManagedStatePath string
-	Now              func() time.Time
+	Database          string
+	Output            string
+	IdentityPath      string
+	RecordPath        string
+	ModePath          string
+	ManagedStatePath  string
+	AttachmentRoot    string
+	WorktreeRoot      string
+	PinnedTasksPath   string
+	EventRetention    time.Duration
+	ArtifactRetention time.Duration
+	BackupRetention   time.Duration
+	Now               func() time.Time
 }
 
 type BackupManifest struct {
@@ -138,6 +144,18 @@ func Backup(ctx context.Context, options BackupOptions) (BackupResult, error) {
 	manifestPath := destination + ".manifest.json"
 	if err := writeJSON(manifestPath, manifest); err != nil {
 		return BackupResult{}, err
+	}
+	if err := applyRetention(ctx, source, RetentionOptions{
+		BackupDirectory:   options.Output,
+		AttachmentRoot:    options.AttachmentRoot,
+		WorktreeRoot:      options.WorktreeRoot,
+		PinnedTasksPath:   options.PinnedTasksPath,
+		EventRetention:    options.EventRetention,
+		ArtifactRetention: options.ArtifactRetention,
+		BackupRetention:   options.BackupRetention,
+		Now:               now,
+	}); err != nil {
+		return BackupResult{}, fmt.Errorf("apply backup retention: %w", err)
 	}
 	return BackupResult{Database: destination, Manifest: manifestPath}, nil
 }

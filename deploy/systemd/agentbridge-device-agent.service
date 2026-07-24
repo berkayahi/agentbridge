@@ -1,0 +1,33 @@
+[Unit]
+Description=AgentBridge paired device execution agent
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60s
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/agentbridge
+UMask=0077
+Environment=AGENTBRIDGE_DATA_DIR=%h/.local/share/agentbridge
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=%h/.local/bin/agentbridge doctor --config %h/.config/agentbridge/config.yaml
+ExecStart=%h/.local/bin/agentbridge serve --config %h/.config/agentbridge/config.yaml
+Restart=always
+RestartSec=5s
+TimeoutStopSec=45s
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=true
+ProtectKernelTunables=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RemoveIPC=true
+ReadWritePaths=%h/.local/share/agentbridge %h/.cache/agentbridge %h/.codex %h/.claude
+
+[Install]
+WantedBy=default.target

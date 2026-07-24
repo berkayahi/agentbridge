@@ -132,6 +132,33 @@ func (t *WebSocketTransport) PerformHandshake(ctx context.Context, local Handsha
 	return *envelope.Handshake, nil
 }
 
+// AcceptHandshake completes the server side of a signed WebSocket handshake.
+// It deliberately does not decide which public key is trusted; callers own
+// that policy and must verify the returned handshake signature and fence.
+func (t *WebSocketTransport) AcceptHandshake(ctx context.Context, local Handshake) (Handshake, error) {
+	if t == nil || t.conn == nil {
+		return Handshake{}, ErrTransportClosed
+	}
+	if err := validateHandshake(local); err != nil {
+		return Handshake{}, err
+	}
+	envelope, err := t.readEnvelope(ctx)
+	if err != nil {
+		return Handshake{}, err
+	}
+	if envelope.Type != "handshake" || envelope.Handshake == nil {
+		return Handshake{}, ErrInvalidWebSocketMessage
+	}
+	remote := *envelope.Handshake
+	if err := validateHandshake(remote); err != nil {
+		return Handshake{}, err
+	}
+	if err := t.writeEnvelope(ctx, webSocketEnvelope{Type: "handshake", Handshake: &local}); err != nil {
+		return Handshake{}, err
+	}
+	return remote, nil
+}
+
 func (t *WebSocketTransport) Receive(ctx context.Context) (Frame, error) {
 	if t == nil || t.conn == nil {
 		return Frame{}, ErrTransportClosed

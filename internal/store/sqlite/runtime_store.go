@@ -12,33 +12,32 @@ import (
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
-// RuntimeStore is the standalone adapter over the v2 execution-kernel
-// database. It exposes presentation-facing ports without reopening or
-// recreating the 1.x SQLite schema. Canonical execution state remains in the
-// v2 local_tasks, sessions, executions, and execution_events tables.
-type RuntimeStore struct{ *Store }
+// RuntimeStore is the production adapter over the v2 execution-kernel
+// database. It deliberately has no embedded LegacyStore, so legacy task,
+// projection, and migration methods cannot be promoted into production
+// composition by accident.
+type RuntimeStore struct{ db *sql.DB }
 
 func OpenV2Runtime(ctx context.Context, path string) (*RuntimeStore, error) {
-	data, err := OpenV2(ctx, path)
-	if err != nil {
-		return nil, err
-	}
-	return &RuntimeStore{Store: data}, nil
+	return OpenV2(ctx, path)
 }
 
 func OpenV2RuntimeWithRuntimeLock(ctx context.Context, path string) (*RuntimeStore, error) {
-	data, err := OpenV2WithRuntimeLock(ctx, path)
-	if err != nil {
-		return nil, err
+	return OpenV2WithRuntimeLock(ctx, path)
+}
+
+func (s *RuntimeStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
 	}
-	return &RuntimeStore{Store: data}, nil
+	return s.db.Close()
 }
 
 // EnsureRepositoryBinding registers a repository profile before a task can
 // reference it. The URL is kept in the canonical repository binding record;
 // callers never pass a filesystem path through the task API.
 func (s *RuntimeStore) EnsureRepositoryBinding(ctx context.Context, id, remoteURL string) error {
-	if s == nil || s.Store == nil || strings.TrimSpace(id) == "" || strings.TrimSpace(remoteURL) == "" {
+	if s == nil || s.db == nil || strings.TrimSpace(id) == "" || strings.TrimSpace(remoteURL) == "" {
 		return fmt.Errorf("ensure repository binding: %w", store.ErrConflict)
 	}
 	_, err := s.db.ExecContext(ctx, `
@@ -51,7 +50,7 @@ func (s *RuntimeStore) EnsureRepositoryBinding(ctx context.Context, id, remoteUR
 }
 
 func (s *RuntimeStore) CreateTask(ctx context.Context, value workmodel.Task, initial workmodel.Event) error {
-	if s == nil || s.Store == nil || value.ID == "" || value.RepoProfileID == "" || !value.Provider.Valid() || strings.TrimSpace(value.Title) == "" || strings.TrimSpace(value.Prompt) == "" || value.CreatedAt.IsZero() || initial.TaskID != value.ID {
+	if s == nil || s.db == nil || value.ID == "" || value.RepoProfileID == "" || !value.Provider.Valid() || strings.TrimSpace(value.Title) == "" || strings.TrimSpace(value.Prompt) == "" || value.CreatedAt.IsZero() || initial.TaskID != value.ID {
 		return fmt.Errorf("create v2 task: %w", store.ErrConflict)
 	}
 	if !value.State.Valid() {
@@ -68,8 +67,8 @@ func (s *RuntimeStore) CreateTask(ctx context.Context, value workmodel.Task, ini
 		return fmt.Errorf("bind v2 task repository: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, active_execution_id, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, executionID, timestamp(now), timestamp(now)); err != nil {
+		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, active_execution_id, controller_owner, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, executionID, workmodel.TaskControllerStandalone, timestamp(now), timestamp(now)); err != nil {
 		return runtimeConflict("insert v2 local task", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -95,7 +94,7 @@ func (s *RuntimeStore) CreateTask(ctx context.Context, value workmodel.Task, ini
 }
 
 func (s *RuntimeStore) Transition(ctx context.Context, taskID string, to workmodel.State, event workmodel.Event) error {
-	if s == nil || s.Store == nil || event.TaskID != taskID || !to.Valid() {
+	if s == nil || s.db == nil || event.TaskID != taskID || !to.Valid() {
 		return fmt.Errorf("transition v2 task: %w", store.ErrConflict)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -207,7 +206,7 @@ func (s *RuntimeStore) queryRuntimeTasks(ctx context.Context, query string, args
 }
 
 const runtimeTaskColumns = `SELECT
-	l.id, l.repo_profile_id, l.title, l.prompt, l.state, l.provider, l.revision,
+	l.id, l.repo_profile_id, l.title, l.prompt, l.state, l.provider, l.revision, l.controller_owner,
 	COALESCE(p.telegram_chat_id, 0), COALESCE(p.telegram_message_id, 0),
 	l.base_sha, l.worktree_path, l.provider_session_id, l.provider_thread_id,
 	l.commit_sha, l.push_ref, l.deployment_url, l.failure_reason,
@@ -219,7 +218,7 @@ func scanRuntimeTask(row scanner) (workmodel.Task, error) {
 	var created, updated string
 	var started, finished sql.NullString
 	if err := row.Scan(&value.ID, &value.RepoProfileID, &value.Title, &value.Prompt, &value.State, &value.Provider,
-		&value.Revision, &value.TelegramChatID, &value.TelegramMessageID, &value.BaseSHA, &value.WorktreePath,
+		&value.Revision, &value.ControllerOwner, &value.TelegramChatID, &value.TelegramMessageID, &value.BaseSHA, &value.WorktreePath,
 		&value.ProviderSessionID, &value.ProviderThreadID, &value.CommitSHA, &value.PushRef,
 		&value.DeploymentURL, &value.FailureReason, &created, &updated, &started, &finished); err != nil {
 		return workmodel.Task{}, runtimeNotFound("scan v2 task", err)
@@ -346,6 +345,27 @@ func upsertRuntimeSession(ctx context.Context, db execer, value workmodel.Sessio
 	}
 	if runtimeID == "" {
 		runtimeID = string(value.Provider)
+	}
+	// CreateTask installs one canonical session row and marks it as the
+	// active session for the task. Provider adapters report their native
+	// session/thread ID separately, so inserting another active row would
+	// violate sessions_one_active_task_idx before the controller can persist
+	// the native identifiers onto that canonical row.
+	var activeSessionID string
+	activeErr := db.(interface {
+		QueryRowContext(context.Context, string, ...any) *sql.Row
+	}).QueryRowContext(ctx, `SELECT id FROM sessions WHERE active_local_task_id = ?`, value.TaskID).Scan(&activeSessionID)
+	if activeErr == nil && activeSessionID != value.ID {
+		if _, err := db.ExecContext(ctx, `
+			UPDATE sessions
+			SET provider_session_id = ?, provider_thread_id = ?, status = ?, resumable = ?, updated_at = ?
+			WHERE id = ?`, value.ProviderSessionID, value.ProviderThreadID, value.Status, boolInt(value.Resumable), timestamp(value.UpdatedAt), activeSessionID); err != nil {
+			return runtimeConflict("update active v2 session", err)
+		}
+		return nil
+	}
+	if activeErr != nil && !errors.Is(activeErr, sql.ErrNoRows) {
+		return runtimeConflict("load active v2 session", activeErr)
 	}
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO sessions (id, runtime_id, repository_id, local_task_id, active_local_task_id, provider_session_id, provider_thread_id, status, resumable, created_at, updated_at)
@@ -479,6 +499,30 @@ func (s *RuntimeStore) PendingApprovals(ctx context.Context) ([]workmodel.Approv
 		values = append(values, value)
 	}
 	return values, rows.Err()
+}
+
+func (s *RuntimeStore) GetApproval(ctx context.Context, id string) (workmodel.Approval, error) {
+	var value workmodel.Approval
+	var request, decision []byte
+	var requested string
+	var expires, resolved sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT id, local_task_id, kind, status, request_payload, decision_payload, requested_at, expires_at, resolved_at FROM approvals WHERE id = ?`, id).
+		Scan(&value.ID, &value.TaskID, &value.Kind, &value.Status, &request, &decision, &requested, &expires, &resolved)
+	if err != nil {
+		return workmodel.Approval{}, runtimeNotFound("get v2 approval", err)
+	}
+	value.RequestPayload, value.DecisionPayload = append([]byte(nil), request...), append([]byte(nil), decision...)
+	var parseErr error
+	if value.RequestedAt, parseErr = parseTimestamp(requested); parseErr != nil {
+		return workmodel.Approval{}, parseErr
+	}
+	if value.ExpiresAt, parseErr = parseNullableTimestamp(expires); parseErr != nil {
+		return workmodel.Approval{}, parseErr
+	}
+	if value.ResolvedAt, parseErr = parseNullableTimestamp(resolved); parseErr != nil {
+		return workmodel.Approval{}, parseErr
+	}
+	return value, nil
 }
 
 func (s *RuntimeStore) UpsertAuthIncident(ctx context.Context, value workmodel.AuthIncident) error {
@@ -635,4 +679,4 @@ func runtimeNotFound(action string, err error) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-var _ store.Store = (*RuntimeStore)(nil)
+var _ store.RuntimeStore = (*RuntimeStore)(nil)

@@ -33,6 +33,14 @@ $HOME/.local/bin/agentbridge doctor --config $HOME/.config/agentbridge/config.ya
 systemctl --user enable --now agentbridge.service agentbridge-backup.timer
 ```
 
+For a paired headless execution host, enable the separate unit instead of the
+controller service. It does not load a Telegram credential or expose the
+owner local API:
+
+```sh
+systemctl --user enable --now agentbridge-device-agent.service
+```
+
 Populate the Telegram bot systemd credential source without exposing its
 contents in shell history. The file must be mode `0600`; its parent directory
 must be mode `0700`. Pair one numeric Telegram user in a private chat. Log out
@@ -94,7 +102,17 @@ $HOME/.local/lib/agentbridge/scripts/pi-smoke.sh
 The Pi script is a controlled release gate, not a routine laptop check. It
 returns exit code `3` with `not_executed` unless `RUN_PI_SMOKE=1`, the host is
 ARM64 Linux, and `AGENTBRIDGE_CANDIDATE_MANIFEST` names the immutable candidate
-manifest. Never convert that result into a passing release attestation.
+manifest as a readable owner-only regular file. It also verifies that the
+active user-systemd service `MainPID` is
+running the digest-checked candidate binary; a separate controlled run must
+capture the headless vertical slice and reconnect evidence. Never convert a
+`not_executed` result into a passing release attestation.
+After the preflight succeeds, the controlled runner must pass its owner-only
+vertical-slice report to
+`$HOME/.local/lib/agentbridge/scripts/pi-acceptance.sh`; only that verifier can
+write the owner-only Phase C acceptance record, and it rejects duplicate
+event/commit evidence or a mismatched candidate/job nonce. Release evidence
+still needs the separately provisioned signing/publication gate.
 
 Observable logs must be redacted. Treat unexpected command lines, files,
 approval requests, repeated restarts, or repository changes as an incident.

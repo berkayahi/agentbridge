@@ -36,7 +36,7 @@ func executionKernelChecksum() (string, error) {
 
 // OpenV2 opens only an empty or already-v2 database. Legacy lineages always
 // fail closed until Cutover has made and verified a backup.
-func OpenV2(ctx context.Context, path string) (*Store, error) {
+func OpenV2(ctx context.Context, path string) (*RuntimeStore, error) {
 	release, err := AcquireDatabaseRuntimeLock(path)
 	if err != nil {
 		return nil, err
@@ -49,11 +49,11 @@ func OpenV2(ctx context.Context, path string) (*Store, error) {
 // cooperative runtime lock for the complete daemon lifetime. It is kept
 // separate from OpenV2 so managed composition can share the same lock that
 // serve owns while still using the v2 bootstrap path.
-func OpenV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
+func OpenV2WithRuntimeLock(ctx context.Context, path string) (*RuntimeStore, error) {
 	return openV2WithRuntimeLock(ctx, path)
 }
 
-func openV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
+func openV2WithRuntimeLock(ctx context.Context, path string) (*RuntimeStore, error) {
 
 	db, err := openRaw(ctx, path)
 	if err != nil {
@@ -71,7 +71,7 @@ func openV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
 			return nil, err
 		}
 	case LineageV2:
-		if err := validateMigrationLedger(ctx, db); err != nil {
+		if err := ensureV2Migrations(ctx, db); err != nil {
 			_ = db.Close()
 			return nil, err
 		}
@@ -79,7 +79,13 @@ func openV2WithRuntimeLock(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, ErrMigrationRequired
 	}
-	return &Store{db: db}, nil
+	if report.Lineage == LineageEmpty {
+		if err := ensureV2Migrations(ctx, db); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return &RuntimeStore{db: db}, nil
 }
 
 func bootstrapV2(ctx context.Context, db *sql.DB, now time.Time) error {

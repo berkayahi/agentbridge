@@ -17,11 +17,14 @@ import (
 
 const busyTimeoutMillis = 5000
 
-type Store struct {
+// LegacyStore is the pre-v2 SQLite adapter. It exists for the explicit
+// migration command and immutable lineage fixtures only. Production runtime
+// composition must use RuntimeStore instead.
+type LegacyStore struct {
 	db *sql.DB
 }
 
-func Open(ctx context.Context, path string) (*Store, error) {
+func Open(ctx context.Context, path string) (*LegacyStore, error) {
 	dsn := sqliteDSN(path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -37,7 +40,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &LegacyStore{db: db}, nil
 }
 
 func sqliteDSN(path string) string {
@@ -61,9 +64,9 @@ func sqliteDSNWithImmediateTransactions(path string) string {
 	return u.String()
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *LegacyStore) Close() error { return s.db.Close() }
 
-func (s *Store) CreateTask(ctx context.Context, value workmodel.Task, initial workmodel.Event) error {
+func (s *LegacyStore) CreateTask(ctx context.Context, value workmodel.Task, initial workmodel.Event) error {
 	if initial.TaskID != value.ID {
 		return fmt.Errorf("initial event task mismatch: %w", store.ErrConflict)
 	}
@@ -102,7 +105,7 @@ func insertTask(ctx context.Context, tx *sql.Tx, value workmodel.Task) error {
 	return err
 }
 
-func (s *Store) Transition(ctx context.Context, taskID string, to workmodel.State, event workmodel.Event) error {
+func (s *LegacyStore) Transition(ctx context.Context, taskID string, to workmodel.State, event workmodel.Event) error {
 	if event.TaskID != taskID {
 		return fmt.Errorf("transition event task mismatch: %w", store.ErrConflict)
 	}
@@ -165,7 +168,7 @@ func (s *Store) Transition(ctx context.Context, taskID string, to workmodel.Stat
 	return nil
 }
 
-func (s *Store) AppendEvent(ctx context.Context, event workmodel.Event) error {
+func (s *LegacyStore) AppendEvent(ctx context.Context, event workmodel.Event) error {
 	if err := insertEvent(ctx, s.db, event); err != nil {
 		return translateEventError(err)
 	}
@@ -189,7 +192,7 @@ func insertEvent(ctx context.Context, db execer, event workmodel.Event) error {
 	return err
 }
 
-func (s *Store) Task(ctx context.Context, id string) (workmodel.Task, error) {
+func (s *LegacyStore) Task(ctx context.Context, id string) (workmodel.Task, error) {
 	value, err := scanTask(s.db.QueryRowContext(ctx, taskColumns+" WHERE id = ?", id))
 	if err != nil {
 		return workmodel.Task{}, translateNotFound("load task", err)
@@ -236,7 +239,7 @@ func scanTask(row scanner) (workmodel.Task, error) {
 	return value, nil
 }
 
-func (s *Store) ListTasks(ctx context.Context, filter store.ListFilter) ([]workmodel.Task, error) {
+func (s *LegacyStore) ListTasks(ctx context.Context, filter store.ListFilter) ([]workmodel.Task, error) {
 	query := taskColumns + " WHERE 1 = 1"
 	args := make([]any, 0, len(filter.States)+2)
 	if filter.RepoProfileID != "" {
@@ -257,11 +260,11 @@ func (s *Store) ListTasks(ctx context.Context, filter store.ListFilter) ([]workm
 	return s.queryTasks(ctx, query, args...)
 }
 
-func (s *Store) NonterminalTasks(ctx context.Context) ([]workmodel.Task, error) {
+func (s *LegacyStore) NonterminalTasks(ctx context.Context) ([]workmodel.Task, error) {
 	return s.queryTasks(ctx, taskColumns+" WHERE state NOT IN (?, ?) ORDER BY created_at, id", workmodel.Completed, workmodel.Canceled)
 }
 
-func (s *Store) queryTasks(ctx context.Context, query string, args ...any) ([]workmodel.Task, error) {
+func (s *LegacyStore) queryTasks(ctx context.Context, query string, args ...any) ([]workmodel.Task, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -281,7 +284,7 @@ func (s *Store) queryTasks(ctx context.Context, query string, args ...any) ([]wo
 	return values, nil
 }
 
-func (s *Store) Events(ctx context.Context, taskID string) ([]workmodel.Event, error) {
+func (s *LegacyStore) Events(ctx context.Context, taskID string) ([]workmodel.Event, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, task_id, event_type, visibility, provider_event_id, redacted_payload, created_at
 		FROM task_events WHERE task_id = ? ORDER BY created_at, id`, taskID)

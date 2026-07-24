@@ -28,7 +28,9 @@ install -m 0755 "$repository_root/scripts/backup.sh" "$lib_dir/scripts/backup.sh
 install -m 0755 "$repository_root/scripts/restore-check.sh" "$lib_dir/scripts/restore-check.sh"
 install -m 0755 "$repository_root/scripts/ops-smoke.sh" "$lib_dir/scripts/ops-smoke.sh"
 install -m 0755 "$repository_root/scripts/pi-smoke.sh" "$lib_dir/scripts/pi-smoke.sh"
+install -m 0755 "$repository_root/scripts/pi-acceptance.sh" "$lib_dir/scripts/pi-acceptance.sh"
 install -m 0644 "$script_dir/systemd/agentbridge.service" "$unit_dir/agentbridge.service"
+install -m 0644 "$script_dir/systemd/agentbridge-device-agent.service" "$unit_dir/agentbridge-device-agent.service"
 install -m 0644 "$script_dir/systemd/agentbridge-backup.service" "$unit_dir/agentbridge-backup.service"
 install -m 0644 "$script_dir/systemd/agentbridge-backup.timer" "$unit_dir/agentbridge-backup.timer"
 
@@ -47,3 +49,4 @@ systemctl --user daemon-reload
 printf 'Installed AgentBridge. Run doctor before enabling the service:\n'
 printf '  %q doctor --config %q\n' "$bin_dir/agentbridge" "$config_dir/config.yaml"
 printf '  systemctl --user enable --now agentbridge.service agentbridge-backup.timer\n'
+printf '  # paired headless host: systemctl --user enable --now agentbridge-device-agent.service\n'

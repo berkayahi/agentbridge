@@ -11,6 +11,22 @@ mode: standalone
 #   identity_path: /srv/agentbridge/device-key.json
 #   record_path: /srv/agentbridge/enrollment.json
 #   state_path: /srv/agentbridge/managed-state.json
+# Headless paired-device mode uses the same binary and standalone runtime.
+# Keep this disabled on the Desktop/controller host. The controller public key
+# file contains the 32-byte key (or owner-only base64) from the pairing flow.
+# device_agent:
+#   enabled: true
+#   listen: 0.0.0.0:8788
+#   organization_id: local
+#   device_id: build-pi
+#   identity_path: /srv/agentbridge/device-key.json
+#   controller_public_key_path: /srv/agentbridge/controller.pub
+#   tls_cert_path: /etc/agentbridge/device.crt
+#   tls_key_path: /etc/agentbridge/device.key
+#   results_path: /srv/agentbridge/device-results.json
+#   replay_state_path: /srv/agentbridge/device-replay.json
+#   connection_epoch: 1
+#   controller_epoch: 1
 server:
   listen: 127.0.0.1:8787
   allowed_tailscale_identities:

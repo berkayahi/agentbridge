@@ -19,9 +19,24 @@ func (p Provider) Valid() bool {
 	return p == CodexSubscription || p == ClaudeSubscription
 }
 
+// TaskController identifies the durable controller that owns execution of a
+// task. It is separate from presentation identifiers so two controllers that
+// share the v2 database cannot both resume the same task after a restart.
+type TaskController string
+
+const (
+	TaskControllerStandalone TaskController = "standalone"
+	TaskControllerLocal      TaskController = "local_control"
+)
+
+func (c TaskController) Valid() bool {
+	return c == TaskControllerStandalone || c == TaskControllerLocal
+}
+
 type Task struct {
 	ID                string
 	RepoProfileID     string
+	ControllerOwner   TaskController
 	Title             string
 	Prompt            string
 	State             State

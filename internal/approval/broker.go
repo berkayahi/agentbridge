@@ -58,6 +58,15 @@ type Config struct {
 	Clock         func() time.Time
 	NewID         func() string
 	AuthorizeUser func(string) bool
+	// AllowNonNumericUserIDs is reserved for an authenticated local authority
+	// such as the paired controller. Telegram user IDs remain numeric by
+	// default; a device must not require a synthetic Telegram identity for a
+	// decision already authenticated by the controller boundary.
+	AllowNonNumericUserIDs bool
+	// NoExternalPresentation disables Telegram callback construction for a
+	// headless execution endpoint. The durable approval remains task-scoped and
+	// is resolved through the authenticated controller link.
+	NoExternalPresentation bool
 }
 
 type Request struct {
@@ -87,14 +96,16 @@ type pending struct {
 }
 
 type Broker struct {
-	store         Store
-	messenger     Messenger
-	signer        *telegram.CallbackSigner
-	redactor      Redactor
-	timeout       time.Duration
-	clock         func() time.Time
-	newID         func() string
-	authorizeUser func(string) bool
+	store                  Store
+	messenger              Messenger
+	signer                 *telegram.CallbackSigner
+	redactor               Redactor
+	timeout                time.Duration
+	clock                  func() time.Time
+	newID                  func() string
+	authorizeUser          func(string) bool
+	allowNonNumericUserIDs bool
+	noExternalPresentation bool
 
 	mu      sync.Mutex
 	pending map[string]*pending
@@ -120,7 +131,9 @@ func New(config Config) (*Broker, error) {
 		store: config.Store, messenger: config.Messenger, signer: config.Signer,
 		redactor: config.Redactor, timeout: config.Timeout, clock: config.Clock,
 		newID: config.NewID, authorizeUser: config.AuthorizeUser,
-		pending: make(map[string]*pending),
+		allowNonNumericUserIDs: config.AllowNonNumericUserIDs,
+		noExternalPresentation: config.NoExternalPresentation,
+		pending:                make(map[string]*pending),
 	}, nil
 }
 
@@ -219,7 +232,7 @@ func (b *Broker) HandleDecision(ctx context.Context, taskID, approvalID, userID 
 }
 
 func (b *Broker) handleDecision(ctx context.Context, taskID, approvalID, userID string, allow bool, binding Binding) error {
-	if !validUserID(userID) || !b.authorizeUser(userID) {
+	if (!validUserID(userID) && !b.allowNonNumericUserIDs) || !b.authorizeUser(userID) {
 		return ErrUnauthorized
 	}
 	waiter, err := b.take(taskID, approvalID)
@@ -327,6 +340,18 @@ func (b *Broker) Owns(taskID, approvalID string) bool {
 func (b *Broker) newApproval(taskID string) (string, telegram.InlineKeyboard, error) {
 	for range 8 {
 		id := strings.TrimSpace(b.newID())
+		if b.noExternalPresentation {
+			if id == "" {
+				continue
+			}
+			b.mu.Lock()
+			_, exists := b.pending[id]
+			b.mu.Unlock()
+			if !exists {
+				return id, nil, nil
+			}
+			continue
+		}
 		keyboard, err := telegram.ApprovalKeyboard(b.signer, taskID, id, b.timeout)
 		if err != nil {
 			return "", nil, fmt.Errorf("approval: create callback: %w", err)

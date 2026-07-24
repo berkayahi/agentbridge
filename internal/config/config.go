@@ -16,6 +16,7 @@ type Config struct {
 	DefaultRepository string                       `yaml:"default_repository,omitempty"`
 	Mode              string                       `yaml:"mode,omitempty"`
 	Managed           ManagedConfig                `yaml:"managed,omitempty"`
+	DeviceAgent       DeviceAgentConfig            `yaml:"device_agent,omitempty"`
 	Server            ServerConfig                 `yaml:"server"`
 	Telegram          TelegramConfig               `yaml:"telegram"`
 	Providers         map[string]ProviderConfig    `yaml:"providers"`
@@ -30,6 +31,24 @@ type ManagedConfig struct {
 	IdentityPath   string `yaml:"identity_path,omitempty"`
 	RecordPath     string `yaml:"record_path,omitempty"`
 	StatePath      string `yaml:"state_path,omitempty"`
+}
+
+// DeviceAgentConfig enables the same binary to expose the paired-device WSS
+// processor on a headless execution host. It is optional; the local Mac
+// controller leaves it disabled.
+type DeviceAgentConfig struct {
+	Enabled                 bool   `yaml:"enabled,omitempty"`
+	Listen                  string `yaml:"listen,omitempty"`
+	OrganizationID          string `yaml:"organization_id,omitempty"`
+	DeviceID                string `yaml:"device_id,omitempty"`
+	IdentityPath            string `yaml:"identity_path,omitempty"`
+	ControllerPublicKeyPath string `yaml:"controller_public_key_path,omitempty"`
+	TLSCertPath             string `yaml:"tls_cert_path,omitempty"`
+	TLSKeyPath              string `yaml:"tls_key_path,omitempty"`
+	ResultsPath             string `yaml:"results_path,omitempty"`
+	ReplayStatePath         string `yaml:"replay_state_path,omitempty"`
+	ConnectionEpoch         uint64 `yaml:"connection_epoch,omitempty"`
+	ControllerEpoch         uint64 `yaml:"controller_epoch,omitempty"`
 }
 
 type SpoolConfig struct {

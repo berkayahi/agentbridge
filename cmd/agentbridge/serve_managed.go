@@ -21,7 +21,7 @@ import (
 // not create competing tasks. The kernel, signed connector, and spool are the
 // complete managed authority boundary for this process.
 type managedDaemon struct {
-	store  *sqlite.Store
+	store  *sqlite.RuntimeStore
 	client *managed.Client
 }
 

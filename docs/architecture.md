@@ -30,6 +30,20 @@ writer per profile. Provider adapters translate observable CLI protocol events
 into the shared work model; hidden
 reasoning is neither collected nor claimed.
 
+Each v2 task also carries a durable `controller_owner`. The local-control API
+owns `local_control` tasks, while the Telegram/standalone compatibility adapter
+owns `standalone` tasks; both APIs reject lifecycle mutations across that
+boundary. Startup reconciliation and lifecycle mutations therefore fail closed,
+so a restart cannot launch a duplicate provider session through the other
+controller.
+
+The authenticated local API has one stable approval principal,
+`local-authority`; it overwrites any browser-supplied approval user and carries
+that principal across a paired-device link. The execution runtime maps it to
+the configured provider-native identity (for example, the allowed Telegram
+user ID), so local authentication does not weaken provider-side approval
+checks.
+
 Standalone and managed controllers share the kernel command boundary. Managed
 frames are accepted only after enrollment-pinned signature, epoch, replay, and
 durable inbox checks; Telegram and the local web surface remain projections.

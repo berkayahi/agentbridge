@@ -74,16 +74,16 @@ type spoolScanner interface {
 }
 
 // Spool returns the durable spool backend implemented by this SQLite store.
-func (s *Store) Spool() spool.Store { return s }
+func (s *RuntimeStore) Spool() spool.Store { return s }
 
-func NewSpoolService(s *Store, config spool.Config) (*spool.Service, error) {
+func NewSpoolService(s *RuntimeStore, config spool.Config) (*spool.Service, error) {
 	if s == nil {
 		return nil, spool.ErrInvalid
 	}
 	return spool.NewService(s, config)
 }
 
-func (s *Store) Append(ctx context.Context, request spool.AppendRequest) (spool.AppendResult, error) {
+func (s *RuntimeStore) Append(ctx context.Context, request spool.AppendRequest) (spool.AppendResult, error) {
 	if s == nil || s.db == nil {
 		return spool.AppendResult{}, spool.ErrInvalid
 	}
@@ -269,7 +269,7 @@ func nextSpoolSequence(ctx context.Context, tx *sql.Tx, executionID string) (uin
 	return uint64(next), nil
 }
 
-func (s *Store) Replay(ctx context.Context, request spool.ReplayRequest) ([]spool.Message, error) {
+func (s *RuntimeStore) Replay(ctx context.Context, request spool.ReplayRequest) ([]spool.Message, error) {
 	if s == nil || s.db == nil {
 		return nil, spool.ErrInvalid
 	}
@@ -305,7 +305,7 @@ func (s *Store) Replay(ctx context.Context, request spool.ReplayRequest) ([]spoo
 	return values, nil
 }
 
-func (s *Store) Acknowledge(ctx context.Context, request spool.AcknowledgeRequest) (spool.AcknowledgeResult, error) {
+func (s *RuntimeStore) Acknowledge(ctx context.Context, request spool.AcknowledgeRequest) (spool.AcknowledgeResult, error) {
 	if s == nil || s.db == nil || request.HighestContiguous == 0 || request.HighestContiguous > math.MaxInt64 {
 		if request.HighestContiguous == 0 {
 			return spool.AcknowledgeResult{}, nil
@@ -396,7 +396,7 @@ func existingAcknowledgement(ctx context.Context, tx *sql.Tx, request spool.Ackn
 	return spool.AcknowledgeResult{HighestContiguous: request.HighestContiguous, Acknowledged: request.HighestContiguous, Duplicate: true}, true, nil
 }
 
-func (s *Store) RecordReceipt(ctx context.Context, receipt spool.Receipt) (spool.ReceiptResult, error) {
+func (s *RuntimeStore) RecordReceipt(ctx context.Context, receipt spool.Receipt) (spool.ReceiptResult, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(receipt.ID) == "" || receipt.MessageID == 0 || receipt.MessageID > math.MaxInt64 {
 		return spool.ReceiptResult{}, spool.ErrInvalid
 	}
@@ -461,7 +461,7 @@ func insertReceiptTx(ctx context.Context, tx *sql.Tx, receipt spool.Receipt) err
 	return nil
 }
 
-func (s *Store) Usage(ctx context.Context) (spool.Usage, error) {
+func (s *RuntimeStore) Usage(ctx context.Context) (spool.Usage, error) {
 	if s == nil || s.db == nil {
 		return spool.Usage{}, spool.ErrInvalid
 	}
@@ -536,4 +536,4 @@ func addBytes(left, right int64) (int64, bool) {
 	return left + right, false
 }
 
-var _ spool.Store = (*Store)(nil)
+var _ spool.Store = (*RuntimeStore)(nil)

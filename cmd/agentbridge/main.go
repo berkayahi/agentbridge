@@ -77,7 +77,7 @@ func runWithDeps(ctx context.Context, args []string, stdin io.Reader, stdout, st
 
 func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, deps commandDeps, pairing pairer) int {
 	if len(args) == 1 && args[0] == "version" {
-		if _, err := fmt.Fprintf(stdout, "agentbridge %s (commit %s, built %s)\n", buildinfo.Version, buildinfo.Commit, buildinfo.Date); err != nil {
+		if _, err := fmt.Fprintf(stdout, "agentbridge %s (build %s, commit %s, built %s)\n", buildinfo.Version, buildinfo.BuildTag, buildinfo.Commit, buildinfo.Date); err != nil {
 			fmt.Fprintln(stderr, "agentbridge: failed to write version output")
 			return 1
 		}
@@ -104,6 +104,9 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 	}
 	if len(args) > 0 && args[0] == "enroll" {
 		return runEnrollCommand(ctx, args[1:], stdout, stderr)
+	}
+	if len(args) >= 2 && args[0] == "pair" && args[1] == "device" {
+		return runDevicePairCommand(ctx, args[2:], stdout, stderr)
 	}
 	if len(args) == 4 && args[0] == "pair" && args[1] == "telegram" && args[2] == "--config" && strings.TrimSpace(args[3]) != "" {
 		if pairing == nil {
@@ -178,7 +181,7 @@ func runWithDepsAndPairer(ctx context.Context, args []string, stdin io.Reader, s
 		return 0
 	}
 
-	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
+	fmt.Fprintln(stderr, "usage: agentbridge version | agentbridge doctor --config <path> | agentbridge doctor --database <path> --json | agentbridge backup --database <path> --output <dir> | agentbridge restore-check --backup <path> --work-dir <dir> | agentbridge enroll --data-dir <dir> --claim-id <id> --organization-id <id> --device-id <id> --browser-fingerprint <value> | agentbridge pair device --challenge <path> --data-dir <dir> --name <name> --endpoint <wss-url> | agentbridge pair telegram --config <path> | agentbridge serve --config <path> [--mode standalone|managed] | agentbridge migrate --database <path> | agentbridge mcp | agentbridge claude-statusline")
 	return 2
 }
 

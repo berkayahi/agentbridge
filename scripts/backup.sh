@@ -7,6 +7,7 @@ data_dir=${AGENTBRIDGE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/agentbridg
 database=${DATABASE_PATH:-$data_dir/agentbridge.db}
 backup_dir=${BACKUP_DIR:-$data_dir/backups}
 agentbridge_bin=${AGENTBRIDGE_BINARY:-agentbridge}
+export AGENTBRIDGE_DATA_DIR="$data_dir"
 
 if [[ "$agentbridge_bin" == */* ]]; then
   [[ -x "$agentbridge_bin" ]] || { printf 'agentbridge: binary is not executable: %s\n' "$agentbridge_bin" >&2; exit 1; }

@@ -58,6 +58,9 @@ func (a *App) ContinueTask(ctx context.Context, id, input string) error {
 	if err != nil {
 		return err
 	}
+	if err := requireStandaloneTask(value); err != nil {
+		return err
+	}
 	if value.ProviderSessionID == "" {
 		return errors.New("app: task has no resumable provider session")
 	}
@@ -101,6 +104,13 @@ func (a *App) DecideApproval(ctx context.Context, request ApprovalDecisionReques
 	if record.ID == "" {
 		return store.ErrNotFound
 	}
+	value, err := a.deps.Store.Task(ctx, request.TaskID)
+	if err != nil {
+		return err
+	}
+	if err := requireStandaloneTask(value); err != nil {
+		return err
+	}
 	if a.deps.Approvals != nil && a.deps.Approvals.Owns(request.TaskID, request.ApprovalID) {
 		if err := a.deps.Approvals.HandleDecision(
 			ctx,
@@ -112,10 +122,6 @@ func (a *App) DecideApproval(ctx context.Context, request ApprovalDecisionReques
 			return err
 		}
 		return nil
-	}
-	value, err := a.deps.Store.Task(ctx, request.TaskID)
-	if err != nil {
-		return err
 	}
 	a.mu.Lock()
 	active, ok := a.active[value.ID]

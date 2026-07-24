@@ -65,6 +65,10 @@ func TestPreflightRecognizesGoldenMigrationFixtures(t *testing.T) {
 
 func TestOpenV2LegacyRequiresExplicitMigration(t *testing.T) {
 	path := migrationFixture(t, "public_v1.db")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if db, err := OpenV2(context.Background(), path); !errors.Is(err, ErrMigrationRequired) {
 		if db != nil {
 			_ = db.Close()
@@ -83,6 +87,13 @@ func TestOpenV2LegacyRequiresExplicitMigration(t *testing.T) {
 	}
 	if legacyTasks != 1 {
 		t.Fatalf("legacy tasks table count = %d", legacyTasks)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("legacy database changed after rejected v2 open")
 	}
 }
 

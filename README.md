@@ -28,6 +28,8 @@ credentials, deployment identities, or private repository details.
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Kovan Desktop surface](desktop/README.md)
+- [Obsidian local projection](integrations/obsidian/README.md)
 - [Raspberry Pi operations](docs/operations.md)
 - [Subscription authentication recovery](docs/auth-recovery.md)
 - [Safe upgrade and rollback](docs/upgrade.md)

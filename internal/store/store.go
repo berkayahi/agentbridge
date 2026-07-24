@@ -36,7 +36,10 @@ type Lease struct {
 	ExpiresAt     time.Time
 }
 
-type Store interface {
+// RuntimeStore is the v2 presentation/runtime port consumed by the active
+// controllers. It is intentionally distinct from the legacy SQLite adapter;
+// the production runtime never needs the legacy store type or its schema.
+type RuntimeStore interface {
 	CreateTask(context.Context, workmodel.Task, workmodel.Event) error
 	Transition(context.Context, string, workmodel.State, workmodel.Event) error
 	AppendEvent(context.Context, workmodel.Event) error

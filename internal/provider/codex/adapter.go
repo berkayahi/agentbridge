@@ -2,6 +2,8 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -392,15 +394,15 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
 		return
 	}
-	id, err := provider.NewID(message.ID)
-	if err != nil {
-		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
-		return
-	}
 	now := a.now().UTC()
 	summary := params.Command
 	if summary == "" {
 		summary = params.Reason
+	}
+	id, err := approvalID(state.session.TaskID, message.ID, summary, now)
+	if err != nil {
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
+		return
 	}
 	request := ApprovalRequest{
 		ID: id, TaskID: state.session.TaskID, UserID: a.approvalUser(state.session.TaskID),
@@ -426,6 +428,19 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 	}
 	a.wg.Add(1)
 	go a.expireApproval(id, a.approvalTimeout)
+}
+
+// approvalID scopes a provider request to its AgentBridge task. Codex request
+// IDs are only unique within one app-server process and commonly restart at
+// zero for every thread. Exposing that native ID directly would let a later
+// task collide with a durable approval from an earlier task.
+func approvalID(taskID provider.ID, nativeID, summary string, now time.Time) (provider.ID, error) {
+	if !taskID.Valid() || strings.TrimSpace(nativeID) == "" || now.IsZero() {
+		return provider.ID{}, provider.ErrInvalidInput
+	}
+	seed := strings.Join([]string{taskID.String(), nativeID, summary, now.UTC().Format(time.RFC3339Nano)}, "\x00")
+	digest := sha256.Sum256([]byte(seed))
+	return provider.NewID("approval-" + hex.EncodeToString(digest[:16]))
 }
 
 func (a *Adapter) expireApproval(id provider.ID, after time.Duration) {

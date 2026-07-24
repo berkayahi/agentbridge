@@ -8,7 +8,7 @@ import (
 
 // compileStorePort keeps recovery and related-record operations available to
 // consumers without depending on the SQLite implementation.
-func compileStorePort(ctx context.Context, db store.Store) {
+func compileStorePort(ctx context.Context, db store.RuntimeStore) {
 	_, _ = db.Events(ctx, "task")
 	_, _ = db.NonterminalTasks(ctx)
 	_, _ = db.ExpiredLeases(ctx)

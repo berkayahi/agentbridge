@@ -25,11 +25,13 @@ func TestApprovalTimeoutEmitsCorrelatedDurableLifecycleEvent(t *testing.T) {
 	go func() {
 		rpc.requests <- ServerMessage{ID: "approval-timeout", Method: "item/commandExecution/requestApproval", Params: json.RawMessage(`{"threadId":"thread-timeout","turnId":"turn-timeout","itemId":"item-timeout","command":"go test ./..."}`)}
 	}()
+	var requestID provider.ID
 	select {
 	case got := <-events:
 		if got.Type != provider.EventApprovalRequired {
 			t.Fatalf("first event = %#v", got)
 		}
+		requestID = got.RequestID
 	case <-time.After(time.Second):
 		t.Fatal("approval request was not emitted")
 	}
@@ -43,7 +45,7 @@ func TestApprovalTimeoutEmitsCorrelatedDurableLifecycleEvent(t *testing.T) {
 	}
 	select {
 	case got := <-events:
-		if got.Type != provider.EventType("approval_expired") || got.RequestID.String() != "approval-timeout" || got.TaskID != taskID {
+		if got.Type != provider.EventType("approval_expired") || got.RequestID != requestID || got.TaskID != taskID {
 			t.Fatalf("timeout event = %#v", got)
 		}
 	case <-time.After(time.Second):

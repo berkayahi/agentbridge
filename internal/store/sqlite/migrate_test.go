@@ -146,7 +146,7 @@ func seedLegacyDatabase(t *testing.T, path string) {
 	}
 }
 
-func assertTimestampMigration(t *testing.T, db *Store) {
+func assertTimestampMigration(t *testing.T, db *LegacyStore) {
 	t.Helper()
 	var versions int
 	if err := db.db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&versions); err != nil {

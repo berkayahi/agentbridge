@@ -3,10 +3,12 @@ GOTOOLCHAIN ?= go1.26.4
 GOFMT := $(shell GOTOOLCHAIN=$(GOTOOLCHAIN) $(GO) env GOROOT)/bin/gofmt
 
 VERSION ?= dev
-COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || printf unknown)
+BUILD_TAG ?= dev
+COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
 BUILD_DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || printf unknown)
 LDFLAGS := -s -w \
 	-X github.com/berkayahi/agentbridge/internal/buildinfo.Version=$(VERSION) \
+	-X github.com/berkayahi/agentbridge/internal/buildinfo.BuildTag=$(BUILD_TAG) \
 	-X github.com/berkayahi/agentbridge/internal/buildinfo.Commit=$(COMMIT) \
 	-X github.com/berkayahi/agentbridge/internal/buildinfo.Date=$(BUILD_DATE)
 

@@ -24,7 +24,7 @@ func TestMigrationLedgerRecordsV2SchemaVerification(t *testing.T) {
 	defer check.Close()
 	var version int
 	var name, checksum, fingerprint string
-	if err := check.QueryRow("SELECT version, name, checksum, structural_fingerprint FROM migration_ledger").Scan(&version, &name, &checksum, &fingerprint); err != nil {
+	if err := check.QueryRow("SELECT version, name, checksum, structural_fingerprint FROM migration_ledger WHERE version = ?", executionKernelVersion).Scan(&version, &name, &checksum, &fingerprint); err != nil {
 		t.Fatal(err)
 	}
 	if version != executionKernelVersion || name != executionKernelName || checksum == "" || fingerprint == "" {

@@ -64,6 +64,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/tasks/{id}/approvals", a.pendingApprovals)
 	mux.HandleFunc("POST /v1/tasks/{id}/start", a.start)
 	mux.HandleFunc("POST /v1/tasks/{id}/resume", a.resume)
+	mux.HandleFunc("POST /v1/tasks/{id}/steer", a.steer)
 	mux.HandleFunc("POST /v1/tasks/{id}/approve", a.approve)
 	mux.HandleFunc("POST /v1/tasks/{id}/cancel", a.cancel)
 	mux.HandleFunc("POST /v1/tasks/{id}/verify", a.verify)
@@ -288,6 +289,16 @@ func (a *API) start(w http.ResponseWriter, r *http.Request) {
 	}
 	request.TaskID = r.PathValue("id")
 	response, err := a.service.Start(r.Context(), request)
+	writeResult(w, http.StatusAccepted, response, err)
+}
+
+func (a *API) steer(w http.ResponseWriter, r *http.Request) {
+	var request SteerRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.TaskID = r.PathValue("id")
+	response, err := a.service.Steer(r.Context(), request)
 	writeResult(w, http.StatusAccepted, response, err)
 }
 

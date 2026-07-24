@@ -339,6 +339,29 @@ func (e *localRuntimeExecutor) Approve(ctx context.Context, view localcontrol.Ta
 	return err
 }
 
+// Steer carries the keeper's instruction into the live provider session. It
+// requires a session held by this process: after a restart the native process
+// is gone and the honest answer is that there is nobody left to talk to.
+func (e *localRuntimeExecutor) Steer(ctx context.Context, view localcontrol.TaskView, request localcontrol.SteerRequest) error {
+	if e == nil || e.runtimes == nil {
+		return localcontrol.ErrNotConfigured
+	}
+	if view.TargetDeviceID != localcontrol.LocalDeviceID {
+		return fmt.Errorf("target device %q requires a paired execution link: %w", view.TargetDeviceID, localcontrol.ErrNotConfigured)
+	}
+	e.mu.Lock()
+	session, ok := e.sessions[view.ID]
+	e.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("task has no live provider session: %w", localcontrol.ErrNotConfigured)
+	}
+	adapter, err := e.runtimes.Get(view.RuntimeID)
+	if err != nil {
+		return err
+	}
+	return adapter.Steer(e.runtimeContext(), session, kernel.Input{Text: request.Input})
+}
+
 func (e *localRuntimeExecutor) Cancel(ctx context.Context, view localcontrol.TaskView) error {
 	if e == nil || e.runtimes == nil {
 		return nil

@@ -52,6 +52,28 @@ func (r *deviceRouter) Start(ctx context.Context, view TaskView, request StartRe
 	return target.Start(ctx, view, request)
 }
 
+// Steer forwards the keeper's instruction to whichever runtime owns the flight.
+// A runtime that cannot be steered is reported rather than silently accepted.
+func (r *deviceRouter) Steer(ctx context.Context, view TaskView, request SteerRequest) error {
+	target, err := r.target(ctx, view)
+	if err != nil {
+		return err
+	}
+	steerer, ok := target.(Steerer)
+	if !ok {
+		return ErrNotConfigured
+	}
+	return steerer.Steer(ctx, view, request)
+}
+
+func (r localRuntime) Steer(ctx context.Context, view TaskView, request SteerRequest) error {
+	steerer, ok := r.Executor.(Steerer)
+	if !ok {
+		return ErrNotConfigured
+	}
+	return steerer.Steer(ctx, view, request)
+}
+
 func (r *deviceRouter) Resume(ctx context.Context, view TaskView, request ResumeRequest) error {
 	target, err := r.target(ctx, view)
 	if err != nil {

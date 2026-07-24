@@ -74,6 +74,27 @@ func (r localRuntime) Steer(ctx context.Context, view TaskView, request SteerReq
 	return steerer.Steer(ctx, view, request)
 }
 
+// Diff forwards to whichever runtime holds the worktree.
+func (r *deviceRouter) Diff(ctx context.Context, view TaskView) (TaskDiff, error) {
+	target, err := r.target(ctx, view)
+	if err != nil {
+		return TaskDiff{}, err
+	}
+	differ, ok := target.(Differ)
+	if !ok {
+		return TaskDiff{}, ErrNotConfigured
+	}
+	return differ.Diff(ctx, view)
+}
+
+func (r localRuntime) Diff(ctx context.Context, view TaskView) (TaskDiff, error) {
+	differ, ok := r.Executor.(Differ)
+	if !ok {
+		return TaskDiff{}, ErrNotConfigured
+	}
+	return differ.Diff(ctx, view)
+}
+
 func (r *deviceRouter) Resume(ctx context.Context, view TaskView, request ResumeRequest) error {
 	target, err := r.target(ctx, view)
 	if err != nil {

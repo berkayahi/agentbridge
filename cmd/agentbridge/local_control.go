@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -531,3 +532,59 @@ var _ localcontrol.Executor = (*localRuntimeExecutor)(nil)
 var _ localcontrol.Verifier = localVerifier{}
 var _ localcontrol.Committer = localCommitter{}
 var _ localcontrol.DeviceObserver = (*reachabilityDeviceRuntime)(nil)
+
+// maxDiffBytes bounds what a keeper is shown. A huge patch is reported as
+// truncated rather than silently cut, so the hive never presents part of a
+// change as the whole of it.
+const maxDiffBytes = 256 << 10
+
+// Diff reports what the bee has changed in her own worktree, so a keeper can
+// judge her work without opening a terminal. It reads only: the worktree is
+// hers until the keeper decides to land it.
+func (e *localRuntimeExecutor) Diff(ctx context.Context, view localcontrol.TaskView) (localcontrol.TaskDiff, error) {
+	if e == nil || e.store == nil {
+		return localcontrol.TaskDiff{}, localcontrol.ErrNotConfigured
+	}
+	task, err := e.store.Task(ctx, view.ID)
+	if err != nil {
+		return localcontrol.TaskDiff{}, err
+	}
+	worktree := strings.TrimSpace(task.WorktreePath)
+	if worktree == "" {
+		return localcontrol.TaskDiff{}, fmt.Errorf("task has no prepared worktree: %w", localcontrol.ErrNotConfigured)
+	}
+	git := bridgegit.Runner{}
+	// Both staged and unstaged work counts: a bee may have staged part of it.
+	stat, err := git.Run(ctx, worktree, "diff", "HEAD", "--numstat")
+	if err != nil {
+		return localcontrol.TaskDiff{}, fmt.Errorf("read task diff summary: %w", err)
+	}
+	diff := localcontrol.TaskDiff{Files: make([]localcontrol.DiffFile, 0, 8)}
+	for _, line := range strings.Split(strings.TrimSpace(stat.Stdout), "\n") {
+		fields := strings.SplitN(strings.TrimSpace(line), "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		file := localcontrol.DiffFile{Path: fields[2]}
+		if fields[0] == "-" || fields[1] == "-" {
+			file.Binary = true
+		} else {
+			file.Added, _ = strconv.Atoi(fields[0])
+			file.Removed, _ = strconv.Atoi(fields[1])
+		}
+		diff.Files = append(diff.Files, file)
+	}
+	if len(diff.Files) == 0 {
+		return diff, nil
+	}
+	patch, err := git.Run(ctx, worktree, "diff", "HEAD")
+	if err != nil {
+		return localcontrol.TaskDiff{}, fmt.Errorf("read task diff: %w", err)
+	}
+	diff.Patch = patch.Stdout
+	if len(diff.Patch) > maxDiffBytes {
+		diff.Patch = diff.Patch[:maxDiffBytes]
+		diff.Truncated = true
+	}
+	return diff, nil
+}

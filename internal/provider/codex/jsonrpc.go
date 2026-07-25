@@ -14,8 +14,12 @@ import (
 
 const (
 	defaultMaxPending = 128
-	defaultMaxLine    = 1 << 20
-	defaultQueueSize  = 128
+	// Codex returns the durable thread transcript from thread/resume as one
+	// newline-delimited JSON message. Long-running tasks routinely grow beyond
+	// one MiB, so the transport bound must accommodate a real session while
+	// still rejecting unbounded input from a broken provider process.
+	defaultMaxLine   = 64 << 20
+	defaultQueueSize = 128
 )
 
 var (

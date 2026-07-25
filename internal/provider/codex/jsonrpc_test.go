@@ -92,6 +92,36 @@ func TestClientAcceptsCurrentCodexMessagesWithoutJSONRPCVersion(t *testing.T) {
 	}
 }
 
+func TestClientAcceptsLongThreadResumeResponse(t *testing.T) {
+	clientReader, serverWriter := io.Pipe()
+	serverReader, clientWriter := io.Pipe()
+	client := NewClient(clientReader, clientWriter, ClientOptions{})
+	t.Cleanup(func() { _ = client.Close() })
+
+	history := strings.Repeat("x", (1<<20)+1)
+	go func() {
+		line, _ := bufio.NewReader(serverReader).ReadBytes('\n')
+		var request wireMessage
+		_ = json.Unmarshal(line, &request)
+		response, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result":  map[string]string{"history": history},
+		})
+		_, _ = serverWriter.Write(append(response, '\n'))
+	}()
+
+	var result struct {
+		History string `json:"history"`
+	}
+	if err := client.Call(context.Background(), "thread/resume", nil, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.History != history {
+		t.Fatalf("history bytes = %d, want %d", len(result.History), len(history))
+	}
+}
+
 func TestClientRejectsMalformedDuplicateAndUnknownResponseIDs(t *testing.T) {
 	for _, input := range []string{
 		"not-json\n",

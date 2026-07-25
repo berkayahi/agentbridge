@@ -39,6 +39,7 @@ type ProcessConfig struct {
 	Isolation       *isolation.Policy
 	EgressGuard     *egressguard.Guard
 	ResumeSession   string
+	ApprovalMode    string
 	InitialInput    provider.Input
 	TaskID          provider.ID
 	testArgs        []string
@@ -68,11 +69,23 @@ func (OSSpawner) Spawn(ctx context.Context, cfg ProcessConfig) (Runner, error) {
 }
 
 func CommandArgs(mcpConfigPath, resumeSession, model string) []string {
+	return commandArgs(mcpConfigPath, resumeSession, model, "provider_default")
+}
+
+func commandArgs(mcpConfigPath, resumeSession, model, approvalMode string) []string {
 	args := []string{
 		"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
 		"--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval",
 		"--mcp-config", mcpConfigPath,
 		"--model", model,
+	}
+	switch strings.TrimSpace(approvalMode) {
+	case "auto_within_policy":
+		args = append(args, "--permission-mode", "auto")
+	case "provider_default":
+		// Keep the provider's configured mode.
+	default:
+		args = append(args, "--permission-mode", "default")
 	}
 	if resumeSession != "" {
 		args = append(args, "--resume", resumeSession)
@@ -161,7 +174,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if !cfg.TaskID.Valid() || cfg.Model == "" || !filepath.IsAbs(cfg.ControlSocket) || len(cfg.Capability) == 0 || len(cfg.Capability) > maxCapabilityBytes {
 		return nil, errors.New("incomplete task-scoped Claude process configuration")
 	}
-	args := CommandArgs(cfg.MCPConfigPath, cfg.ResumeSession, cfg.Model)
+	args := commandArgs(cfg.MCPConfigPath, cfg.ResumeSession, cfg.Model, cfg.ApprovalMode)
 	if cfg.testArgs != nil {
 		args = cfg.testArgs
 	}

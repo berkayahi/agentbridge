@@ -288,6 +288,7 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	if input == "" {
 		input = task.Prompt
 	}
+	input = executionInput(input)
 	profile := chosenExecutionProfile(task.ExecutionProfile, strings.TrimSpace(request.Model), e.models[view.Provider])
 	startCtx := e.runtimeContext()
 	session, err := adapter.Start(startCtx, bridgeRuntime.StartRequest{
@@ -310,6 +311,16 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	e.sessions[view.ID] = session
 	e.mu.Unlock()
 	return nil
+}
+
+func executionInput(input string) string {
+	return `AgentBridge owns Git delivery for this isolated workspace.
+- Do not run git commit, git push, or modify local or remote refs.
+- Leave the completed changes in the worktree and report when implementation and relevant verification are finished.
+- AgentBridge will scan, commit, and push the work only through the configured delivery boundary.
+
+Operator task:
+` + strings.TrimSpace(input)
 }
 
 func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.TaskView, request localcontrol.ResumeRequest) error {
@@ -489,6 +500,7 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 type providerCatalog struct {
 	providers map[string]config.ProviderConfig
 	live      map[workmodel.Provider]provider.Provider
+	runtimes  *bridgeRuntime.Registry
 }
 
 func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.ProviderInfo, error) {
@@ -503,6 +515,31 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
 		profile := localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available}
+		if c.runtimes != nil {
+			adapter, runtimeErr := c.runtimes.Get(id)
+			if runtimeErr != nil {
+				return nil, fmt.Errorf("load %s runtime capabilities: %w", id, runtimeErr)
+			}
+			capabilities, capabilityErr := adapter.Capabilities(ctx)
+			if capabilityErr != nil {
+				return nil, fmt.Errorf("load %s approval modes: %w", id, capabilityErr)
+			}
+			for _, mode := range capabilities.NativeApprovalModes {
+				detail := localcontrol.ProviderApprovalMode{ID: string(mode)}
+				switch mode {
+				case bridgeRuntime.ApprovalAskEveryTime:
+					detail.DisplayName = "Ask me"
+					detail.Description = "Pause when the provider needs authority beyond the current sandbox."
+				case bridgeRuntime.ApprovalAutoWithinPolicy:
+					detail.DisplayName = "Auto-review"
+					detail.Description = "Let the provider review routine requests inside the current sandbox policy."
+				case bridgeRuntime.ApprovalProviderDefault:
+					detail.DisplayName = "Provider default"
+					detail.Description = "Use the provider account's own approval configuration."
+				}
+				profile.ApprovalModes = append(profile.ApprovalModes, detail)
+			}
+		}
 		native := c.live[workmodel.Provider(id)]
 		cataloger, ok := native.(provider.ExecutionCatalogProvider)
 		if available && ok {

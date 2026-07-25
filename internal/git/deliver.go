@@ -95,10 +95,28 @@ func (d Delivery) Commit(ctx context.Context, request DeliveryRequest) (Delivery
 			return DeliveryResult{}, err
 		}
 		commitSHA := strings.TrimSpace(head.Stdout)
-		if commitSHA != request.Workspace.BaseSHA {
+		if commitSHA == request.Workspace.BaseSHA {
+			return DeliveryResult{NoChanges: true, CommitSHA: commitSHA}, nil
+		}
+		// A provider may have followed repository-local instructions that ask
+		// contributors to commit before AgentBridge regains control. Adopt only
+		// a linear, fully scanned commit instead of misreporting it as a remote
+		// writer conflict. The provider is still told not to commit; this path is
+		// crash/recovery tolerance, not shared Git ownership.
+		if _, err := d.Git.Run(ctx, request.Workspace.Path, "merge-base", "--is-ancestor", request.Workspace.BaseSHA, commitSHA); err != nil {
 			return DeliveryResult{}, ErrDeliveryConflict
 		}
-		return DeliveryResult{NoChanges: true, CommitSHA: commitSHA}, nil
+		subject, err := d.Git.Run(ctx, request.Workspace.Path, "log", "-1", "--format=%s", commitSHA)
+		if err != nil {
+			return DeliveryResult{}, err
+		}
+		if !validCommitMessage(strings.TrimSpace(subject.Stdout)) {
+			return DeliveryResult{}, ErrInvalidCommitMessage
+		}
+		if err := d.scanCommitRange(ctx, request.Workspace.Path, request.Workspace.BaseSHA, commitSHA); err != nil {
+			return DeliveryResult{}, err
+		}
+		return DeliveryResult{CommitSHA: commitSHA}, nil
 	}
 	if _, err := d.Git.Run(ctx, request.Workspace.Path, "add", "-A"); err != nil {
 		return DeliveryResult{}, err
@@ -139,6 +157,12 @@ func (d Delivery) Push(ctx context.Context, request DeliveryRequest, commitSHA s
 		return DeliveryResult{}, fmt.Errorf("%w: resolve allowed ref", ErrDeliveryConflict)
 	}
 	remoteSHA := strings.TrimSpace(remote.Stdout)
+	if remoteSHA == commitSHA {
+		if _, err := d.Git.Run(ctx, request.Workspace.Path, "merge-base", "--is-ancestor", request.Workspace.BaseSHA, commitSHA); err != nil {
+			return DeliveryResult{}, ErrDeliveryConflict
+		}
+		return DeliveryResult{NoChanges: commitSHA == request.Workspace.BaseSHA, CommitSHA: commitSHA, PushRef: request.Profile.AllowedRef}, nil
+	}
 	if commitSHA == request.Workspace.BaseSHA {
 		if remoteSHA != request.Workspace.BaseSHA {
 			return DeliveryResult{}, ErrDeliveryConflict
@@ -190,10 +214,22 @@ func (d Delivery) scanChangedFiles(ctx context.Context, worktree string) error {
 	if err != nil {
 		return err
 	}
-	if strings.Contains(files.Stdout, "…[TRUNCATED]") {
+	return d.scanNamedFiles(worktree, files.Stdout)
+}
+
+func (d Delivery) scanCommitRange(ctx context.Context, worktree, baseSHA, commitSHA string) error {
+	files, err := d.Git.Run(ctx, worktree, "diff", "--name-only", "-z", "--diff-filter=ACMR", baseSHA+".."+commitSHA)
+	if err != nil {
+		return err
+	}
+	return d.scanNamedFiles(worktree, files.Stdout)
+}
+
+func (d Delivery) scanNamedFiles(worktree, names string) error {
+	if strings.Contains(names, "…[TRUNCATED]") {
 		return fmt.Errorf("%w: changed file list exceeded bound", ErrSecretDetected)
 	}
-	for _, name := range strings.Split(files.Stdout, "\x00") {
+	for _, name := range strings.Split(names, "\x00") {
 		if name == "" {
 			continue
 		}

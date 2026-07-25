@@ -68,7 +68,7 @@ func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (pro
 	if request.Model == "" {
 		request.Model = request.ExecutionProfile.Model
 	}
-	return a.start(ctx, request.TaskID, request.Input, "", request.Model)
+	return a.start(ctx, request.TaskID, request.Input, "", request.ExecutionProfile, request.Model)
 }
 
 func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
@@ -79,12 +79,13 @@ func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (p
 	if resume == "" {
 		resume = request.Session.ID.String()
 	}
-	return a.start(ctx, request.TaskID, request.Input, resume, request.Model)
+	return a.start(ctx, request.TaskID, request.Input, resume, request.ExecutionProfile, request.Model)
 }
 
-func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume, model string) (provider.Session, <-chan provider.Event, error) {
+func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume string, profile workmodel.ExecutionProfile, model string) (provider.Session, <-chan provider.Event, error) {
 	cfg := a.process
 	cfg.TaskID, cfg.InitialInput, cfg.ResumeSession = taskID, input, resume
+	cfg.ApprovalMode = profile.ApprovalMode
 	// An empty model means the operator chose nothing, which is the configured
 	// default. A resume passes the model the session was dispatched with, so a
 	// restart cannot quietly move a session onto a different model.

@@ -35,6 +35,7 @@ message StartCommand {
 message ExecutionProfile {
   string model = 1;
   string reasoning_effort = 2;
+  string approval_mode = 3;
 }
 
 message ResumeCommand { bytes input = 1; }

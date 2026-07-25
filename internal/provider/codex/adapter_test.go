@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestAdapterStartsThreadPersistsSessionBeforeTurnAndUsesLocalImage(t *testing.T) {
@@ -374,5 +375,33 @@ func TestEveryTurnRoutesApprovalsToTheKeeper(t *testing.T) {
 				t.Fatalf("approvalsReviewer = %#v, want \"user\"", reviewer)
 			}
 		})
+	}
+}
+
+func TestAutoWithinPolicyRoutesApprovalsToAutoReview(t *testing.T) {
+	var reviewer, policy any
+	rpc := newFakeRPC()
+	rpc.call = func(method string, params any, result any) error {
+		switch method {
+		case "thread/start":
+			setJSON(result, map[string]any{"thread": map[string]any{"id": "thread-1"}})
+		case "turn/start":
+			values := jsonValue(params)
+			reviewer, policy = values["approvalsReviewer"], values["approvalPolicy"]
+			setJSON(result, map[string]any{"turn": map[string]any{"id": "turn-1"}})
+		}
+		return nil
+	}
+	adapter := NewAdapter(rpc, AdapterConfig{Sessions: sessionSinkFunc(func(context.Context, provider.Session) error { return nil })})
+	t.Cleanup(adapter.Close)
+	_, _, err := adapter.Start(context.Background(), provider.StartRequest{
+		TaskID: provider.MustID("task-1"), Input: provider.Input{Text: "work"},
+		ExecutionProfile: workmodel.ExecutionProfile{ApprovalMode: "auto_within_policy"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewer != "auto_review" || policy != "on-request" {
+		t.Fatalf("reviewer/policy = %#v/%#v", reviewer, policy)
 	}
 }

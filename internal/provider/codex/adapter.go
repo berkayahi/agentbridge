@@ -122,6 +122,7 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 	if profile.Model != "" {
 		params["model"] = profile.Model
 	}
+	applyApprovalSettings(params, profile.ApprovalMode)
 	var response threadResponse
 	if err := a.rpc.Call(ctx, "thread/start", params, &response); err != nil {
 		return provider.Session{}, nil, mapCallError(err)
@@ -153,6 +154,7 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 	if profile.Model != "" {
 		params["model"] = profile.Model
 	}
+	applyApprovalSettings(params, profile.ApprovalMode)
 	var response threadResponse
 	if err := a.rpc.Call(ctx, "thread/resume", params, &response); err != nil {
 		return provider.Session{}, nil, mapCallError(err)
@@ -272,21 +274,13 @@ func (a *Adapter) Close() {
 	a.wg.Wait()
 }
 
-// approvalsReviewerUser keeps every approval request — sandbox escapes, blocked
-// network access, MCP prompts — routed to the operator. Codex can instead route
-// them to a reviewing subagent that decides on its own, and a host config which
-// does that would let a session escalate its own permissions with nobody asked.
-// The override is per turn and carries to subsequent turns, so setting it here
-// covers a fresh start and every resume through one path.
-const approvalsReviewerUser = "user"
-
 func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, profile workmodel.ExecutionProfile, writable []string) error {
 	var response turnResponse
 	params := map[string]any{
-		"threadId":          state.session.ThreadID,
-		"input":             codexInput(input),
-		"approvalsReviewer": approvalsReviewerUser,
+		"threadId": state.session.ThreadID,
+		"input":    codexInput(input),
 	}
+	applyApprovalSettings(params, profile.ApprovalMode)
 	// turn/start is the only non-deprecated protocol location for effort. Model
 	// is repeated here so the complete profile is explicit on both an initial
 	// turn and a turn resumed after a process restart.
@@ -316,10 +310,29 @@ func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input prov
 func normalizedProfile(profile workmodel.ExecutionProfile, legacyModel string) workmodel.ExecutionProfile {
 	profile.Model = strings.TrimSpace(profile.Model)
 	profile.ReasoningEffort = strings.TrimSpace(profile.ReasoningEffort)
+	profile.ApprovalMode = strings.TrimSpace(profile.ApprovalMode)
 	if profile.Model == "" {
 		profile.Model = strings.TrimSpace(legacyModel)
 	}
 	return profile
+}
+
+// applyApprovalSettings translates the generic execution profile to the exact
+// installed app-server contract. Empty profiles retain AgentBridge's
+// conservative compatibility behavior. Auto-review never removes the
+// workspace sandbox; it only changes who reviews requests that cross it.
+func applyApprovalSettings(params map[string]any, mode string) {
+	switch strings.TrimSpace(mode) {
+	case "auto_within_policy":
+		params["approvalPolicy"] = "on-request"
+		params["approvalsReviewer"] = "auto_review"
+	case "provider_default":
+		// Deliberately leave both fields absent so the provider's own account
+		// configuration remains authoritative.
+	default:
+		params["approvalPolicy"] = "on-request"
+		params["approvalsReviewer"] = "user"
+	}
 }
 
 func (a *Adapter) persistSession(ctx context.Context, session provider.Session) error {

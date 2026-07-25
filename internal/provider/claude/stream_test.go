@@ -55,6 +55,14 @@ func TestCommandArgumentsAndEnvironmentUseSubscriptionStreamJSON(t *testing.T) {
 	}
 }
 
+func TestCommandArgumentsSelectClaudeAutoMode(t *testing.T) {
+	args := commandArgs("/runtime/task-mcp.json", "", "opus", "auto_within_policy")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--permission-mode auto") {
+		t.Fatalf("args = %v", args)
+	}
+}
+
 func TestProcessHelperInitializesSessionAndStreamsEvents(t *testing.T) {
 	if os.Getenv("GO_WANT_CLAUDE_HELPER") == "1" {
 		capabilityFile := os.NewFile(3, "agentbridge-capability")

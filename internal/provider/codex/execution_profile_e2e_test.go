@@ -29,9 +29,6 @@ func TestProcessAdapterCarriesExecutionProfileThroughStartAndResume(t *testing.T
 		t.Fatal(err)
 	}
 	defer process.Close()
-	if err := InitializeAppServer(ctx, process.Client); err != nil {
-		t.Fatal(err)
-	}
 	adapter := NewAdapter(process.Client, AdapterConfig{})
 	t.Cleanup(adapter.Close)
 

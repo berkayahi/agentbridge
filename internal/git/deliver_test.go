@@ -133,6 +133,38 @@ func TestPhasedNoChangeDeliveryReturnsBaseAndConfirmsRefWithoutPush(t *testing.T
 	}
 }
 
+func TestDeliveryAdoptsAProviderCommitAlreadyOnTheAllowedRef(t *testing.T) {
+	fixture, profile, workspace := preparedDeliveryFixture(t)
+	if err := os.WriteFile(filepath.Join(workspace.Path, "provider.txt"), []byte("finished\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, workspace.Path, "add", "provider.txt")
+	runGit(t, workspace.Path, "commit", "-m", "feat: finish provider work")
+	runGit(t, workspace.Path, "push", "origin", "HEAD:refs/heads/staging")
+
+	recording := &recordingGit{}
+	delivery := Delivery{Git: recording, Verifier: verifierFunc(func(context.Context, string) error { return nil })}
+	request := DeliveryRequest{Profile: profile, Workspace: workspace, CommitMessage: "feat: ignored recovery message"}
+	if err := delivery.Verify(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	commit, err := delivery.Commit(context.Background(), request)
+	if err != nil || commit.NoChanges || commit.CommitSHA == workspace.BaseSHA {
+		t.Fatalf("commit=%#v err=%v", commit, err)
+	}
+	push, err := delivery.Push(context.Background(), request, commit.CommitSHA)
+	if err != nil || push.CommitSHA != commit.CommitSHA || push.PushRef != profile.AllowedRef {
+		t.Fatalf("push=%#v err=%v", push, err)
+	}
+	if containsGitCommand(recording.calls, "push") {
+		t.Fatalf("already landed commit was pushed again: %v", recording.calls)
+	}
+	remote := strings.Fields(strings.TrimSpace(gitOutput(t, fixture.control, "ls-remote", fixture.remote, "refs/heads/staging")))[0]
+	if remote != commit.CommitSHA {
+		t.Fatalf("remote=%s commit=%s", remote, commit.CommitSHA)
+	}
+}
+
 func TestDeliverRejectsUnsafePolicyMessageAndSecrets(t *testing.T) {
 	_, profile, workspace := preparedDeliveryFixture(t)
 	for _, ref := range []string{"refs/heads/main", "refs/heads/master", "refs/heads/production", "refs/tags/v1", "refs/heads/arbitrary"} {

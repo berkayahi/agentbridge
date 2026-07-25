@@ -799,6 +799,7 @@ func agentContext(value workmodel.Task, workspacePath, prompt string) string {
 - Use the configured default repository unless the operator explicitly requests another configured repository; always follow the selected repository profile.
 - First inspect the repository's AGENTS.md, CLAUDE.md, README, and existing conventions before changing code.
 - Use the existing installed skills/workflows when they match the task. If no suitable skill exists, explicitly tell the operator before proceeding and then use the safest documented fallback.
+- AgentBridge owns Git delivery. Do not run git commit, git push, or modify local or remote refs; leave completed changes in the worktree for AgentBridge to scan and deliver through policy.
 - Report what you are doing, keep changes scoped to the selected workspace, run relevant verification, and never invent successful results.
 
 Operator task:

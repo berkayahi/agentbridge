@@ -1285,7 +1285,17 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommitResp
 	if err := checkRevision(view, request.Revision); err != nil {
 		return CommitResponse{}, err
 	}
-	if view.State != workmodel.Verifying && view.State != workmodel.Committing {
+	recovering := view.State == workmodel.Failed
+	if recovering {
+		eligible, eligibilityErr := s.deliveryRetryEligible(ctx, view.ID)
+		if eligibilityErr != nil {
+			return CommitResponse{}, eligibilityErr
+		}
+		if !eligible {
+			return CommitResponse{}, ErrCommitRequired
+		}
+	}
+	if view.State != workmodel.Verifying && view.State != workmodel.Committing && !recovering {
 		return CommitResponse{}, ErrCommitRequired
 	}
 	available, err := s.targetAvailability(ctx, view)
@@ -1302,6 +1312,29 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommitResp
 			return CommitResponse{}, err
 		}
 		return response, nil
+	}
+	if recovering {
+		if view.TargetDeviceID != LocalDeviceID || s.verifier == nil {
+			return CommitResponse{}, ErrNotConfigured
+		}
+		view, _, err = s.transition(ctx, view, workmodel.Verifying, "delivery_retry_started", nil)
+		if err != nil {
+			return CommitResponse{}, err
+		}
+		receipt, verifyErr := s.verifier.Verify(ctx, view)
+		if receipt.ID == "" {
+			receipt.ID = s.newID("verification")
+		}
+		if receipt.ObservedAt.IsZero() {
+			receipt.ObservedAt = s.clock().UTC()
+		}
+		if verifyErr != nil || !receipt.Passed {
+			_, _, transitionErr := s.transition(ctx, view, workmodel.Failed, "delivery_retry_verification_failed", map[string]any{"receipt_id": receipt.ID, "summary": receipt.Summary})
+			return CommitResponse{}, errors.Join(verifyErr, transitionErr, ErrVerificationRequired)
+		}
+		if _, err := s.store.AppendLocalEvent(ctx, localEvent(s.newID("event"), "task", view.ID, view.ID, view.Revision, "verification_passed", receipt, receipt.ObservedAt)); err != nil {
+			return CommitResponse{}, err
+		}
 	}
 	committing := view
 	if view.State == workmodel.Verifying {
@@ -1371,6 +1404,42 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommitResp
 		return CommitResponse{}, err
 	}
 	return response, nil
+}
+
+// deliveryRetryEligible recognizes only a failed commit attempt that followed
+// durable verification. It deliberately refuses provider and verification
+// failures: retrying those means starting a successor flight, not silently
+// landing partial work.
+func (s *Service) deliveryRetryEligible(ctx context.Context, taskID string) (bool, error) {
+	var (
+		after            uint64
+		verified         bool
+		lastDeliveryStep string
+	)
+	for page := 0; page < 100; page++ {
+		events, err := s.store.ListLocalEvents(ctx, taskID, after, 200)
+		if err != nil {
+			return false, err
+		}
+		for _, event := range events {
+			switch event.Type {
+			case "verification_passed":
+				verified = true
+				lastDeliveryStep = event.Type
+			case "verification_failed", "commit_started", "commit_failed", "commit_completed":
+				lastDeliveryStep = event.Type
+			}
+		}
+		if len(events) < 200 {
+			return verified && lastDeliveryStep == "commit_failed", nil
+		}
+		next := events[len(events)-1].Cursor
+		if next <= after {
+			return false, store.ErrConflict
+		}
+		after = next
+	}
+	return false, store.ErrConflict
 }
 
 func (s *Service) finishRecordedCommit(ctx context.Context, request CommitRequest, view TaskView, receipt CommitReceipt) (CommitResponse, error) {
@@ -1517,9 +1586,9 @@ func (s *Service) completeExistingDeviceCommand(ctx context.Context, id string, 
 	return s.completeDeviceCommand(ctx, record)
 }
 
-// checkExecutionProfile refuses every model/effort combination not present in
-// the provider catalog. There is no fallback because reporting one profile
-// while executing another would make the durable task record false.
+// checkExecutionProfile refuses every model, effort, or approval mode not
+// present in the provider catalog. There is no fallback because reporting one
+// profile while executing another would make the durable task record false.
 func (s *Service) checkExecutionProfile(ctx context.Context, runtimeID string, executionProfile workmodel.ExecutionProfile) error {
 	if executionProfile.Empty() {
 		return nil
@@ -1535,11 +1604,26 @@ func (s *Service) checkExecutionProfile(ctx context.Context, runtimeID string, e
 		if profile.ID != runtimeID {
 			continue
 		}
+		if executionProfile.ApprovalMode != "" {
+			available := false
+			for _, mode := range profile.ApprovalModes {
+				if mode.ID == executionProfile.ApprovalMode {
+					available = true
+					break
+				}
+			}
+			if !available {
+				return fmt.Errorf("%w: approval mode %q is not available for runtime %q", ErrInvalidRequest, executionProfile.ApprovalMode, runtimeID)
+			}
+		}
 		modelID := executionProfile.Model
 		if modelID == "" {
 			modelID = profile.DefaultModel
 		}
 		if executionProfile.ReasoningEffort == "" {
+			if modelID == "" {
+				return nil
+			}
 			for _, offered := range profile.Models {
 				if offered == modelID {
 					return nil
@@ -1566,6 +1650,7 @@ func (s *Service) checkExecutionProfile(ctx context.Context, runtimeID string, e
 func normalizeExecutionProfile(value workmodel.ExecutionProfile) workmodel.ExecutionProfile {
 	value.Model = strings.TrimSpace(value.Model)
 	value.ReasoningEffort = strings.TrimSpace(value.ReasoningEffort)
+	value.ApprovalMode = strings.TrimSpace(value.ApprovalMode)
 	return value
 }
 
@@ -1593,7 +1678,7 @@ func (s *Service) taskView(ctx context.Context, id string) (TaskView, error) {
 	if err != nil {
 		return TaskView{}, err
 	}
-	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, Model: task.Model, ExecutionProfile: task.ExecutionProfile, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, CommitSHA: task.CommitSHA, PushRef: task.PushRef, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
+	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, Model: task.Model, ExecutionProfile: task.ExecutionProfile, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, CommitSHA: task.CommitSHA, PushRef: task.PushRef, FailureReason: task.FailureReason, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
 }
 
 func (s *Service) ensureTaskTarget(ctx context.Context, view TaskView) error {

@@ -17,7 +17,15 @@ func (a *RuntimeAdapter) Detect(context.Context) (bridgeRuntime.Installation, er
 	return bridgeRuntime.Installation{ID: a.ID()}, nil
 }
 func (a *RuntimeAdapter) Capabilities(context.Context) (bridgeRuntime.Capabilities, error) {
-	return bridgeRuntime.Capabilities{RuntimeVersion: "claude-process-v2", ObservedAt: time.Now().UTC(), Start: true, Resume: true, Steer: true, Interrupt: true, Close: true, AuthRecovery: true, Usage: true, NativeApprovalModes: []bridgeRuntime.ApprovalMode{bridgeRuntime.ApprovalAskEveryTime, bridgeRuntime.ApprovalProviderDefault}}, nil
+	return bridgeRuntime.Capabilities{
+		RuntimeVersion: "claude-process-v2", ObservedAt: time.Now().UTC(),
+		Start: true, Resume: true, Steer: true, Interrupt: true, Close: true, AuthRecovery: true, Usage: true,
+		NativeApprovalModes: []bridgeRuntime.ApprovalMode{
+			bridgeRuntime.ApprovalAutoWithinPolicy,
+			bridgeRuntime.ApprovalAskEveryTime,
+			bridgeRuntime.ApprovalProviderDefault,
+		},
+	}, nil
 }
 func (a *RuntimeAdapter) Start(ctx context.Context, request bridgeRuntime.StartRequest, sink kernel.EventSink) (bridgeRuntime.Session, error) {
 	taskID, err := provider.NewID(request.TaskID)

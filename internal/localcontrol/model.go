@@ -59,9 +59,16 @@ type ProviderInfo struct {
 	ID           string `json:"id"`
 	DefaultModel string `json:"default_model,omitempty"`
 	// Models is retained as the model-ID-only compatibility view.
-	Models        []string        `json:"models,omitempty"`
-	ModelProfiles []ProviderModel `json:"model_profiles,omitempty"`
-	Available     bool            `json:"available"`
+	Models        []string               `json:"models,omitempty"`
+	ModelProfiles []ProviderModel        `json:"model_profiles,omitempty"`
+	ApprovalModes []ProviderApprovalMode `json:"approval_modes,omitempty"`
+	Available     bool                   `json:"available"`
+}
+
+type ProviderApprovalMode struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type ProviderModel struct {
@@ -132,6 +139,7 @@ type TaskView struct {
 	RuntimeID        string                     `json:"runtime_id,omitempty"`
 	CommitSHA        string                     `json:"commit_sha,omitempty"`
 	PushRef          string                     `json:"push_ref,omitempty"`
+	FailureReason    string                     `json:"failure_reason,omitempty"`
 	CreatedAt        time.Time                  `json:"created_at"`
 	UpdatedAt        time.Time                  `json:"updated_at"`
 }

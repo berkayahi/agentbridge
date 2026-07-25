@@ -2,6 +2,8 @@ package claude
 
 import (
 	"context"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/kernel"
@@ -13,11 +15,51 @@ type RuntimeAdapter struct{ native *Adapter }
 
 func NewRuntimeAdapter(native *Adapter) *RuntimeAdapter { return &RuntimeAdapter{native: native} }
 func (a *RuntimeAdapter) ID() string                    { return "claude" }
-func (a *RuntimeAdapter) Detect(context.Context) (bridgeRuntime.Installation, error) {
-	return bridgeRuntime.Installation{ID: a.ID()}, nil
+func (a *RuntimeAdapter) Detect(ctx context.Context) (bridgeRuntime.Installation, error) {
+	executable := strings.TrimSpace(a.native.process.Executable)
+	if executable == "" {
+		executable = "claude"
+	}
+	path, err := exec.LookPath(executable)
+	if err != nil {
+		return bridgeRuntime.Installation{}, err
+	}
+	output, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return bridgeRuntime.Installation{}, err
+	}
+	version := strings.TrimSpace(string(output))
+	version = strings.TrimSpace(strings.TrimSuffix(version, "(Claude Code)"))
+	return bridgeRuntime.Installation{ID: a.ID(), Version: version, Path: path}, nil
 }
-func (a *RuntimeAdapter) Capabilities(context.Context) (bridgeRuntime.Capabilities, error) {
-	return bridgeRuntime.Capabilities{RuntimeVersion: "claude-process-v2", ObservedAt: time.Now().UTC(), Start: true, Resume: true, Steer: true, Interrupt: true, Close: true, AuthRecovery: true, Usage: true, NativeApprovalModes: []bridgeRuntime.ApprovalMode{bridgeRuntime.ApprovalAskEveryTime, bridgeRuntime.ApprovalProviderDefault}}, nil
+func (a *RuntimeAdapter) Capabilities(ctx context.Context) (bridgeRuntime.Capabilities, error) {
+	installation, err := a.Detect(ctx)
+	if err != nil {
+		return bridgeRuntime.Capabilities{}, err
+	}
+	catalog, err := a.native.ExecutionCatalog(ctx)
+	if err != nil {
+		return bridgeRuntime.Capabilities{}, err
+	}
+	capabilities := bridgeRuntime.Capabilities{
+		RuntimeVersion: installation.Version, ObservedAt: time.Now().UTC(),
+		Start: true, Resume: true, Steer: true, Interrupt: true, Close: true, AuthRecovery: true, Usage: true,
+	}
+	seenEfforts := make(map[string]struct{})
+	for _, model := range catalog.Models {
+		capabilities.Models = append(capabilities.Models, bridgeRuntime.Model{ID: model.ID})
+		for _, effort := range model.ReasoningEfforts {
+			if _, seen := seenEfforts[effort.ID]; seen {
+				continue
+			}
+			seenEfforts[effort.ID] = struct{}{}
+			capabilities.ReasoningProfiles = append(capabilities.ReasoningProfiles, bridgeRuntime.ReasoningProfile{ID: effort.ID})
+		}
+	}
+	for _, mode := range catalog.ApprovalModes {
+		capabilities.NativeApprovalModes = append(capabilities.NativeApprovalModes, bridgeRuntime.ApprovalMode(mode.ID))
+	}
+	return capabilities, nil
 }
 func (a *RuntimeAdapter) Start(ctx context.Context, request bridgeRuntime.StartRequest, sink kernel.EventSink) (bridgeRuntime.Session, error) {
 	taskID, err := provider.NewID(request.TaskID)

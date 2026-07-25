@@ -56,20 +56,27 @@ type RepositoryCatalog interface {
 // is reported rather than filtered so a client can explain why a runtime cannot
 // be chosen instead of silently omitting it.
 type ProviderInfo struct {
-	ID           string `json:"id"`
-	DefaultModel string `json:"default_model,omitempty"`
-	// Models is retained as the model-ID-only compatibility view.
-	Models        []string        `json:"models,omitempty"`
-	ModelProfiles []ProviderModel `json:"model_profiles,omitempty"`
-	Available     bool            `json:"available"`
+	ID                  string `json:"id"`
+	DefaultModel        string `json:"default_model,omitempty"`
+	DefaultApprovalMode string `json:"default_approval_mode,omitempty"`
+	// Models is retained as the selectable-value-only compatibility view.
+	// ModelAliases identifies values whose provider resolves them dynamically.
+	Models        []string               `json:"models,omitempty"`
+	ModelAliases  []string               `json:"model_aliases,omitempty"`
+	ModelProfiles []ProviderModel        `json:"model_profiles,omitempty"`
+	ApprovalModes []ProviderApprovalMode `json:"approval_modes,omitempty"`
+	Available     bool                   `json:"available"`
 }
 
 type ProviderModel struct {
-	ID                        string                    `json:"id"`
-	DisplayName               string                    `json:"display_name,omitempty"`
-	Description               string                    `json:"description,omitempty"`
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Aliases are additional selectable values with this model's capabilities.
+	Aliases                   []string                  `json:"aliases,omitempty"`
 	DefaultReasoningEffort    string                    `json:"default_reasoning_effort,omitempty"`
 	SupportedReasoningEfforts []ProviderReasoningEffort `json:"supported_reasoning_efforts,omitempty"`
+	SupportedApprovalModes    []string                  `json:"supported_approval_modes,omitempty"`
 }
 
 type ProviderReasoningEffort struct {
@@ -78,6 +85,11 @@ type ProviderReasoningEffort struct {
 	// Kind is "reasoning" for ordinary depth controls and "orchestration" for
 	// provider values that also enable automatic delegation.
 	Kind string `json:"kind"`
+}
+
+type ProviderApprovalMode struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
 }
 
 // ProviderCatalog reports the configured provider runtimes and their default

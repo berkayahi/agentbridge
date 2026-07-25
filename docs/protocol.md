@@ -23,7 +23,8 @@ A task may select a provider-neutral execution profile:
 ```json
 {
   "model": "gpt-5.6-sol",
-  "reasoning_effort": "high"
+  "reasoning_effort": "high",
+  "approval_mode": "default"
 }
 ```
 
@@ -32,12 +33,13 @@ A task may select a provider-neutral execution profile:
 execution profile with an empty `reasoning_effort`. If both `model` and
 `execution_profile.model` are supplied, they must match.
 
-The provider catalog's compatibility `models` list contains model IDs.
-`model_profiles` is the authoritative capability view: every model carries
-only its own `supported_reasoning_efforts`, including the provider-reported
-default. Each effort has a `kind` of `reasoning` or `orchestration`. Clients
-must not form a model/effort combination that is absent from the same model
-entry.
+The provider catalog's compatibility `models` list contains selectable model
+values; `model_aliases` identifies selectors that the provider resolves
+dynamically. `model_profiles` is the authoritative capability view: every
+model or selector carries only its own `supported_reasoning_efforts`,
+`supported_approval_modes`, and provider-reported defaults. Each effort has a
+`kind` of `reasoning` or `orchestration`. Clients must not form a
+model/effort/approval combination that is absent from the same model entry.
 
 Codex app-server 0.145.0 advertises Ultra through the `reasoningEffort` catalog
 field and accepts it through `turn/start.effort`; its older `multiAgentMode`
@@ -57,6 +59,23 @@ catalog. The profile is stored on the canonical task, included in
 `task_created` events, sent in paired-device execution manifests, and reused
 unchanged for initial start and restart/resume. An unsupported combination is
 rejected; there is no provider-default fallback for an explicit profile.
+
+Claude Code exposes an SDK initialization handshake whose `models` result is
+filtered for the authenticated account and active policy. AgentBridge uses a
+no-turn, non-persistent initialization probe and publishes those selectors,
+their aliases, exact per-selector effort levels, effort defaults, and
+model-dependent approval-mode support. It does not infer availability from the
+models compiled into the Claude executable.
+
+The inspected Claude Code 2.1.176 runtime currently returns `default`,
+`opus[1m]`, `claude-fable-5[1m]`, `sonnet`, and `haiku`. Opus, Fable, and the
+default expose `low`, `medium`, `high`, `xhigh`, and `max`; Sonnet omits
+`xhigh`; Haiku reports no effort control. The executable accepts the native
+approval modes `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, and
+`bypassPermissions` through `--permission-mode`; this release reports `auto`
+as its default, and the catalog includes `auto` only on selectors whose SDK
+metadata reports support. These native strings are preserved in the execution
+profile and supplied on both initial start and resume.
 
 Run `make proto` after installing the pinned Buf plugins. `make proto-check`
 must resolve exactly one latest stable protocol tag after the bootstrap

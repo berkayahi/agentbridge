@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -511,16 +512,26 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 				return nil, fmt.Errorf("load %s execution catalog: %w", id, catalogErr)
 			}
 			profile.Models = profile.Models[:0]
+			profile.ModelAliases = append([]string(nil), catalog.ModelAliases...)
 			profile.ModelProfiles = make([]localcontrol.ProviderModel, 0, len(catalog.Models))
+			profile.DefaultApprovalMode = catalog.DefaultApprovalMode
+			profile.ApprovalModes = make([]localcontrol.ProviderApprovalMode, 0, len(catalog.ApprovalModes))
+			for _, mode := range catalog.ApprovalModes {
+				profile.ApprovalModes = append(profile.ApprovalModes, localcontrol.ProviderApprovalMode{
+					ID: mode.ID, Description: mode.Description,
+				})
+			}
 			configuredDefaultAvailable := false
 			for _, model := range catalog.Models {
 				profile.Models = append(profile.Models, model.ID)
-				if model.ID == profile.DefaultModel {
+				if model.ID == profile.DefaultModel || slices.Contains(model.Aliases, profile.DefaultModel) {
 					configuredDefaultAvailable = true
 				}
 				detail := localcontrol.ProviderModel{
 					ID: model.ID, DisplayName: model.DisplayName, Description: model.Description,
+					Aliases:                append([]string(nil), model.Aliases...),
 					DefaultReasoningEffort: model.DefaultReasoningEffort,
+					SupportedApprovalModes: append([]string(nil), model.ApprovalModes...),
 				}
 				for _, effort := range model.ReasoningEfforts {
 					detail.SupportedReasoningEfforts = append(detail.SupportedReasoningEfforts, localcontrol.ProviderReasoningEffort{

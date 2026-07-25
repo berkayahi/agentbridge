@@ -5,15 +5,16 @@ import (
 	"testing"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 type recordingSpawner struct {
-	model  string
+	config ProcessConfig
 	runner *stubRunner
 }
 
 func (s *recordingSpawner) Spawn(_ context.Context, cfg ProcessConfig) (Runner, error) {
-	s.model = cfg.Model
+	s.config = cfg
 	s.runner = &stubRunner{events: make(chan provider.Event)}
 	return s.runner, nil
 }
@@ -49,7 +50,9 @@ func TestSpawnUsesTheChosenModelOnStartAndResume(t *testing.T) {
 			_, _, err := a.Resume(context.Background(), provider.ResumeRequest{
 				TaskID:  provider.MustID("task-1"),
 				Session: provider.Session{ID: provider.MustID("session-1"), TaskID: provider.MustID("task-1"), ExternalID: "session-1"},
-				Input:   provider.Input{Text: "continue"}, Model: "sonnet",
+				Input:   provider.Input{Text: "continue"}, ExecutionProfile: workmodel.ExecutionProfile{
+					Model: "sonnet", ReasoningEffort: "xhigh", ApprovalMode: "default",
+				},
 			})
 			return err
 		}, "sonnet"},
@@ -60,8 +63,12 @@ func TestSpawnUsesTheChosenModelOnStartAndResume(t *testing.T) {
 			if err := testCase.fly(adapter); err != nil {
 				t.Fatal(err)
 			}
-			if spawner.model != testCase.want {
-				t.Fatalf("spawned model = %q, want %q", spawner.model, testCase.want)
+			if spawner.config.Model != testCase.want {
+				t.Fatalf("spawned model = %q, want %q", spawner.config.Model, testCase.want)
+			}
+			if testCase.name == "resume keeps the model she left with" &&
+				(spawner.config.ReasoningEffort != "xhigh" || spawner.config.ApprovalMode != "default") {
+				t.Fatalf("spawned profile = %#v", spawner.config)
 			}
 		})
 	}

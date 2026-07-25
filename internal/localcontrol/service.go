@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1539,26 +1540,47 @@ func (s *Service) checkExecutionProfile(ctx context.Context, runtimeID string, e
 		if modelID == "" {
 			modelID = profile.DefaultModel
 		}
-		if executionProfile.ReasoningEffort == "" {
-			for _, offered := range profile.Models {
-				if offered == modelID {
+		var selectedModel *ProviderModel
+		for index := range profile.ModelProfiles {
+			model := &profile.ModelProfiles[index]
+			if model.ID == modelID || slices.Contains(model.Aliases, modelID) {
+				selectedModel = model
+				break
+			}
+		}
+		if executionProfile.Model != "" || executionProfile.ReasoningEffort != "" {
+			if selectedModel == nil && slices.Contains(profile.Models, modelID) {
+				selectedModel = &ProviderModel{ID: modelID}
+			}
+			if selectedModel == nil {
+				return fmt.Errorf("%w: model %q is not available for runtime %q", ErrInvalidRequest, modelID, runtimeID)
+			}
+			if executionProfile.ReasoningEffort != "" {
+				supported := false
+				for _, effort := range selectedModel.SupportedReasoningEfforts {
+					if effort.ID == executionProfile.ReasoningEffort {
+						supported = true
+						break
+					}
+				}
+				if !supported {
+					return fmt.Errorf("%w: reasoning effort %q is not supported by model %q", ErrInvalidRequest, executionProfile.ReasoningEffort, modelID)
+				}
+			}
+		}
+		if executionProfile.ApprovalMode != "" {
+			if selectedModel != nil && len(selectedModel.SupportedApprovalModes) > 0 &&
+				!slices.Contains(selectedModel.SupportedApprovalModes, executionProfile.ApprovalMode) {
+				return fmt.Errorf("%w: approval mode %q is not supported by model %q", ErrInvalidRequest, executionProfile.ApprovalMode, modelID)
+			}
+			for _, mode := range profile.ApprovalModes {
+				if mode.ID == executionProfile.ApprovalMode {
 					return nil
 				}
 			}
-			return fmt.Errorf("%w: model %q is not available for runtime %q", ErrInvalidRequest, modelID, runtimeID)
+			return fmt.Errorf("%w: approval mode %q is not supported by runtime %q", ErrInvalidRequest, executionProfile.ApprovalMode, runtimeID)
 		}
-		for _, model := range profile.ModelProfiles {
-			if model.ID != modelID {
-				continue
-			}
-			for _, effort := range model.SupportedReasoningEfforts {
-				if effort.ID == executionProfile.ReasoningEffort {
-					return nil
-				}
-			}
-			return fmt.Errorf("%w: reasoning effort %q is not supported by model %q", ErrInvalidRequest, executionProfile.ReasoningEffort, modelID)
-		}
-		return fmt.Errorf("%w: model %q is not available for runtime %q", ErrInvalidRequest, modelID, runtimeID)
+		return nil
 	}
 	return fmt.Errorf("%w: %s", ErrUnknownProvider, runtimeID)
 }
@@ -1566,6 +1588,7 @@ func (s *Service) checkExecutionProfile(ctx context.Context, runtimeID string, e
 func normalizeExecutionProfile(value workmodel.ExecutionProfile) workmodel.ExecutionProfile {
 	value.Model = strings.TrimSpace(value.Model)
 	value.ReasoningEffort = strings.TrimSpace(value.ReasoningEffort)
+	value.ApprovalMode = strings.TrimSpace(value.ApprovalMode)
 	return value
 }
 

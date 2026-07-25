@@ -25,10 +25,11 @@ func (p Provider) Valid() bool {
 type ExecutionProfile struct {
 	Model           string `json:"model,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	ApprovalMode    string `json:"approval_mode,omitempty"`
 }
 
 func (p ExecutionProfile) Empty() bool {
-	return p.Model == "" && p.ReasoningEffort == ""
+	return p.Model == "" && p.ReasoningEffort == "" && p.ApprovalMode == ""
 }
 
 // TaskController identifies the durable controller that owns execution of a

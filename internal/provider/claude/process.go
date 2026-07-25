@@ -32,6 +32,8 @@ type ProcessConfig struct {
 	MCPConfigPath   string
 	ClaudeConfigDir string
 	Model           string
+	ReasoningEffort string
+	ApprovalMode    string
 	ControlSocket   string
 	Capability      []byte
 	Environment     []string
@@ -67,12 +69,18 @@ func (OSSpawner) Spawn(ctx context.Context, cfg ProcessConfig) (Runner, error) {
 	return StartProcess(ctx, cfg)
 }
 
-func CommandArgs(mcpConfigPath, resumeSession, model string) []string {
+func CommandArgs(mcpConfigPath, resumeSession, model, reasoningEffort, approvalMode string) []string {
 	args := []string{
 		"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
 		"--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval",
 		"--mcp-config", mcpConfigPath,
 		"--model", model,
+	}
+	if reasoningEffort != "" {
+		args = append(args, "--effort", reasoningEffort)
+	}
+	if approvalMode != "" {
+		args = append(args, "--permission-mode", approvalMode)
 	}
 	if resumeSession != "" {
 		args = append(args, "--resume", resumeSession)
@@ -161,7 +169,7 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 	if !cfg.TaskID.Valid() || cfg.Model == "" || !filepath.IsAbs(cfg.ControlSocket) || len(cfg.Capability) == 0 || len(cfg.Capability) > maxCapabilityBytes {
 		return nil, errors.New("incomplete task-scoped Claude process configuration")
 	}
-	args := CommandArgs(cfg.MCPConfigPath, cfg.ResumeSession, cfg.Model)
+	args := CommandArgs(cfg.MCPConfigPath, cfg.ResumeSession, cfg.Model, cfg.ReasoningEffort, cfg.ApprovalMode)
 	if cfg.testArgs != nil {
 		args = cfg.testArgs
 	}

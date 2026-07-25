@@ -8,7 +8,7 @@ CLI paths remain runtime-configurable so operators can upgrade independently.
 | Integration | Validated version | Validation contract |
 |---|---:|---|
 | Codex CLI app server | 0.145.0 | Generated v2 schema, initialize handshake, live model/reasoning catalog, execution profiles across thread/turn start and resume, approvals, account usage |
-| Claude Code stream JSON | 2.1.176 | Stream JSON session lifecycle and status-line input |
+| Claude Code stream JSON | 2.1.176 | Stream JSON session lifecycle, SDK model/effort catalog, native approval profiles, and status-line input |
 
 ## Upgrade procedure
 

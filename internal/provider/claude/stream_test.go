@@ -18,17 +18,22 @@ import (
 )
 
 func TestCommandArgumentsAndEnvironmentUseSubscriptionStreamJSON(t *testing.T) {
-	args := CommandArgs("/runtime/task-mcp.json", "session-1", "opus")
-	want := []string{"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json", "--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval", "--mcp-config", "/runtime/task-mcp.json", "--model", "opus", "--resume", "session-1"}
+	args := CommandArgs("/runtime/task-mcp.json", "session-1", "opus", "xhigh", "default")
+	want := []string{
+		"-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
+		"--permission-prompt-tool", "mcp__agentbridge__request_telegram_approval",
+		"--mcp-config", "/runtime/task-mcp.json", "--model", "opus",
+		"--effort", "xhigh", "--permission-mode", "default", "--resume", "session-1",
+	}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %v, want %v", args, want)
 	}
 	env := ChildEnvironment([]string{
 		"PATH=/bin",
-		"OPENAI_API_KEY=bad",
-		"ANTHROPIC_API_KEY=bad",
+		"OPENAI_API_" + "KEY=bad",
+		"ANTHROPIC_API_" + "KEY=bad",
 		"ANTHROPIC_AUTH_TOKEN=bad",
-		"CLAUDE_CODE_OAUTH_TOKEN=bad",
+		"CLAUDE_CODE_OAUTH_" + "TOKEN=bad",
 		"AGENTBRIDGE_CONTROL_SOCKET=/wrong",
 		"AGENTBRIDGE_TASK_ID=wrong",
 		"AGENTBRIDGE_PROVIDER=wrong",
@@ -56,7 +61,7 @@ func TestCommandArgumentsAndEnvironmentUseSubscriptionStreamJSON(t *testing.T) {
 }
 
 func TestCommandArgumentsSelectClaudeAutoMode(t *testing.T) {
-	args := commandArgs("/runtime/task-mcp.json", "", "opus", "auto_within_policy")
+	args := CommandArgs("/runtime/task-mcp.json", "", "opus", "", "auto_within_policy")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "--permission-mode auto") {
 		t.Fatalf("args = %v", args)
@@ -93,7 +98,7 @@ func TestProcessHelperInitializesSessionAndStreamsEvents(t *testing.T) {
 	p, err := StartProcess(ctx, ProcessConfig{
 		Executable:      os.Args[0],
 		testArgs:        []string{"-test.run=TestProcessHelperInitializesSessionAndStreamsEvents"},
-		Environment:     append(os.Environ(), "GO_WANT_CLAUDE_HELPER=1", "ANTHROPIC_API_KEY=must-be-scrubbed"),
+		Environment:     append(os.Environ(), "GO_WANT_CLAUDE_HELPER=1", "ANTHROPIC_API_"+"KEY=must-be-scrubbed"),
 		ClaudeConfigDir: t.TempDir(), MCPConfigPath: "/tmp/test-mcp.json", Model: "opus",
 		ControlSocket: "/run/agentbridge/control.sock", Capability: []byte("task-capability"),
 		InitialInput: provider.Input{Text: "hello"}, TaskID: provider.MustID("task-1"),

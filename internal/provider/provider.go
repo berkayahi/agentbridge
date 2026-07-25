@@ -151,13 +151,23 @@ type Model struct {
 	ID                     string
 	DisplayName            string
 	Description            string
+	Aliases                []string
 	DefaultReasoningEffort string
 	ReasoningEfforts       []ReasoningEffort
+	ApprovalModes          []string
+}
+
+type ApprovalMode struct {
+	ID          string
+	Description string
 }
 
 type ExecutionCatalog struct {
-	DefaultModel string
-	Models       []Model
+	DefaultModel        string
+	Models              []Model
+	ModelAliases        []string
+	DefaultApprovalMode string
+	ApprovalModes       []ApprovalMode
 }
 
 // ExecutionCatalogProvider is optional because not every provider protocol

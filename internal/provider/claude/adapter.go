@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -65,33 +66,40 @@ func NewAdapter(cfg AdapterConfig) *Adapter {
 func (a *Adapter) Name() workmodel.Provider { return workmodel.ClaudeSubscription }
 
 func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
-	if request.Model == "" {
-		request.Model = request.ExecutionProfile.Model
-	}
-	return a.start(ctx, request.TaskID, request.Input, "", request.ExecutionProfile, request.Model)
+	profile := claudeExecutionProfile(request.ExecutionProfile, request.Model)
+	return a.start(ctx, request.TaskID, request.Input, "", profile)
 }
 
 func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
-	if request.Model == "" {
-		request.Model = request.ExecutionProfile.Model
-	}
+	profile := claudeExecutionProfile(request.ExecutionProfile, request.Model)
 	resume := request.Session.ExternalID
 	if resume == "" {
 		resume = request.Session.ID.String()
 	}
-	return a.start(ctx, request.TaskID, request.Input, resume, request.ExecutionProfile, request.Model)
+	return a.start(ctx, request.TaskID, request.Input, resume, profile)
 }
 
-func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume string, profile workmodel.ExecutionProfile, model string) (provider.Session, <-chan provider.Event, error) {
+func claudeExecutionProfile(profile workmodel.ExecutionProfile, legacyModel string) workmodel.ExecutionProfile {
+	profile.Model = strings.TrimSpace(profile.Model)
+	profile.ReasoningEffort = strings.TrimSpace(profile.ReasoningEffort)
+	profile.ApprovalMode = strings.TrimSpace(profile.ApprovalMode)
+	if profile.Model == "" {
+		profile.Model = strings.TrimSpace(legacyModel)
+	}
+	return profile
+}
+
+func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume string, profile workmodel.ExecutionProfile) (provider.Session, <-chan provider.Event, error) {
 	cfg := a.process
 	cfg.TaskID, cfg.InitialInput, cfg.ResumeSession = taskID, input, resume
-	cfg.ApprovalMode = profile.ApprovalMode
 	// An empty model means the operator chose nothing, which is the configured
 	// default. A resume passes the model the session was dispatched with, so a
 	// restart cannot quietly move a session onto a different model.
-	if model != "" {
-		cfg.Model = model
+	if profile.Model != "" {
+		cfg.Model = profile.Model
 	}
+	cfg.ReasoningEffort = profile.ReasoningEffort
+	cfg.ApprovalMode = profile.ApprovalMode
 	revoke := func() {}
 	if a.scope != nil {
 		scope, err := a.scope(taskID)

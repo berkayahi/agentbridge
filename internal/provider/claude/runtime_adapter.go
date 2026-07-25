@@ -40,7 +40,7 @@ func (a *RuntimeAdapter) Resume(ctx context.Context, request bridgeRuntime.Resum
 	if !ok {
 		return bridgeRuntime.Session{}, bridgeRuntime.ErrInvalidSession
 	}
-	session, events, err := a.native.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: native, Input: bridgeRuntime.ProviderInput(request.Input)})
+	session, events, err := a.native.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: native, Input: bridgeRuntime.ProviderInput(request.Input), Model: request.Model})
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}

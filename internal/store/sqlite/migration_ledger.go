@@ -94,6 +94,10 @@ func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQuery
 	if err != nil {
 		return err
 	}
+	taskModelSchemaChecksum, err := taskModelChecksum()
+	if err != nil {
+		return err
+	}
 	expected := map[int]struct {
 		name     string
 		checksum string
@@ -107,6 +111,7 @@ func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQuery
 		taskCursorVersion:      {name: taskCursorName, checksum: taskCursorSchemaChecksum},
 		remoteCursorVersion:    {name: remoteCursorName, checksum: remoteCursorSchemaChecksum},
 		controllerOwnerVersion: {name: controllerOwnerName, checksum: controllerOwnerSchemaChecksum},
+		taskModelVersion:       {name: taskModelName, checksum: taskModelSchemaChecksum},
 	}
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum, structural_fingerprint, applied_at FROM migration_ledger ORDER BY version`)
 	if err != nil {
@@ -156,5 +161,19 @@ func contiguousMigrationVersions(versions []int) bool {
 			return false
 		}
 	}
-	return versions[len(versions)-1] <= controllerOwnerVersion
+	return versions[len(versions)-1] <= latestV2MigrationVersion()
+}
+
+// latestV2MigrationVersion is read from the migration definitions rather than
+// pinned to a constant: a ledger may never run ahead of the code, and every
+// added migration used to need this ceiling raised by hand or the daemon
+// refused its own freshly migrated database.
+func latestV2MigrationVersion() int {
+	latest := executionKernelVersion
+	for _, migration := range v2MigrationDefinitions() {
+		if migration.version > latest {
+			latest = migration.version
+		}
+	}
+	return latest
 }

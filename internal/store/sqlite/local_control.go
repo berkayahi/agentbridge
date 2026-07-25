@@ -190,8 +190,8 @@ func (s *RuntimeStore) createTaskInContext(ctx context.Context, projectID, board
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, active_execution_id, controller_owner, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, workmodel.Queued, value.Provider, executionID, workmodel.TaskControllerLocal, timestamp(now), timestamp(now)); err != nil {
+		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, active_execution_id, controller_owner, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, workmodel.Queued, value.Provider, value.Model, executionID, workmodel.TaskControllerLocal, timestamp(now), timestamp(now)); err != nil {
 		return localcontrol.Event{}, runtimeConflict("insert local task", err)
 	}
 	if _, err := tx.ExecContext(ctx, `

@@ -67,8 +67,8 @@ func (s *RuntimeStore) CreateTask(ctx context.Context, value workmodel.Task, ini
 		return fmt.Errorf("bind v2 task repository: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, active_execution_id, controller_owner, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, executionID, workmodel.TaskControllerStandalone, timestamp(now), timestamp(now)); err != nil {
+		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, active_execution_id, controller_owner, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, value.Model, executionID, workmodel.TaskControllerStandalone, timestamp(now), timestamp(now)); err != nil {
 		return runtimeConflict("insert v2 local task", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
@@ -231,7 +231,7 @@ func (s *RuntimeStore) queryRuntimeTasks(ctx context.Context, query string, args
 }
 
 const runtimeTaskColumns = `SELECT
-	l.id, l.repo_profile_id, l.title, l.prompt, l.state, l.provider, l.revision, l.controller_owner,
+	l.id, l.repo_profile_id, l.title, l.prompt, l.state, l.provider, l.model, l.revision, l.controller_owner,
 	COALESCE(p.telegram_chat_id, 0), COALESCE(p.telegram_message_id, 0),
 	l.base_sha, l.worktree_path, l.provider_session_id, l.provider_thread_id,
 	l.commit_sha, l.push_ref, l.deployment_url, l.failure_reason,
@@ -243,7 +243,7 @@ func scanRuntimeTask(row scanner) (workmodel.Task, error) {
 	var created, updated string
 	var started, finished sql.NullString
 	if err := row.Scan(&value.ID, &value.RepoProfileID, &value.Title, &value.Prompt, &value.State, &value.Provider,
-		&value.Revision, &value.ControllerOwner, &value.TelegramChatID, &value.TelegramMessageID, &value.BaseSHA, &value.WorktreePath,
+		&value.Model, &value.Revision, &value.ControllerOwner, &value.TelegramChatID, &value.TelegramMessageID, &value.BaseSHA, &value.WorktreePath,
 		&value.ProviderSessionID, &value.ProviderThreadID, &value.CommitSHA, &value.PushRef,
 		&value.DeploymentURL, &value.FailureReason, &created, &updated, &started, &finished); err != nil {
 		return workmodel.Task{}, runtimeNotFound("scan v2 task", err)

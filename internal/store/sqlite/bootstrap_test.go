@@ -36,8 +36,8 @@ func TestOpenV2FreshBootstrap(t *testing.T) {
 	if err := check.QueryRow("SELECT COUNT(*) FROM migration_ledger").Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerRows != 9 {
-		t.Fatalf("v2 migration ledger rows = %d, want 9", ledgerRows)
+	if want := latestV2MigrationVersion() - executionKernelVersion + 1; ledgerRows != want {
+		t.Fatalf("v2 migration ledger rows = %d, want %d", ledgerRows, want)
 	}
 	if _, err := Open(context.Background(), path); err == nil {
 		t.Fatal("legacy Open accepted an existing v2 database")
@@ -75,8 +75,8 @@ func TestOpenV2MigratesPriorV2Prefix(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM migration_ledger").Scan(&ledgerRows); err != nil {
 		t.Fatal(err)
 	}
-	if ledgerRows != 9 {
-		t.Fatalf("migrated v2 ledger rows = %d, want 9", ledgerRows)
+	if want := latestV2MigrationVersion() - executionKernelVersion + 1; ledgerRows != want {
+		t.Fatalf("migrated v2 ledger rows = %d, want %d", ledgerRows, want)
 	}
 	var counterTable int
 	if err := store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'local_device_link_counters'").Scan(&counterTable); err != nil {

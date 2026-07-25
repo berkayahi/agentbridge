@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/spool"
 	"github.com/goccy/go-yaml"
@@ -93,6 +94,23 @@ type TelegramConfig struct {
 type ProviderConfig struct {
 	Executable string `yaml:"executable"`
 	Model      string `yaml:"model"`
+	// Models is the set of models a keeper may choose from at dispatch. It is
+	// curated here on purpose: model names change every few months, so a list
+	// compiled into the daemon would go stale and start offering models that no
+	// longer exist. Absent, the default is the only choice.
+	Models []string `yaml:"models,omitempty"`
+}
+
+// Catalog reports the models this provider may be dispatched with, the
+// configured default first, and never invents one that was not configured.
+func (p ProviderConfig) Catalog() []string {
+	if len(p.Models) > 0 {
+		return append([]string(nil), p.Models...)
+	}
+	if strings.TrimSpace(p.Model) == "" {
+		return nil
+	}
+	return []string{p.Model}
 }
 
 type RepositoryProfile struct {

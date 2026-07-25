@@ -75,8 +75,11 @@ func TestRuntimeStorePersistsStandaloneTaskInV2Lineage(t *testing.T) {
 	if err := data.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM migration_ledger").Scan(&v2Ledgers); err != nil {
 		t.Fatal(err)
 	}
-	if legacyTables != 0 || v2Ledgers != 9 {
-		t.Fatalf("legacy tables=%d v2 ledgers=%d", legacyTables, v2Ledgers)
+	// One ledger row per applied migration, from the execution kernel to the
+	// newest one: counted from the definitions so adding a migration does not
+	// need this number edited by hand.
+	if wantLedgers := latestV2MigrationVersion() - executionKernelVersion + 1; legacyTables != 0 || v2Ledgers != wantLedgers {
+		t.Fatalf("legacy tables=%d v2 ledgers=%d, want %d ledgers", legacyTables, v2Ledgers, wantLedgers)
 	}
 	if err := data.Close(); err != nil {
 		t.Fatal(err)

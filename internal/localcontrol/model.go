@@ -58,7 +58,12 @@ type RepositoryCatalog interface {
 type ProviderInfo struct {
 	ID           string `json:"id"`
 	DefaultModel string `json:"default_model,omitempty"`
-	Available    bool   `json:"available"`
+	// Models is what a keeper may choose between for this runtime, the default
+	// first. It reports only what the host configured: a model list compiled
+	// into the daemon would be stale within months, and offering a model that
+	// no longer exists is inventing data.
+	Models    []string `json:"models,omitempty"`
+	Available bool     `json:"available"`
 }
 
 // ProviderCatalog reports the configured provider runtimes and their default
@@ -104,6 +109,7 @@ type TaskView struct {
 	Title            string             `json:"title"`
 	Prompt           string             `json:"prompt"`
 	Provider         workmodel.Provider `json:"provider"`
+	Model            string             `json:"model,omitempty"`
 	State            workmodel.State    `json:"state"`
 	Revision         int64              `json:"revision"`
 	ExecutionID      string             `json:"execution_id,omitempty"`
@@ -183,6 +189,7 @@ type CreateTaskRequest struct {
 	RepositoryID   string             `json:"repository_id"`
 	TargetDeviceID string             `json:"target_device_id,omitempty"`
 	Provider       workmodel.Provider `json:"provider"`
+	Model          string             `json:"model,omitempty"`
 	Title          string             `json:"title"`
 	Prompt         string             `json:"prompt"`
 	IdempotencyKey string             `json:"idempotency_key"`

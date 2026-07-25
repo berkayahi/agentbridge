@@ -31,6 +31,7 @@ type ResumeRequest struct {
 	TaskID, ExecutionID string
 	Session             Session
 	Input               kernel.Input
+	Model               string
 }
 type ApprovalDecision struct {
 	RequestID, TaskID, ExecutionID, UserID string

@@ -121,6 +121,10 @@ type ResumeRequest struct {
 	TaskID  ID
 	Session Session
 	Input   Input
+	// Model is the model this session was dispatched with. A resume must carry
+	// it or the session silently continues on the provider's default, which is
+	// not what the operator chose.
+	Model string
 }
 
 type ApprovalDecision struct {

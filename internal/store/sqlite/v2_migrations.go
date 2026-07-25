@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql
+//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql schema/019_task_model.sql
 var localControlSchemaFS embed.FS
 
 const (
@@ -30,6 +30,8 @@ const (
 	remoteCursorName       = "017_remote_observation_cursors.sql"
 	controllerOwnerVersion = 18
 	controllerOwnerName    = "018_controller_ownership.sql"
+	taskModelVersion       = 19
+	taskModelName          = "019_task_model.sql"
 )
 
 type v2Migration struct {
@@ -47,6 +49,7 @@ func v2MigrationDefinitions() []v2Migration {
 		{version: taskCursorVersion, name: taskCursorName},
 		{version: remoteCursorVersion, name: remoteCursorName},
 		{version: controllerOwnerVersion, name: controllerOwnerName},
+		{version: taskModelVersion, name: taskModelName},
 	}
 }
 
@@ -156,6 +159,22 @@ func remoteCursorSchema() (string, error) {
 
 func remoteCursorChecksum() (string, error) {
 	contents, err := remoteCursorSchema()
+	if err != nil {
+		return "", err
+	}
+	return checksum(contents), nil
+}
+
+func taskModelSchema() (string, error) {
+	contents, err := localControlSchemaFS.ReadFile("schema/019_task_model.sql")
+	if err != nil {
+		return "", fmt.Errorf("read task model schema: %w", err)
+	}
+	return string(contents), nil
+}
+
+func taskModelChecksum() (string, error) {
+	contents, err := taskModelSchema()
 	if err != nil {
 		return "", err
 	}

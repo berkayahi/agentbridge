@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -347,3 +348,47 @@ repositories:
       - argv: ["go", "test", "./..."]
         dir: .
 `
+
+// A keeper curates the models they may choose from; the daemon must not invent
+// or outlive that list. Each entry faces exactly the checks the default faces,
+// and the default must be among them, or an unchosen dispatch would fly a model
+// the app never offered.
+func TestProviderModelCatalog(t *testing.T) {
+	for _, testCase := range []struct {
+		name    string
+		models  []string
+		model   string
+		want    []string
+		wantErr bool
+	}{
+		{name: "absent list offers only the default", model: "gpt-5.6-terra", want: []string{"gpt-5.6-terra"}},
+		{name: "curated list is offered in order", model: "gpt-5.6-terra", models: []string{"gpt-5.6-terra", "gpt-5.7-sol"}, want: []string{"gpt-5.6-terra", "gpt-5.7-sol"}},
+		{name: "default must be offered", model: "gpt-5.6-terra", models: []string{"gpt-5.7-sol"}, wantErr: true},
+		{name: "entries face the codex floor", model: "gpt-5.6-terra", models: []string{"gpt-5.6-terra", "gpt-4.1-mini"}, wantErr: true},
+		{name: "entries must be safe identifiers", model: "gpt-5.6-terra", models: []string{"gpt-5.6-terra", "not a model"}, wantErr: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			value, err := Load(writeConfig(t, validYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := value.Providers["codex"]
+			provider.Model = testCase.model
+			provider.Models = testCase.models
+			value.Providers["codex"] = provider
+			err = value.Validate()
+			if testCase.wantErr {
+				if err == nil {
+					t.Fatal("want a validation error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := value.Providers["codex"].Catalog(); !reflect.DeepEqual(got, testCase.want) {
+				t.Fatalf("catalog = %#v, want %#v", got, testCase.want)
+			}
+		})
+	}
+}

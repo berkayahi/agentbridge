@@ -291,9 +291,10 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 		RepositoryID   string             `json:"repository_id"`
 		TargetDeviceID string             `json:"target_device_id"`
 		Provider       workmodel.Provider `json:"provider"`
+		Model          string             `json:"model"`
 		Title          string             `json:"title"`
 		Prompt         string             `json:"prompt"`
-	}{request.ProjectID, request.BoardID, request.RepositoryID, targetDeviceID, request.Provider, strings.TrimSpace(request.Title), strings.TrimSpace(request.Prompt)}
+	}{request.ProjectID, request.BoardID, request.RepositoryID, targetDeviceID, request.Provider, strings.TrimSpace(request.Model), strings.TrimSpace(request.Title), strings.TrimSpace(request.Prompt)}
 	var cached TaskResponse
 	if done, err := s.replay(ctx, request.IdempotencyKey, "create_task", payload, &cached); done || err != nil {
 		return cached, err
@@ -306,6 +307,9 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	}
 	if _, err := s.runtimes.Get(string(request.Provider)); err != nil {
 		return TaskResponse{}, fmt.Errorf("%w: %s", ErrUnknownProvider, request.Provider)
+	}
+	if err := s.checkModel(ctx, string(request.Provider), payload.Model); err != nil {
+		return TaskResponse{}, err
 	}
 	if _, err := s.store.GetProject(ctx, request.ProjectID); err != nil {
 		return TaskResponse{}, err
@@ -334,7 +338,7 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	if title == "" {
 		title = workmodel.Title(payload.Prompt, workmodel.DefaultTitleRunes)
 	}
-	task := workmodel.Task{ID: taskID, RepoProfileID: request.RepositoryID, Title: title, Prompt: payload.Prompt, State: workmodel.Queued, Provider: request.Provider, CreatedAt: now, UpdatedAt: now}
+	task := workmodel.Task{ID: taskID, RepoProfileID: request.RepositoryID, Title: title, Prompt: payload.Prompt, State: workmodel.Queued, Provider: request.Provider, Model: payload.Model, CreatedAt: now, UpdatedAt: now}
 	initial := workmodel.Event{ID: s.newID("event"), TaskID: taskID, Type: workmodel.EventTaskCreated, Visibility: workmodel.VisibilityUser, Payload: json.RawMessage(`{"state":"queued"}`), CreatedAt: now}
 	auditEvent := localEvent(s.newID("event"), "task", taskID, taskID, 1, "task_created", map[string]any{"project_id": request.ProjectID, "board_id": request.BoardID, "target_device_id": payload.TargetDeviceID}, now)
 	// RuntimeStore keeps the fixed execution/session lineage and the initial
@@ -345,7 +349,7 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 		ID: taskID, ProjectID: request.ProjectID, BoardID: request.BoardID, RepositoryID: request.RepositoryID,
 		RepositoryRemote: repository.Remote,
 		TargetDeviceID:   payload.TargetDeviceID, TargetEpoch: device.ConnectionEpoch,
-		Title: title, Prompt: payload.Prompt, Provider: request.Provider, State: workmodel.Queued, Revision: 1,
+		Title: title, Prompt: payload.Prompt, Provider: request.Provider, Model: payload.Model, State: workmodel.Queued, Revision: 1,
 		ExecutionID: taskID + "-execution", SessionID: taskID + "-session", RuntimeID: string(request.Provider),
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -1484,6 +1488,35 @@ func (s *Service) completeExistingDeviceCommand(ctx context.Context, id string, 
 	return s.completeDeviceCommand(ctx, record)
 }
 
+// checkModel refuses a model the host did not configure for this runtime. There
+// is deliberately no fallback: silently flying a different model than the keeper
+// chose would make the model reported on the card a lie, and a typo would be
+// indistinguishable from a real choice.
+func (s *Service) checkModel(ctx context.Context, runtimeID, model string) error {
+	if model == "" {
+		return nil
+	}
+	if s.providers == nil {
+		return fmt.Errorf("%w: no provider catalog to validate a model against", ErrNotConfigured)
+	}
+	profiles, err := s.providers.ProviderProfiles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		if profile.ID != runtimeID {
+			continue
+		}
+		for _, offered := range profile.Models {
+			if offered == model {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: model %q is not configured for runtime %q", ErrInvalidRequest, model, runtimeID)
+	}
+	return fmt.Errorf("%w: %s", ErrUnknownProvider, runtimeID)
+}
+
 func (s *Service) taskView(ctx context.Context, id string) (TaskView, error) {
 	task, err := s.store.Task(ctx, id)
 	if err != nil {
@@ -1508,7 +1541,7 @@ func (s *Service) taskView(ctx context.Context, id string) (TaskView, error) {
 	if err != nil {
 		return TaskView{}, err
 	}
-	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, CommitSHA: task.CommitSHA, PushRef: task.PushRef, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
+	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, Model: task.Model, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, CommitSHA: task.CommitSHA, PushRef: task.PushRef, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
 }
 
 func (s *Service) ensureTaskTarget(ctx context.Context, view TaskView) error {

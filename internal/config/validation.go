@@ -92,6 +92,9 @@ func (c Config) validateRuntime() error {
 		if name == "codex" && !supportedCodexModel(provider.Model) {
 			return errors.New("Codex model must be GPT-5.6 Terra or a higher Terra/Sol model")
 		}
+		if err := validateProviderModels(name, provider); err != nil {
+			return err
+		}
 	}
 	if len(c.Repositories) == 0 {
 		return errors.New("repositories must contain at least one profile")
@@ -160,6 +163,33 @@ func (d DeviceAgentConfig) validate(mode string) error {
 	}
 	if d.ConnectionEpoch == 0 || d.ControllerEpoch == 0 {
 		return errors.New("device_agent epochs must be positive")
+	}
+	return nil
+}
+
+// validateProviderModels checks the models a keeper may choose between. Every
+// entry faces exactly the checks the default faces — an offered model that the
+// daemon would refuse to run is a broken promise — and the default must appear
+// among them, because a dispatch that chooses nothing flies the default and the
+// keeper must have been shown it.
+func validateProviderModels(name string, provider ProviderConfig) error {
+	if len(provider.Models) == 0 {
+		return nil
+	}
+	listed := false
+	for _, model := range provider.Models {
+		if !modelPattern.MatchString(model) {
+			return errors.New("provider models must be safe nonempty model identifiers")
+		}
+		if name == "codex" && !supportedCodexModel(model) {
+			return errors.New("every offered Codex model must be GPT-5.6 Terra or a higher Terra/Sol model")
+		}
+		if model == provider.Model {
+			listed = true
+		}
+	}
+	if !listed {
+		return errors.New("provider models must include the default model")
 	}
 	return nil
 }

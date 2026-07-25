@@ -133,7 +133,7 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, ""); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -170,7 +170,7 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, req.Model); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -274,12 +274,17 @@ func (a *Adapter) Close() {
 // covers a fresh start and every resume through one path.
 const approvalsReviewerUser = "user"
 
-func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input) error {
+func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, model string) error {
 	var response turnResponse
 	params := map[string]any{
 		"threadId":          state.session.ThreadID,
 		"input":             codexInput(input),
 		"approvalsReviewer": approvalsReviewerUser,
+	}
+	// A thread carries the model it started with, so this is only needed where
+	// the thread was not started here: a resume after a restart.
+	if model != "" {
+		params["model"] = model
 	}
 	if err := a.rpc.Call(ctx, "turn/start", params, &response); err != nil {
 		return mapCallError(err)

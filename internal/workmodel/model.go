@@ -41,6 +41,7 @@ type Task struct {
 	Prompt            string
 	State             State
 	Provider          Provider
+	Model             string
 	TelegramChatID    int64
 	TelegramMessageID int64
 	BaseSHA           string

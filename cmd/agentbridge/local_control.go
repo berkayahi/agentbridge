@@ -234,6 +234,19 @@ func (e *localRuntimeExecutor) runtimeContext() context.Context {
 	return e.ctx
 }
 
+// chosenModel resolves which model a session flies with. The keeper's choice at
+// dispatch is a fact about the task, so it outlives the process and a resume
+// after a restart reaches the same model; the configured default applies only
+// when nothing was ever chosen.
+func chosenModel(requested, task, configured string) string {
+	for _, candidate := range []string{requested, task, configured} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
+		}
+	}
+	return ""
+}
+
 func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.TaskView, request localcontrol.StartRequest) error {
 	if e == nil || e.store == nil || e.runtimes == nil || e.workspace == nil {
 		return localcontrol.ErrNotConfigured
@@ -264,10 +277,7 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	if input == "" {
 		input = task.Prompt
 	}
-	model := strings.TrimSpace(request.Model)
-	if model == "" {
-		model = e.models[view.Provider]
-	}
+	model := chosenModel(strings.TrimSpace(request.Model), task.Model, e.models[view.Provider])
 	startCtx := e.runtimeContext()
 	session, err := adapter.Start(startCtx, bridgeRuntime.StartRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, WorkingDirectory: workspace.Path,
@@ -325,7 +335,7 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 	}
 	startCtx := e.runtimeContext()
 	session, err := adapter.Resume(startCtx, bridgeRuntime.ResumeRequest{
-		TaskID: view.ID, ExecutionID: view.ExecutionID,
+		TaskID: view.ID, ExecutionID: view.ExecutionID, Model: chosenModel("", task.Model, e.models[view.Provider]),
 		Session: bridgeRuntime.Session{
 			ID: providerSessionID.String(), TaskID: view.ID, ExternalID: task.ProviderSessionID,
 			ThreadID: task.ProviderThreadID, RuntimeID: view.RuntimeID,
@@ -476,7 +486,7 @@ func (c providerCatalog) ProviderProfiles(context.Context) ([]localcontrol.Provi
 		value := c.providers[id]
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
-		result = append(result, localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Available: available})
+		result = append(result, localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available})
 	}
 	return result, nil
 }

@@ -63,6 +63,7 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				Message string          `json:"message"`
 				Info    json.RawMessage `json:"codexErrorInfo"`
 			} `json:"error"`
+			WillRetry bool `json:"willRetry"`
 		}
 		if json.Unmarshal(message.Params, &params) != nil {
 			return provider.Event{}, false
@@ -74,6 +75,12 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 			event.Type = provider.EventAuthRequired
 		case strings.Contains(info, "usagelimit") || strings.Contains(info, "sessionbudget"):
 			event.Type = provider.EventRateLimited
+		case params.WillRetry:
+			// The provider is retrying this itself, so the turn has not failed
+			// and the session is still alive. Reporting it as an error ends a
+			// bee over a hiccup and claims a failure that never happened; the
+			// keeper still sees the hiccup, as liveness rather than a death.
+			event.Type = provider.EventHeartbeat
 		default:
 			event.Type = provider.EventError
 		}

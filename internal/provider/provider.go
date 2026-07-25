@@ -115,6 +115,10 @@ type StartRequest struct {
 	Input            Input
 	WorkingDirectory string
 	Model            string
+	// WritablePaths are absolute paths outside the worktree that this session
+	// may write to — a repository's toolchain caches, typically. Empty leaves
+	// the decision to the host's own provider policy.
+	WritablePaths []string
 }
 
 type ResumeRequest struct {
@@ -124,7 +128,8 @@ type ResumeRequest struct {
 	// Model is the model this session was dispatched with. A resume must carry
 	// it or the session silently continues on the provider's default, which is
 	// not what the operator chose.
-	Model string
+	Model         string
+	WritablePaths []string
 }
 
 type ApprovalDecision struct {

@@ -495,7 +495,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
-	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, composeWritablePaths(cfg), configuredApprovalUser(cfg))
 	localExecutor.approvals = approvalBroker
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
@@ -647,7 +647,7 @@ func buildHeadlessDeviceDaemon(ctx context.Context, cfg config.Config, paths run
 	for name, value := range cfg.Providers {
 		models[workmodel.Provider(name)] = value.Model
 	}
-	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, composeWritablePaths(cfg), configuredApprovalUser(cfg))
 	localExecutor.approvals = approvalBroker
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	deviceServer, err := composeDeviceAgent(cfg.DeviceAgent, data, localExecutor, localVerifier{operations: localOperations}, localCommitter{operations: localOperations})
@@ -741,7 +741,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		return closeOnError(err, providerClosers...)
 	}
 	bridgeController := bridgeapp.NewKernelController(bridgeKernel)
-	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, configuredApprovalUser(cfg))
+	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, composeWritablePaths(cfg), configuredApprovalUser(cfg))
 	localExecutor.approvals = approvalBroker
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
@@ -1197,6 +1197,20 @@ func composeProfiles(cfg config.Config, paths runtimePaths) map[string]bridgegit
 	result := make(map[string]bridgegit.RepositoryProfile, len(cfg.Repositories))
 	for name, value := range cfg.Repositories {
 		result[name] = bridgegit.RepositoryProfile{ControlCheckout: value.CheckoutPath, Remote: value.Remote, BaseRef: value.BaseRef, WorktreeRoot: filepath.Join(paths.worktrees, name)}
+	}
+	return result
+}
+
+// composeWritablePaths reports the extra roots each repository's sessions may
+// write to. Declared per repository rather than assumed, because what a
+// toolchain needs is a property of the repository, not of this daemon.
+func composeWritablePaths(cfg config.Config) map[string][]string {
+	result := make(map[string][]string, len(cfg.Repositories))
+	for name, value := range cfg.Repositories {
+		if len(value.Isolation.WritablePaths) == 0 {
+			continue
+		}
+		result[name] = append([]string(nil), value.Isolation.WritablePaths...)
 	}
 	return result
 }

@@ -65,12 +65,18 @@ repositories:
     delivery:
       # Delivery is opt-in. Enabling it also requires one exact allowed_ref.
       enabled: false
-    # Task-scoped isolation is declared here but is not activated by the 1.x
-    # daemon. A standard/strong policy is accepted only when the host reports
-    # the matching OS sandbox capability at task launch.
+    # Task-scoped isolation is declared here. Tiers and network policy are not
+    # activated by the 1.x daemon: a standard/strong policy is accepted only
+    # when the host reports the matching OS sandbox capability at task launch.
+    # writable_paths IS activated for Codex sessions — a repository's toolchain
+    # writes outside the worktree (Go's build and module caches, for one), and
+    # without those roots every build escalates to an approval prompt.
     # isolation:
     #   tier: standard
     #   worktree_root: /srv/agentbridge/worktrees/sample-app
+    #   writable_paths:
+    #     - /home/agentbridge/.cache/go-build
+    #     - /home/agentbridge/go/pkg/mod
     #   network:
     #     mode: allowlist
     #     provider: [api.anthropic.com, chatgpt.com]

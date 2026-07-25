@@ -133,7 +133,7 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input, ""); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, "", req.WritablePaths); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -170,7 +170,7 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input, req.Model); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, req.Model, req.WritablePaths); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -274,7 +274,7 @@ func (a *Adapter) Close() {
 // covers a fresh start and every resume through one path.
 const approvalsReviewerUser = "user"
 
-func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, model string) error {
+func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, model string, writable []string) error {
 	var response turnResponse
 	params := map[string]any{
 		"threadId":          state.session.ThreadID,
@@ -285,6 +285,16 @@ func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input prov
 	// the thread was not started here: a resume after a restart.
 	if model != "" {
 		params["model"] = model
+	}
+	if len(writable) > 0 {
+		// networkAccess is stated rather than left out: the field defaults to
+		// denied, and a session that cannot reach a package proxy would stop at
+		// an approval door for every dependency it needs.
+		params["sandboxPolicy"] = map[string]any{
+			"type":          "workspaceWrite",
+			"writableRoots": append([]string(nil), writable...),
+			"networkAccess": true,
+		}
 	}
 	if err := a.rpc.Call(ctx, "turn/start", params, &response); err != nil {
 		return mapCallError(err)

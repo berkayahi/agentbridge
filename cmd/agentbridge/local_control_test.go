@@ -15,7 +15,7 @@ func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	executor := newLocalRuntimeExecutor(nil, runtimes, nil, nil, "987654321")
+	executor := newLocalRuntimeExecutor(nil, runtimes, nil, nil, nil, "987654321")
 	if err := executor.Approve(context.Background(), localcontrol.TaskView{
 		ID: "task-1", TargetDeviceID: localcontrol.LocalDeviceID, RuntimeID: "codex",
 	}, "approval-1", localcontrol.LocalAuthorityUserID, true); err != nil {

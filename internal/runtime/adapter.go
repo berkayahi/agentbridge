@@ -26,12 +26,14 @@ type Session struct {
 type StartRequest struct {
 	TaskID, ExecutionID, WorkingDirectory, Model string
 	Input                                        kernel.Input
+	WritablePaths                                []string
 }
 type ResumeRequest struct {
 	TaskID, ExecutionID string
 	Session             Session
 	Input               kernel.Input
 	Model               string
+	WritablePaths       []string
 }
 type ApprovalDecision struct {
 	RequestID, TaskID, ExecutionID, UserID string

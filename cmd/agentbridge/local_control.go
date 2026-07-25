@@ -36,6 +36,10 @@ type localRuntimeExecutor struct {
 	runtimes  *bridgeRuntime.Registry
 	workspace *workspaceAdapter
 	models    map[workmodel.Provider]string
+	// writable is the extra roots each repository's sessions may write to,
+	// keyed by profile id: a repository's toolchain caches live outside the
+	// worktree, and without them every build escalates to an approval.
+	writable  map[string][]string
 	approvals *approval.Broker
 	// approvalUser is the provider-native identity used by this runtime. The
 	// local API carries localcontrol.LocalAuthorityUserID over the controller
@@ -105,8 +109,8 @@ func (e *localRuntimeExecutor) HeldSessions() int {
 	return len(e.sessions)
 }
 
-func newLocalRuntimeExecutor(data *sqlite.RuntimeStore, runtimes *bridgeRuntime.Registry, workspace *workspaceAdapter, models map[workmodel.Provider]string, approvalUser string) *localRuntimeExecutor {
-	return &localRuntimeExecutor{store: data, runtimes: runtimes, workspace: workspace, models: models, approvalUser: strings.TrimSpace(approvalUser), sessions: make(map[string]bridgeRuntime.Session)}
+func newLocalRuntimeExecutor(data *sqlite.RuntimeStore, runtimes *bridgeRuntime.Registry, workspace *workspaceAdapter, models map[workmodel.Provider]string, writable map[string][]string, approvalUser string) *localRuntimeExecutor {
+	return &localRuntimeExecutor{store: data, runtimes: runtimes, workspace: workspace, models: models, writable: writable, approvalUser: strings.TrimSpace(approvalUser), sessions: make(map[string]bridgeRuntime.Session)}
 }
 
 func newLocalRemoteDeviceFactory(data *sqlite.RuntimeStore, controllerIdentity deviceidentity.Key) localcontrol.RemoteDeviceFactory {
@@ -281,7 +285,7 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	startCtx := e.runtimeContext()
 	session, err := adapter.Start(startCtx, bridgeRuntime.StartRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, WorkingDirectory: workspace.Path,
-		Model: model, Input: kernel.Input{Text: input},
+		Model: model, WritablePaths: e.writable[target.profileID], Input: kernel.Input{Text: input},
 	}, e.observationSink(view))
 	if err != nil {
 		return err
@@ -307,7 +311,8 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 	if view.TargetDeviceID != localcontrol.LocalDeviceID {
 		return fmt.Errorf("target device %q requires a paired execution link: %w", view.TargetDeviceID, localcontrol.ErrNotConfigured)
 	}
-	if _, err := e.repositoryTarget(ctx, view.RepositoryID); err != nil {
+	target, err := e.repositoryTarget(ctx, view.RepositoryID)
+	if err != nil {
 		return err
 	}
 	task, err := e.store.Task(ctx, view.ID)
@@ -336,6 +341,7 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 	startCtx := e.runtimeContext()
 	session, err := adapter.Resume(startCtx, bridgeRuntime.ResumeRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, Model: chosenModel("", task.Model, e.models[view.Provider]),
+		WritablePaths: e.writable[target.profileID],
 		Session: bridgeRuntime.Session{
 			ID: providerSessionID.String(), TaskID: view.ID, ExternalID: task.ProviderSessionID,
 			ThreadID: task.ProviderThreadID, RuntimeID: view.RuntimeID,

@@ -4,20 +4,22 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/execution"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 type StartExecution struct {
-	CommandID      string
-	ExecutionID    string
-	TaskID         string
-	SessionID      string
-	RepositoryID   string
-	RuntimeID      string
-	Model          string
-	PolicySnapshot []byte
-	FencingEpoch   uint64
-	Input          Input
-	ExpiresAt      time.Time
+	CommandID        string
+	ExecutionID      string
+	TaskID           string
+	SessionID        string
+	RepositoryID     string
+	RuntimeID        string
+	Model            string
+	ExecutionProfile workmodel.ExecutionProfile
+	PolicySnapshot   []byte
+	FencingEpoch     uint64
+	Input            Input
+	ExpiresAt        time.Time
 }
 
 type ResumeExecution struct {

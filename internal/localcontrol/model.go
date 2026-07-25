@@ -58,12 +58,26 @@ type RepositoryCatalog interface {
 type ProviderInfo struct {
 	ID           string `json:"id"`
 	DefaultModel string `json:"default_model,omitempty"`
-	// Models is what a keeper may choose between for this runtime, the default
-	// first. It reports only what the host configured: a model list compiled
-	// into the daemon would be stale within months, and offering a model that
-	// no longer exists is inventing data.
-	Models    []string `json:"models,omitempty"`
-	Available bool     `json:"available"`
+	// Models is retained as the model-ID-only compatibility view.
+	Models        []string        `json:"models,omitempty"`
+	ModelProfiles []ProviderModel `json:"model_profiles,omitempty"`
+	Available     bool            `json:"available"`
+}
+
+type ProviderModel struct {
+	ID                        string                    `json:"id"`
+	DisplayName               string                    `json:"display_name,omitempty"`
+	Description               string                    `json:"description,omitempty"`
+	DefaultReasoningEffort    string                    `json:"default_reasoning_effort,omitempty"`
+	SupportedReasoningEfforts []ProviderReasoningEffort `json:"supported_reasoning_efforts,omitempty"`
+}
+
+type ProviderReasoningEffort struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+	// Kind is "reasoning" for ordinary depth controls and "orchestration" for
+	// provider values that also enable automatic delegation.
+	Kind string `json:"kind"`
 }
 
 // ProviderCatalog reports the configured provider runtimes and their default
@@ -99,26 +113,27 @@ type Board struct {
 // Those values are resolved inside AgentBridge from the approved repository
 // binding and are never selected by a local client.
 type TaskView struct {
-	ID               string             `json:"id"`
-	ProjectID        string             `json:"project_id"`
-	BoardID          string             `json:"board_id"`
-	RepositoryID     string             `json:"repository_id"`
-	RepositoryRemote string             `json:"repository_remote,omitempty"`
-	TargetDeviceID   string             `json:"target_device_id"`
-	TargetEpoch      uint64             `json:"target_epoch"`
-	Title            string             `json:"title"`
-	Prompt           string             `json:"prompt"`
-	Provider         workmodel.Provider `json:"provider"`
-	Model            string             `json:"model,omitempty"`
-	State            workmodel.State    `json:"state"`
-	Revision         int64              `json:"revision"`
-	ExecutionID      string             `json:"execution_id,omitempty"`
-	SessionID        string             `json:"session_id,omitempty"`
-	RuntimeID        string             `json:"runtime_id,omitempty"`
-	CommitSHA        string             `json:"commit_sha,omitempty"`
-	PushRef          string             `json:"push_ref,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	ID               string                     `json:"id"`
+	ProjectID        string                     `json:"project_id"`
+	BoardID          string                     `json:"board_id"`
+	RepositoryID     string                     `json:"repository_id"`
+	RepositoryRemote string                     `json:"repository_remote,omitempty"`
+	TargetDeviceID   string                     `json:"target_device_id"`
+	TargetEpoch      uint64                     `json:"target_epoch"`
+	Title            string                     `json:"title"`
+	Prompt           string                     `json:"prompt"`
+	Provider         workmodel.Provider         `json:"provider"`
+	Model            string                     `json:"model,omitempty"`
+	ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile,omitempty"`
+	State            workmodel.State            `json:"state"`
+	Revision         int64                      `json:"revision"`
+	ExecutionID      string                     `json:"execution_id,omitempty"`
+	SessionID        string                     `json:"session_id,omitempty"`
+	RuntimeID        string                     `json:"runtime_id,omitempty"`
+	CommitSHA        string                     `json:"commit_sha,omitempty"`
+	PushRef          string                     `json:"push_ref,omitempty"`
+	CreatedAt        time.Time                  `json:"created_at"`
+	UpdatedAt        time.Time                  `json:"updated_at"`
 }
 
 type Event struct {
@@ -184,15 +199,16 @@ type CreateBoardRequest struct {
 }
 
 type CreateTaskRequest struct {
-	ProjectID      string             `json:"project_id"`
-	BoardID        string             `json:"board_id"`
-	RepositoryID   string             `json:"repository_id"`
-	TargetDeviceID string             `json:"target_device_id,omitempty"`
-	Provider       workmodel.Provider `json:"provider"`
-	Model          string             `json:"model,omitempty"`
-	Title          string             `json:"title"`
-	Prompt         string             `json:"prompt"`
-	IdempotencyKey string             `json:"idempotency_key"`
+	ProjectID        string                     `json:"project_id"`
+	BoardID          string                     `json:"board_id"`
+	RepositoryID     string                     `json:"repository_id"`
+	TargetDeviceID   string                     `json:"target_device_id,omitempty"`
+	Provider         workmodel.Provider         `json:"provider"`
+	Model            string                     `json:"model,omitempty"`
+	ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile,omitempty"`
+	Title            string                     `json:"title"`
+	Prompt           string                     `json:"prompt"`
+	IdempotencyKey   string                     `json:"idempotency_key"`
 }
 
 type UpdateTaskRequest struct {

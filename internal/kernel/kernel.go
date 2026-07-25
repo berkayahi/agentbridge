@@ -55,7 +55,11 @@ func (k *Kernel) Start(ctx context.Context, command StartExecution) error {
 	return k.accept(ctx, command.CommandID, command.ExecutionID, command.TaskID, command.RuntimeID, "start", expires,
 		func(repos store.Repositories) error {
 			value := newIntent(command.CommandID, command.ExecutionID, command.TaskID, command.RuntimeID, "start", now, expires)
-			value.PayloadRef = commandPayload("start", command.CommandID, command.SessionID, command.RepositoryID, command.RuntimeID, command.Model, command.Input.Text, string(command.PolicySnapshot))
+			value.PayloadRef = commandPayload(
+				"start", command.CommandID, command.SessionID, command.RepositoryID, command.RuntimeID,
+				command.Model, command.ExecutionProfile.Model, command.ExecutionProfile.ReasoningEffort,
+				command.Input.Text, string(command.PolicySnapshot),
+			)
 			return repos.Intents.Create(ctx, value)
 		})
 }

@@ -24,7 +24,10 @@ func (a *RuntimeAdapter) Start(ctx context.Context, request bridgeRuntime.StartR
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}
-	session, events, err := a.native.Start(ctx, provider.StartRequest{TaskID: taskID, Input: bridgeRuntime.ProviderInput(request.Input), WorkingDirectory: request.WorkingDirectory, Model: request.Model, WritablePaths: request.WritablePaths})
+	session, events, err := a.native.Start(ctx, provider.StartRequest{
+		TaskID: taskID, Input: bridgeRuntime.ProviderInput(request.Input), WorkingDirectory: request.WorkingDirectory,
+		Model: request.Model, ExecutionProfile: request.ExecutionProfile, WritablePaths: request.WritablePaths,
+	})
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}
@@ -40,7 +43,10 @@ func (a *RuntimeAdapter) Resume(ctx context.Context, request bridgeRuntime.Resum
 	if !ok {
 		return bridgeRuntime.Session{}, bridgeRuntime.ErrInvalidSession
 	}
-	session, events, err := a.native.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: native, Input: bridgeRuntime.ProviderInput(request.Input), Model: request.Model, WritablePaths: request.WritablePaths})
+	session, events, err := a.native.Resume(ctx, provider.ResumeRequest{
+		TaskID: taskID, Session: native, Input: bridgeRuntime.ProviderInput(request.Input),
+		Model: request.Model, ExecutionProfile: request.ExecutionProfile, WritablePaths: request.WritablePaths,
+	})
 	if err != nil {
 		return bridgeRuntime.Session{}, err
 	}

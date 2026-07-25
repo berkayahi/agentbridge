@@ -11,6 +11,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	managedprotocol "github.com/berkayahi/agentbridge/internal/managed"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var ErrInvalidManagedCommand = errors.New("managed controller: invalid command")
@@ -96,8 +97,9 @@ func (c *Controller) Dispatch(ctx context.Context, frame managedprotocol.Frame) 
 		return c.Start(ctx, kernel.StartExecution{
 			CommandID: frame.CommandID, ExecutionID: frame.ExecutionID, TaskID: payload.TaskID,
 			SessionID: sessionID, RepositoryID: payload.RepositoryID, RuntimeID: payload.RuntimeID,
-			Model: payload.Model, PolicySnapshot: append([]byte(nil), payload.PolicySnapshot...),
-			FencingEpoch: payload.FencingEpoch, Input: kernel.Input{Text: payload.Input}, ExpiresAt: expiresAt,
+			Model: payload.Model, ExecutionProfile: payload.ExecutionProfile,
+			PolicySnapshot: append([]byte(nil), payload.PolicySnapshot...),
+			FencingEpoch:   payload.FencingEpoch, Input: kernel.Input{Text: payload.Input}, ExpiresAt: expiresAt,
 		})
 	case "resume":
 		if strings.TrimSpace(payload.Input) == "" {
@@ -124,17 +126,18 @@ func (c *Controller) Dispatch(ctx context.Context, frame managedprotocol.Frame) 
 }
 
 type commandPayload struct {
-	Kind            string    `json:"kind"`
-	CommandID       string    `json:"command_id,omitempty"`
-	ExecutionID     string    `json:"execution_id,omitempty"`
-	SessionID       string    `json:"session_id,omitempty"`
-	TaskID          string    `json:"task_id"`
-	RuntimeID       string    `json:"runtime_id"`
-	RepositoryID    string    `json:"repository_id,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Input           string    `json:"input,omitempty"`
-	PolicySnapshot  []byte    `json:"policy_snapshot,omitempty"`
-	FencingEpoch    uint64    `json:"fencing_epoch,omitempty"`
-	SuccessorTaskID string    `json:"successor_task_id,omitempty"`
-	ExpiresAt       time.Time `json:"expires_at,omitempty"`
+	Kind             string                     `json:"kind"`
+	CommandID        string                     `json:"command_id,omitempty"`
+	ExecutionID      string                     `json:"execution_id,omitempty"`
+	SessionID        string                     `json:"session_id,omitempty"`
+	TaskID           string                     `json:"task_id"`
+	RuntimeID        string                     `json:"runtime_id"`
+	RepositoryID     string                     `json:"repository_id,omitempty"`
+	Model            string                     `json:"model,omitempty"`
+	ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile,omitempty"`
+	Input            string                     `json:"input,omitempty"`
+	PolicySnapshot   []byte                     `json:"policy_snapshot,omitempty"`
+	FencingEpoch     uint64                     `json:"fencing_epoch,omitempty"`
+	SuccessorTaskID  string                     `json:"successor_task_id,omitempty"`
+	ExpiresAt        time.Time                  `json:"expires_at,omitempty"`
 }

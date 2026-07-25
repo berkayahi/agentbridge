@@ -260,6 +260,7 @@ func TestVisibleNotificationMappingAndAuthError(t *testing.T) {
 
 type fakeRPC struct {
 	call          func(string, any, any) error
+	notify        func(string, any) error
 	notifications chan ServerMessage
 	requests      chan ServerMessage
 	responses     chan approvalResponse
@@ -280,7 +281,12 @@ func (f *fakeRPC) Call(_ context.Context, method string, params, result any) err
 	}
 	return f.call(method, params, result)
 }
-func (f *fakeRPC) Notify(context.Context, string, any) error { return nil }
+func (f *fakeRPC) Notify(_ context.Context, method string, params any) error {
+	if f.notify == nil {
+		return nil
+	}
+	return f.notify(method, params)
+}
 
 func (f *fakeRPC) RespondResult(_ context.Context, id json.RawMessage, result any) error {
 	decision := jsonValue(result)["decision"].(string)

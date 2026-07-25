@@ -251,6 +251,13 @@ func chosenModel(requested, task, configured string) string {
 	return ""
 }
 
+func chosenExecutionProfile(task workmodel.ExecutionProfile, requestedModel, configuredModel string) workmodel.ExecutionProfile {
+	if !task.Empty() {
+		return task
+	}
+	return workmodel.ExecutionProfile{Model: chosenModel(requestedModel, "", configuredModel)}
+}
+
 func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.TaskView, request localcontrol.StartRequest) error {
 	if e == nil || e.store == nil || e.runtimes == nil || e.workspace == nil {
 		return localcontrol.ErrNotConfigured
@@ -281,11 +288,12 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	if input == "" {
 		input = task.Prompt
 	}
-	model := chosenModel(strings.TrimSpace(request.Model), task.Model, e.models[view.Provider])
+	profile := chosenExecutionProfile(task.ExecutionProfile, strings.TrimSpace(request.Model), e.models[view.Provider])
 	startCtx := e.runtimeContext()
 	session, err := adapter.Start(startCtx, bridgeRuntime.StartRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, WorkingDirectory: workspace.Path,
-		Model: model, WritablePaths: e.writable[target.profileID], Input: kernel.Input{Text: input},
+		Model: profile.Model, ExecutionProfile: profile,
+		WritablePaths: e.writable[target.profileID], Input: kernel.Input{Text: input},
 	}, e.observationSink(view))
 	if err != nil {
 		return err
@@ -339,8 +347,9 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 		input = "Continue the interrupted task from the durable session."
 	}
 	startCtx := e.runtimeContext()
+	profile := chosenExecutionProfile(task.ExecutionProfile, "", e.models[view.Provider])
 	session, err := adapter.Resume(startCtx, bridgeRuntime.ResumeRequest{
-		TaskID: view.ID, ExecutionID: view.ExecutionID, Model: chosenModel("", task.Model, e.models[view.Provider]),
+		TaskID: view.ID, ExecutionID: view.ExecutionID, Model: profile.Model, ExecutionProfile: profile,
 		WritablePaths: e.writable[target.profileID],
 		Session: bridgeRuntime.Session{
 			ID: providerSessionID.String(), TaskID: view.ID, ExternalID: task.ProviderSessionID,
@@ -474,14 +483,15 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 	return result, nil
 }
 
-// providerCatalog reports the configured runtimes with their default model and
-// whether the executable is actually present, so a client can explain an
-// unavailable runtime instead of offering a choice that cannot be dispatched.
+// providerCatalog reports configured runtimes and executable availability. A
+// live provider catalog is authoritative when the protocol exposes one; static
+// configuration remains the compatibility fallback for other providers.
 type providerCatalog struct {
 	providers map[string]config.ProviderConfig
+	live      map[workmodel.Provider]provider.Provider
 }
 
-func (c providerCatalog) ProviderProfiles(context.Context) ([]localcontrol.ProviderInfo, error) {
+func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.ProviderInfo, error) {
 	ids := make([]string, 0, len(c.providers))
 	for id := range c.providers {
 		ids = append(ids, id)
@@ -492,7 +502,38 @@ func (c providerCatalog) ProviderProfiles(context.Context) ([]localcontrol.Provi
 		value := c.providers[id]
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
-		result = append(result, localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available})
+		profile := localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available}
+		native := c.live[workmodel.Provider(id)]
+		cataloger, ok := native.(provider.ExecutionCatalogProvider)
+		if available && ok {
+			catalog, catalogErr := cataloger.ExecutionCatalog(ctx)
+			if catalogErr != nil {
+				return nil, fmt.Errorf("load %s execution catalog: %w", id, catalogErr)
+			}
+			profile.Models = profile.Models[:0]
+			profile.ModelProfiles = make([]localcontrol.ProviderModel, 0, len(catalog.Models))
+			configuredDefaultAvailable := false
+			for _, model := range catalog.Models {
+				profile.Models = append(profile.Models, model.ID)
+				if model.ID == profile.DefaultModel {
+					configuredDefaultAvailable = true
+				}
+				detail := localcontrol.ProviderModel{
+					ID: model.ID, DisplayName: model.DisplayName, Description: model.Description,
+					DefaultReasoningEffort: model.DefaultReasoningEffort,
+				}
+				for _, effort := range model.ReasoningEfforts {
+					detail.SupportedReasoningEfforts = append(detail.SupportedReasoningEfforts, localcontrol.ProviderReasoningEffort{
+						ID: effort.ID, Description: effort.Description, Kind: string(effort.Kind),
+					})
+				}
+				profile.ModelProfiles = append(profile.ModelProfiles, detail)
+			}
+			if !configuredDefaultAvailable {
+				profile.DefaultModel = catalog.DefaultModel
+			}
+		}
+		result = append(result, profile)
 	}
 	return result, nil
 }

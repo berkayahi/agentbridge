@@ -19,6 +19,18 @@ func (p Provider) Valid() bool {
 	return p == CodexSubscription || p == ClaudeSubscription
 }
 
+// ExecutionProfile is the provider-neutral selection that determines how a
+// task is executed. Model remains mirrored on Task for compatibility with
+// model-only tasks and clients.
+type ExecutionProfile struct {
+	Model           string `json:"model,omitempty"`
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+}
+
+func (p ExecutionProfile) Empty() bool {
+	return p.Model == "" && p.ReasoningEffort == ""
+}
+
 // TaskController identifies the durable controller that owns execution of a
 // task. It is separate from presentation identifiers so two controllers that
 // share the v2 database cannot both resume the same task after a restart.
@@ -42,6 +54,7 @@ type Task struct {
 	State             State
 	Provider          Provider
 	Model             string
+	ExecutionProfile  ExecutionProfile
 	TelegramChatID    int64
 	TelegramMessageID int64
 	BaseSHA           string

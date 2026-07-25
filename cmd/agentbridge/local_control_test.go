@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
 
+	"github.com/berkayahi/agentbridge/internal/config"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
+	"github.com/berkayahi/agentbridge/internal/provider"
 	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) {
@@ -24,6 +28,57 @@ func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) 
 	if adapter.userID != "987654321" {
 		t.Fatalf("provider approval user = %q, want configured native identity", adapter.userID)
 	}
+}
+
+func TestProviderCatalogUsesLivePerModelCapabilities(t *testing.T) {
+	live := executionCatalogProvider{catalog: provider.ExecutionCatalog{
+		DefaultModel: "gpt-5.6-sol",
+		Models: []provider.Model{
+			{
+				ID: "gpt-5.6-sol", DefaultReasoningEffort: "low",
+				ReasoningEfforts: []provider.ReasoningEffort{
+					{ID: "max", Kind: provider.ReasoningEffortStandard},
+					{ID: "ultra", Kind: provider.ReasoningEffortOrchestration},
+				},
+			},
+			{
+				ID: "gpt-5.6-luna", DefaultReasoningEffort: "medium",
+				ReasoningEfforts: []provider.ReasoningEffort{
+					{ID: "max", Kind: provider.ReasoningEffortStandard},
+				},
+			},
+		},
+	}}
+	catalog := providerCatalog{
+		providers: map[string]config.ProviderConfig{
+			"codex": {Executable: os.Args[0], Model: "gpt-5.6-sol", Models: []string{"stale-model"}},
+		},
+		live: map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: live},
+	}
+	profiles, err := catalog.ProviderProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || len(profiles[0].Models) != 2 || profiles[0].Models[1] != "gpt-5.6-luna" {
+		t.Fatalf("provider profiles = %#v", profiles)
+	}
+	if got := profiles[0].ModelProfiles[0].SupportedReasoningEfforts[1]; got.ID != "ultra" || got.Kind != "orchestration" {
+		t.Fatalf("Sol Ultra = %#v", got)
+	}
+	for _, effort := range profiles[0].ModelProfiles[1].SupportedReasoningEfforts {
+		if effort.ID == "ultra" {
+			t.Fatalf("Luna advertised Ultra: %#v", profiles[0].ModelProfiles[1])
+		}
+	}
+}
+
+type executionCatalogProvider struct {
+	provider.Provider
+	catalog provider.ExecutionCatalog
+}
+
+func (p executionCatalogProvider) ExecutionCatalog(context.Context) (provider.ExecutionCatalog, error) {
+	return p.catalog, nil
 }
 
 type approvalCaptureRuntime struct {

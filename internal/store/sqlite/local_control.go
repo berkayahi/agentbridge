@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -164,6 +165,10 @@ func (s *RuntimeStore) createTaskInContext(ctx context.Context, projectID, board
 		return localcontrol.Event{}, fmt.Errorf("create local task: %w", localcontrol.ErrInvalidRequest)
 	}
 	now := value.CreatedAt.UTC()
+	profile, err := json.Marshal(value.ExecutionProfile)
+	if err != nil {
+		return localcontrol.Event{}, fmt.Errorf("encode local task execution profile: %w", err)
+	}
 	executionID, sessionID, commandID := value.ID+"-execution", value.ID+"-session", value.ID+"-command"
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -190,8 +195,8 @@ func (s *RuntimeStore) createTaskInContext(ctx context.Context, projectID, board
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, active_execution_id, controller_owner, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, workmodel.Queued, value.Provider, value.Model, executionID, workmodel.TaskControllerLocal, timestamp(now), timestamp(now)); err != nil {
+		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, execution_profile, active_execution_id, controller_owner, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, workmodel.Queued, value.Provider, value.Model, profile, executionID, workmodel.TaskControllerLocal, timestamp(now), timestamp(now)); err != nil {
 		return localcontrol.Event{}, runtimeConflict("insert local task", err)
 	}
 	if _, err := tx.ExecContext(ctx, `

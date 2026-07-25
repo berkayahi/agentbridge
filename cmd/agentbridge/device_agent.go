@@ -247,7 +247,7 @@ func (h *deviceExecutionHandler) ensureShadowTask(ctx context.Context, command l
 	}
 	existing, err := h.store.Task(ctx, command.TaskID)
 	if err == nil {
-		if existing.RepoProfileID != command.RepositoryID || existing.Provider != command.Provider || existing.Title != command.Title || existing.Prompt != command.Prompt {
+		if existing.RepoProfileID != command.RepositoryID || existing.Provider != command.Provider || existing.Title != command.Title || existing.Prompt != command.Prompt || existing.ExecutionProfile != command.ExecutionProfile {
 			return fmt.Errorf("device execution manifest changed for %q: %w", command.TaskID, localcontrol.ErrDeviceFence)
 		}
 		return nil
@@ -256,13 +256,14 @@ func (h *deviceExecutionHandler) ensureShadowTask(ctx context.Context, command l
 		return err
 	}
 	now := time.Now().UTC()
-	initial, err := json.Marshal(map[string]string{"source": "paired-device", "device_id": command.DeviceID})
+	initial, err := json.Marshal(map[string]any{"source": "paired-device", "device_id": command.DeviceID, "execution_profile": command.ExecutionProfile})
 	if err != nil {
 		return err
 	}
 	value := workmodel.Task{
 		ID: command.TaskID, RepoProfileID: command.RepositoryID, Title: command.Title,
 		Prompt: command.Prompt, Provider: command.Provider, State: workmodel.Queued,
+		Model: command.ExecutionProfile.Model, ExecutionProfile: command.ExecutionProfile,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	err = h.store.CreateTask(ctx, value, workmodel.Event{
@@ -280,7 +281,7 @@ func (h *deviceExecutionHandler) ensureShadowTask(ctx context.Context, command l
 	if loadErr != nil {
 		return errors.Join(err, loadErr)
 	}
-	if existing.RepoProfileID != command.RepositoryID || existing.Provider != command.Provider || existing.Title != command.Title || existing.Prompt != command.Prompt {
+	if existing.RepoProfileID != command.RepositoryID || existing.Provider != command.Provider || existing.Title != command.Title || existing.Prompt != command.Prompt || existing.ExecutionProfile != command.ExecutionProfile {
 		return fmt.Errorf("device execution manifest conflicted for %q: %w", command.TaskID, localcontrol.ErrDeviceFence)
 	}
 	return nil
@@ -302,6 +303,7 @@ func (h *deviceExecutionHandler) view(ctx context.Context, command localcontrol.
 	return localcontrol.TaskView{
 		ID: command.TaskID, RepositoryID: task.RepoProfileID, RepositoryRemote: repositoryRemote, TargetDeviceID: localcontrol.LocalDeviceID,
 		TargetEpoch: 1, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider,
+		Model: task.Model, ExecutionProfile: task.ExecutionProfile,
 		State: task.State, Revision: task.Revision, ExecutionID: command.ExecutionID,
 		SessionID: command.SessionID, RuntimeID: runtimeID, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
 	}, nil

@@ -94,15 +94,14 @@ type TelegramConfig struct {
 type ProviderConfig struct {
 	Executable string `yaml:"executable"`
 	Model      string `yaml:"model"`
-	// Models is the set of models a keeper may choose from at dispatch. It is
-	// curated here on purpose: model names change every few months, so a list
-	// compiled into the daemon would go stale and start offering models that no
-	// longer exist. Absent, the default is the only choice.
+	// Models is the compatibility catalog for provider protocols that cannot
+	// report live capabilities. A live catalog, when available, is
+	// authoritative and prevents stale configured model/effort combinations
+	// from being advertised.
 	Models []string `yaml:"models,omitempty"`
 }
 
-// Catalog reports the models this provider may be dispatched with, the
-// configured default first, and never invents one that was not configured.
+// Catalog reports the configured fallback models, with the default first.
 func (p ProviderConfig) Catalog() []string {
 	if len(p.Models) > 0 {
 		return append([]string(nil), p.Models...)
@@ -165,7 +164,7 @@ type DeliveryPolicy struct {
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 var modelPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$`)
-var codexModelPattern = regexp.MustCompile(`^gpt-([0-9]+)\.([0-9]+)-(terra|sol)(?:[.-][a-zA-Z0-9._-]+)?$`)
+var codexModelPattern = regexp.MustCompile(`^gpt-([0-9]+)\.([0-9]+)-(luna|terra|sol)(?:[.-][a-zA-Z0-9._-]+)?$`)
 
 func Load(path string) (Config, error) {
 	f, err := os.Open(path)

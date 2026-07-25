@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/kernel"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 var (
@@ -27,6 +28,7 @@ type StartRequest struct {
 	TaskID, ExecutionID, WorkingDirectory, Model string
 	Input                                        kernel.Input
 	WritablePaths                                []string
+	ExecutionProfile                             workmodel.ExecutionProfile
 }
 type ResumeRequest struct {
 	TaskID, ExecutionID string
@@ -34,6 +36,7 @@ type ResumeRequest struct {
 	Input               kernel.Input
 	Model               string
 	WritablePaths       []string
+	ExecutionProfile    workmodel.ExecutionProfile
 }
 type ApprovalDecision struct {
 	RequestID, TaskID, ExecutionID, UserID string

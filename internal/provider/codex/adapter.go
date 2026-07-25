@@ -114,12 +114,13 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 	if err := req.Input.Validate(); err != nil {
 		return provider.Session{}, nil, err
 	}
+	profile := normalizedProfile(req.ExecutionProfile, req.Model)
 	params := map[string]any{"experimentalRawEvents": false}
 	if req.WorkingDirectory != "" {
 		params["cwd"] = req.WorkingDirectory
 	}
-	if req.Model != "" {
-		params["model"] = req.Model
+	if profile.Model != "" {
+		params["model"] = profile.Model
 	}
 	var response threadResponse
 	if err := a.rpc.Call(ctx, "thread/start", params, &response); err != nil {
@@ -133,7 +134,7 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input, "", req.WritablePaths); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, profile, req.WritablePaths); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -147,8 +148,13 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 	if threadID == "" {
 		threadID = req.Session.ExternalID
 	}
+	profile := normalizedProfile(req.ExecutionProfile, req.Model)
+	params := map[string]any{"threadId": threadID}
+	if profile.Model != "" {
+		params["model"] = profile.Model
+	}
 	var response threadResponse
-	if err := a.rpc.Call(ctx, "thread/resume", map[string]any{"threadId": threadID}, &response); err != nil {
+	if err := a.rpc.Call(ctx, "thread/resume", params, &response); err != nil {
 		return provider.Session{}, nil, mapCallError(err)
 	}
 	if response.Thread.ID != "" {
@@ -170,7 +176,7 @@ func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provi
 		return provider.Session{}, nil, err
 	}
 	state := a.registerSession(session)
-	if err := a.startTurn(ctx, state, req.Input, req.Model, req.WritablePaths); err != nil {
+	if err := a.startTurn(ctx, state, req.Input, profile, req.WritablePaths); err != nil {
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -274,17 +280,21 @@ func (a *Adapter) Close() {
 // covers a fresh start and every resume through one path.
 const approvalsReviewerUser = "user"
 
-func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, model string, writable []string) error {
+func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, profile workmodel.ExecutionProfile, writable []string) error {
 	var response turnResponse
 	params := map[string]any{
 		"threadId":          state.session.ThreadID,
 		"input":             codexInput(input),
 		"approvalsReviewer": approvalsReviewerUser,
 	}
-	// A thread carries the model it started with, so this is only needed where
-	// the thread was not started here: a resume after a restart.
-	if model != "" {
-		params["model"] = model
+	// turn/start is the only non-deprecated protocol location for effort. Model
+	// is repeated here so the complete profile is explicit on both an initial
+	// turn and a turn resumed after a process restart.
+	if profile.Model != "" {
+		params["model"] = profile.Model
+	}
+	if profile.ReasoningEffort != "" {
+		params["effort"] = profile.ReasoningEffort
 	}
 	if len(writable) > 0 {
 		// networkAccess is stated rather than left out: the field defaults to
@@ -301,6 +311,15 @@ func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input prov
 	}
 	a.setTurn(state.session.ThreadID, response.Turn.ID)
 	return nil
+}
+
+func normalizedProfile(profile workmodel.ExecutionProfile, legacyModel string) workmodel.ExecutionProfile {
+	profile.Model = strings.TrimSpace(profile.Model)
+	profile.ReasoningEffort = strings.TrimSpace(profile.ReasoningEffort)
+	if profile.Model == "" {
+		profile.Model = strings.TrimSpace(legacyModel)
+	}
+	return profile
 }
 
 func (a *Adapter) persistSession(ctx context.Context, session provider.Session) error {

@@ -115,6 +115,7 @@ type StartRequest struct {
 	Input            Input
 	WorkingDirectory string
 	Model            string
+	ExecutionProfile workmodel.ExecutionProfile
 	// WritablePaths are absolute paths outside the worktree that this session
 	// may write to — a repository's toolchain caches, typically. Empty leaves
 	// the decision to the host's own provider policy.
@@ -128,8 +129,41 @@ type ResumeRequest struct {
 	// Model is the model this session was dispatched with. A resume must carry
 	// it or the session silently continues on the provider's default, which is
 	// not what the operator chose.
-	Model         string
-	WritablePaths []string
+	Model            string
+	ExecutionProfile workmodel.ExecutionProfile
+	WritablePaths    []string
+}
+
+type ReasoningEffortKind string
+
+const (
+	ReasoningEffortStandard      ReasoningEffortKind = "reasoning"
+	ReasoningEffortOrchestration ReasoningEffortKind = "orchestration"
+)
+
+type ReasoningEffort struct {
+	ID          string
+	Description string
+	Kind        ReasoningEffortKind
+}
+
+type Model struct {
+	ID                     string
+	DisplayName            string
+	Description            string
+	DefaultReasoningEffort string
+	ReasoningEfforts       []ReasoningEffort
+}
+
+type ExecutionCatalog struct {
+	DefaultModel string
+	Models       []Model
+}
+
+// ExecutionCatalogProvider is optional because not every provider protocol
+// exposes a live model catalog.
+type ExecutionCatalogProvider interface {
+	ExecutionCatalog(context.Context) (ExecutionCatalog, error)
 }
 
 type ApprovalDecision struct {

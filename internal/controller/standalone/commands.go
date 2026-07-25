@@ -245,15 +245,17 @@ func (a *App) retryTask(ctx context.Context, id string) (string, error) {
 	}
 	at := a.deps.Clock().UTC()
 	retry := workmodel.Task{
-		ID:             a.nextID(),
-		RepoProfileID:  previous.RepoProfileID,
-		Title:          previous.Title,
-		Prompt:         previous.Prompt,
-		State:          workmodel.Queued,
-		Provider:       previous.Provider,
-		TelegramChatID: previous.TelegramChatID,
-		CreatedAt:      at,
-		UpdatedAt:      at,
+		ID:               a.nextID(),
+		RepoProfileID:    previous.RepoProfileID,
+		Title:            previous.Title,
+		Prompt:           previous.Prompt,
+		State:            workmodel.Queued,
+		Provider:         previous.Provider,
+		Model:            previous.Model,
+		ExecutionProfile: previous.ExecutionProfile,
+		TelegramChatID:   previous.TelegramChatID,
+		CreatedAt:        at,
+		UpdatedAt:        at,
 	}
 	event := a.event(retry.ID, workmodel.EventTaskCreated, workmodel.VisibilityUser, map[string]any{"retry_of": previous.ID})
 	if err := a.deps.Store.CreateTask(ctx, retry, event); err != nil {

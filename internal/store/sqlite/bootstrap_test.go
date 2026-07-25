@@ -143,6 +143,42 @@ func TestOpenV2BackfillsTaskEventCursors(t *testing.T) {
 	}
 }
 
+func TestExecutionProfileMigrationPreservesModelOnlyTasks(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "agentbridge-v2-execution-profile.db")
+	db, err := openRaw(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrapV2(ctx, db, time.Now().UTC()); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	applyV2PrefixForTest(t, ctx, db, taskModelVersion)
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO local_tasks (id, title, prompt, state, provider, model, created_at, updated_at)
+		VALUES ('model-only-task', 'Existing task', 'Continue', 'queued', 'codex', 'gpt-5.6-terra', '2026-07-23T00:00:00Z', '2026-07-23T00:00:00Z')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenV2(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	task, err := store.Task(ctx, "model-only-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Model != "gpt-5.6-terra" || task.ExecutionProfile.Model != "gpt-5.6-terra" || task.ExecutionProfile.ReasoningEffort != "" {
+		t.Fatalf("migrated task = %#v", task)
+	}
+}
+
 func applyV2PrefixForTest(t *testing.T, ctx context.Context, db *sql.DB, through int) {
 	t.Helper()
 	for _, migration := range v2MigrationDefinitions() {

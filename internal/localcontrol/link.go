@@ -21,21 +21,22 @@ var (
 // remains high-level and carries no provider executable, filesystem path, or
 // credential.
 type DeviceCommand struct {
-	ID               string             `json:"id"`
-	Operation        string             `json:"operation"`
-	TaskID           string             `json:"task_id"`
-	ExecutionID      string             `json:"execution_id"`
-	SessionID        string             `json:"session_id"`
-	Provider         workmodel.Provider `json:"provider,omitempty"`
-	RepositoryID     string             `json:"repository_id,omitempty"`
-	RepositoryRemote string             `json:"repository_remote,omitempty"`
-	RuntimeID        string             `json:"runtime_id,omitempty"`
-	Title            string             `json:"title,omitempty"`
-	Prompt           string             `json:"prompt,omitempty"`
-	DeviceID         string             `json:"device_id"`
-	ConnectionEpoch  uint64             `json:"connection_epoch"`
-	Revision         int64              `json:"revision"`
-	Payload          json.RawMessage    `json:"payload,omitempty"`
+	ID               string                     `json:"id"`
+	Operation        string                     `json:"operation"`
+	TaskID           string                     `json:"task_id"`
+	ExecutionID      string                     `json:"execution_id"`
+	SessionID        string                     `json:"session_id"`
+	Provider         workmodel.Provider         `json:"provider,omitempty"`
+	ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile,omitempty"`
+	RepositoryID     string                     `json:"repository_id,omitempty"`
+	RepositoryRemote string                     `json:"repository_remote,omitempty"`
+	RuntimeID        string                     `json:"runtime_id,omitempty"`
+	Title            string                     `json:"title,omitempty"`
+	Prompt           string                     `json:"prompt,omitempty"`
+	DeviceID         string                     `json:"device_id"`
+	ConnectionEpoch  uint64                     `json:"connection_epoch"`
+	Revision         int64                      `json:"revision"`
+	Payload          json.RawMessage            `json:"payload,omitempty"`
 }
 
 type DeviceReply struct {
@@ -220,7 +221,7 @@ func (r *LinkedRuntime) commandResult(ctx context.Context, view TaskView, operat
 	}
 	command := DeviceCommand{
 		ID: id, Operation: operation, TaskID: view.ID, ExecutionID: view.ExecutionID,
-		SessionID: view.SessionID, Provider: view.Provider, RepositoryID: view.RepositoryID,
+		SessionID: view.SessionID, Provider: view.Provider, ExecutionProfile: view.ExecutionProfile, RepositoryID: view.RepositoryID,
 		RepositoryRemote: view.RepositoryRemote,
 		RuntimeID:        view.RuntimeID, Title: view.Title, Prompt: view.Prompt, DeviceID: view.TargetDeviceID,
 		ConnectionEpoch: view.TargetEpoch, Revision: view.Revision, Payload: encoded,

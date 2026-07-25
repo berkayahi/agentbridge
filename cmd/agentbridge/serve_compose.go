@@ -500,7 +500,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
-		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers},
+		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers},
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -718,7 +718,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		return fail(cause, closers...)
 	}
 	authCommands := auth.ExecCommandRunner{Executables: configuredExecutables(cfg), Environment: environment}
-	_, runtimes, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
+	providers, runtimes, providerClosers, err := composeProviders(ctx, cfg, paths, environment, data, control, claudeUsage, redactor, authCommands)
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
@@ -746,7 +746,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
-		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers},
+		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers},
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -856,6 +856,9 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 			return nil, nil, closers, err
 		}
 		closers = append(closers, process)
+		if err := codex.InitializeAppServer(ctx, process.Client); err != nil {
+			return nil, nil, closers, err
+		}
 		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },

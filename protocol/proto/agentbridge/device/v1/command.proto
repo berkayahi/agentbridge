@@ -29,6 +29,12 @@ message StartCommand {
   bytes policy_snapshot = 6;
   bytes input = 7;
   uint64 fencing_epoch = 8;
+  ExecutionProfile execution_profile = 9;
+}
+
+message ExecutionProfile {
+  string model = 1;
+  string reasoning_effort = 2;
 }
 
 message ResumeCommand { bytes input = 1; }

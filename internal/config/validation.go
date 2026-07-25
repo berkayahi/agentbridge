@@ -90,7 +90,7 @@ func (c Config) validateRuntime() error {
 			return errors.New("provider model must be a safe nonempty model identifier")
 		}
 		if name == "codex" && !supportedCodexModel(provider.Model) {
-			return errors.New("Codex model must be GPT-5.6 Terra or a higher Terra/Sol model")
+			return errors.New("Codex model must be GPT-5.6 Luna, Terra, Sol, or a higher named model")
 		}
 		if err := validateProviderModels(name, provider); err != nil {
 			return err
@@ -182,7 +182,7 @@ func validateProviderModels(name string, provider ProviderConfig) error {
 			return errors.New("provider models must be safe nonempty model identifiers")
 		}
 		if name == "codex" && !supportedCodexModel(model) {
-			return errors.New("every offered Codex model must be GPT-5.6 Terra or a higher Terra/Sol model")
+			return errors.New("every offered Codex model must be GPT-5.6 Luna, Terra, Sol, or a higher named model")
 		}
 		if model == provider.Model {
 			listed = true

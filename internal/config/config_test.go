@@ -84,7 +84,7 @@ func TestLoadRequiresSafeProviderModels(t *testing.T) {
 }
 
 func TestLoadAcceptsCurrentAndFutureSafeProviderModels(t *testing.T) {
-	for _, model := range []string{"gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-terra"} {
+	for _, model := range []string{"gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-6.1-terra"} {
 		t.Run(model, func(t *testing.T) {
 			yml := strings.Replace(validYAML, "gpt-5.6-terra", model, 1)
 			if _, err := Load(writeConfig(t, yml)); err != nil {
@@ -98,7 +98,7 @@ func TestLoadRejectsCodexModelsBelowTerraFloor(t *testing.T) {
 	for _, model := range []string{"gpt-5.5-terra", "gpt-5.6-mini", "gpt-4.1", "opus"} {
 		t.Run(model, func(t *testing.T) {
 			yml := strings.Replace(validYAML, "gpt-5.6-terra", model, 1)
-			assertLoadError(t, yml, "GPT-5.6 Terra")
+			assertLoadError(t, yml, "GPT-5.6")
 		})
 	}
 }

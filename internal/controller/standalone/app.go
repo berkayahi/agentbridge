@@ -598,7 +598,14 @@ func (a *App) execute(job queuedTask) {
 		return
 	}
 	a.beginProviderStart(value.Provider)
-	session, stream, err := p.Start(ctx, provider.StartRequest{TaskID: taskID, Input: input, WorkingDirectory: workspace.Path, Model: a.config.Models[value.Provider]})
+	profile := value.ExecutionProfile
+	if profile.Empty() {
+		profile.Model = a.config.Models[value.Provider]
+	}
+	session, stream, err := p.Start(ctx, provider.StartRequest{
+		TaskID: taskID, Input: input, WorkingDirectory: workspace.Path,
+		Model: profile.Model, ExecutionProfile: profile,
+	})
 	if err != nil {
 		a.endProviderStart(value.Provider)
 		a.executionFailure(ctx, value, err)
@@ -666,7 +673,14 @@ func (a *App) resume(ctx context.Context, value workmodel.Task, cancel context.C
 	}
 	input = agentContext(value, value.WorktreePath, input)
 	a.beginProviderStart(value.Provider)
-	session, stream, err := p.Resume(ctx, provider.ResumeRequest{TaskID: taskID, Session: saved, Input: provider.Input{Text: input}})
+	profile := value.ExecutionProfile
+	if profile.Empty() {
+		profile.Model = a.config.Models[value.Provider]
+	}
+	session, stream, err := p.Resume(ctx, provider.ResumeRequest{
+		TaskID: taskID, Session: saved, Input: provider.Input{Text: input},
+		Model: profile.Model, ExecutionProfile: profile,
+	})
 	if err != nil {
 		a.endProviderStart(value.Provider)
 		a.pause(value, "saved provider session could not be resumed safely")

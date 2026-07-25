@@ -65,10 +65,16 @@ func NewAdapter(cfg AdapterConfig) *Adapter {
 func (a *Adapter) Name() workmodel.Provider { return workmodel.ClaudeSubscription }
 
 func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
+	if request.Model == "" {
+		request.Model = request.ExecutionProfile.Model
+	}
 	return a.start(ctx, request.TaskID, request.Input, "", request.Model)
 }
 
 func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
+	if request.Model == "" {
+		request.Model = request.ExecutionProfile.Model
+	}
 	resume := request.Session.ExternalID
 	if resume == "" {
 		resume = request.Session.ID.String()

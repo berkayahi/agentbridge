@@ -266,9 +266,22 @@ func (a *Adapter) Close() {
 	a.wg.Wait()
 }
 
+// approvalsReviewerUser keeps every approval request — sandbox escapes, blocked
+// network access, MCP prompts — routed to the operator. Codex can instead route
+// them to a reviewing subagent that decides on its own, and a host config which
+// does that would let a session escalate its own permissions with nobody asked.
+// The override is per turn and carries to subsequent turns, so setting it here
+// covers a fresh start and every resume through one path.
+const approvalsReviewerUser = "user"
+
 func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input) error {
 	var response turnResponse
-	if err := a.rpc.Call(ctx, "turn/start", map[string]any{"threadId": state.session.ThreadID, "input": codexInput(input)}, &response); err != nil {
+	params := map[string]any{
+		"threadId":          state.session.ThreadID,
+		"input":             codexInput(input),
+		"approvalsReviewer": approvalsReviewerUser,
+	}
+	if err := a.rpc.Call(ctx, "turn/start", params, &response); err != nil {
 		return mapCallError(err)
 	}
 	a.setTurn(state.session.ThreadID, response.Turn.ID)

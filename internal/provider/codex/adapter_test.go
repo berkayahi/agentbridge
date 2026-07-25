@@ -315,3 +315,58 @@ func (f approvalSinkFunc) SaveApproval(ctx context.Context, approval ApprovalReq
 }
 
 var _ = sync.Mutex{}
+
+// Codex can route approval requests — sandbox escapes, blocked network access,
+// MCP prompts — to its own reviewing subagent instead of to the client. A
+// keeper's config that does so would let a bee escalate without ever asking,
+// which is the one thing the hive must never do. Every turn therefore pins the
+// reviewer to the user, on the first turn and on every resumed one.
+func TestEveryTurnRoutesApprovalsToTheKeeper(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		start func(*Adapter) error
+	}{
+		{"start", func(adapter *Adapter) error {
+			_, _, err := adapter.Start(context.Background(), provider.StartRequest{
+				TaskID: provider.MustID("task-1"), Input: provider.Input{Text: "work"},
+			})
+			return err
+		}},
+		{"resume", func(adapter *Adapter) error {
+			_, _, err := adapter.Resume(context.Background(), provider.ResumeRequest{
+				TaskID:  provider.MustID("task-1"),
+				Session: provider.Session{ID: provider.MustID("session-1"), TaskID: provider.MustID("task-1"), ThreadID: "thread-1"},
+				Input:   provider.Input{Text: "continue"},
+			})
+			return err
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var reviewer any
+			var seen bool
+			rpc := newFakeRPC()
+			rpc.call = func(method string, params any, result any) error {
+				switch method {
+				case "thread/start", "thread/resume":
+					setJSON(result, map[string]any{"thread": map[string]any{"id": "thread-1"}})
+				case "turn/start":
+					seen = true
+					reviewer = jsonValue(params)["approvalsReviewer"]
+					setJSON(result, map[string]any{"turn": map[string]any{"id": "turn-1"}})
+				}
+				return nil
+			}
+			adapter := NewAdapter(rpc, AdapterConfig{Sessions: sessionSinkFunc(func(context.Context, provider.Session) error { return nil })})
+			t.Cleanup(adapter.Close)
+			if err := testCase.start(adapter); err != nil {
+				t.Fatal(err)
+			}
+			if !seen {
+				t.Fatal("turn/start was never called")
+			}
+			if reviewer != "user" {
+				t.Fatalf("approvalsReviewer = %#v, want \"user\"", reviewer)
+			}
+		})
+	}
+}

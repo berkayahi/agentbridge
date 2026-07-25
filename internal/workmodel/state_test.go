@@ -13,7 +13,7 @@ func TestTransition(t *testing.T) {
 		{Committing, Pushing}, {Committing, Failed}, {Committing, Paused},
 		{Pushing, Completed}, {Pushing, Failed}, {Pushing, Paused},
 		{Completed, Running},
-		{Failed, Queued}, {Paused, Queued},
+		{Failed, Queued}, {Failed, Verifying}, {Paused, Queued},
 	}
 
 	allowed := make(map[[2]State]bool, len(valid))

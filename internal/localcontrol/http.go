@@ -56,6 +56,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/providers", a.listProviders)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
+	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
 	mux.HandleFunc("POST /v1/boards", a.createBoard)
 	mux.HandleFunc("POST /v1/tasks", a.createTask)
 	mux.HandleFunc("PATCH /v1/tasks/{id}", a.updateTask)
@@ -78,6 +79,16 @@ func (a *API) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a *API) integrateRepository(w http.ResponseWriter, r *http.Request) {
+	var request IntegrateRepositoryRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.RepositoryID = r.PathValue("id")
+	response, err := a.service.IntegrateRepository(r.Context(), request)
+	writeResult(w, http.StatusOK, response, err)
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {

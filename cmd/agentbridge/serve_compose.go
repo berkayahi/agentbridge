@@ -502,6 +502,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
 	if err != nil {
@@ -748,6 +749,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
 	if err != nil {
@@ -1219,6 +1221,38 @@ type workspaceAdapter struct {
 	profiles  map[string]bridgegit.RepositoryProfile
 	manager   bridgegit.WorkspaceManager
 	processes taskProcessInspector
+}
+
+// RecoverUnrecorded removes only a clean worktree at the deterministic task
+// path when durable task state proves no workspace or provider session was
+// ever accepted. This is the narrow crash window between `git worktree add`
+// and SaveWorkspace; reusing the task id then avoids duplicate AI work.
+func (w *workspaceAdapter) RecoverUnrecorded(ctx context.Context, profileID, taskID string) error {
+	profile, ok := w.profiles[profileID]
+	if !ok {
+		return bridgegit.ErrInvalidProfile
+	}
+	path := filepath.Join(profile.WorktreeRoot, taskID)
+	rel, err := filepath.Rel(profile.WorktreeRoot, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return bridgegit.ErrPathCollision
+	}
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	status, err := w.manager.Git.Run(ctx, path, "status", "--porcelain=v1", "-z")
+	if err != nil {
+		return fmt.Errorf("inspect unrecorded worktree: %w", err)
+	}
+	if status.Stdout != "" {
+		return fmt.Errorf("unrecorded worktree contains changes: %w", bridgegit.ErrPathCollision)
+	}
+	if _, err := w.manager.Git.Run(ctx, profile.ControlCheckout, "worktree", "remove", "--force", path); err != nil {
+		return fmt.Errorf("remove unrecorded worktree: %w", err)
+	}
+	return nil
 }
 
 func (w *workspaceAdapter) Prepare(ctx context.Context, profileID, taskID string) (bridgeapp.Workspace, error) {

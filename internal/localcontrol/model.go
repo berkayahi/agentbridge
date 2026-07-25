@@ -89,6 +89,7 @@ type ProviderReasoningEffort struct {
 
 type ProviderApprovalMode struct {
 	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -286,6 +287,37 @@ type CommitRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+// IntegrateRepositoryRequest is an explicit Git authority gesture. Unlike task
+// delivery, it may target a repository's protected main branch because the
+// local keeper selected both exact refs and fenced both remote tips.
+type IntegrateRepositoryRequest struct {
+	RepositoryID      string `json:"repository_id"`
+	SourceRef         string `json:"source_ref"`
+	TargetRef         string `json:"target_ref"`
+	ExpectedSourceSHA string `json:"expected_source_sha"`
+	ExpectedTargetSHA string `json:"expected_target_sha,omitempty"`
+	Message           string `json:"message"`
+	UpdateSource      bool   `json:"update_source"`
+	IdempotencyKey    string `json:"idempotency_key"`
+}
+
+type IntegrationReceipt struct {
+	ID                string    `json:"id"`
+	RepositoryID      string    `json:"repository_id"`
+	SourceRef         string    `json:"source_ref"`
+	TargetRef         string    `json:"target_ref"`
+	SourceSHA         string    `json:"source_sha"`
+	PreviousTargetSHA string    `json:"previous_target_sha"`
+	MergeSHA          string    `json:"merge_sha"`
+	SourceUpdated     bool      `json:"source_updated"`
+	Verification      string    `json:"verification"`
+	ObservedAt        time.Time `json:"observed_at"`
+}
+
+type IntegrationResponse struct {
+	Receipt IntegrationReceipt `json:"receipt"`
+}
+
 type ProjectResponse struct {
 	Project Project `json:"project"`
 }
@@ -452,6 +484,13 @@ type Committer interface {
 	Commit(context.Context, TaskView) (CommitReceipt, error)
 }
 
+// RepositoryIntegrator owns explicit, fenced integration into a selected
+// branch. The interface is generic Git authority and contains no Kovan product
+// concepts such as objectives, tasks, boards, or Queen.
+type RepositoryIntegrator interface {
+	Integrate(context.Context, IntegrateRepositoryRequest) (IntegrationReceipt, error)
+}
+
 // DeviceRuntime is the typed execution boundary for a paired device. A
 // remote implementation may use the device protocol or another authenticated
 // transport, but it receives TaskView and receipts rather than paths or raw
@@ -478,6 +517,7 @@ type Config struct {
 	Executor            Executor
 	Verifier            Verifier
 	Committer           Committer
+	Integrator          RepositoryIntegrator
 	RemoteDevices       map[string]DeviceRuntime
 	RemoteDeviceFactory RemoteDeviceFactory
 	Clock               func() time.Time

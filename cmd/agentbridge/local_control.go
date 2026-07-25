@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -273,6 +276,11 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 	task, err := e.store.Task(ctx, view.ID)
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(task.WorktreePath) == "" && strings.TrimSpace(task.ProviderSessionID) == "" {
+		if err := e.workspace.RecoverUnrecorded(ctx, target.profileID, view.ID); err != nil {
+			return err
+		}
 	}
 	workspace, err := e.workspace.Prepare(ctx, target.profileID, view.ID)
 	if err != nil {
@@ -676,9 +684,139 @@ func (c localCommitter) Commit(ctx context.Context, view localcontrol.TaskView) 
 	return localcontrol.CommitReceipt{CommitSHA: commit, RemoteRef: ref, ObservedAt: time.Now().UTC()}, nil
 }
 
+type localRepositoryIntegrator struct{ operations localRepositoryOperations }
+
+func (i localRepositoryIntegrator) Integrate(ctx context.Context, request localcontrol.IntegrateRepositoryRequest) (localcontrol.IntegrationReceipt, error) {
+	if i.operations.workspace == nil || i.operations.delivery == nil {
+		return localcontrol.IntegrationReceipt{}, localcontrol.ErrNotConfigured
+	}
+	profile, ok := i.operations.workspace.profiles[request.RepositoryID]
+	if !ok {
+		return localcontrol.IntegrationReceipt{}, localcontrol.ErrRepositoryNotConfigured
+	}
+	git := i.operations.delivery.git
+	remote := profile.Remote
+	sourceTracking := remoteTrackingRef(remote, request.SourceRef)
+	targetTracking := remoteTrackingRef(remote, request.TargetRef)
+	if _, err := git.Run(ctx, profile.ControlCheckout, "fetch", "--no-tags", remote,
+		"+"+request.SourceRef+":"+sourceTracking,
+		"+"+request.TargetRef+":"+targetTracking); err != nil {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("fetch integration refs: %w", err)
+	}
+	sourceSHA, err := resolveCommit(ctx, git, profile.ControlCheckout, sourceTracking)
+	if err != nil {
+		return localcontrol.IntegrationReceipt{}, err
+	}
+	targetSHA, err := resolveCommit(ctx, git, profile.ControlCheckout, targetTracking)
+	if err != nil {
+		return localcontrol.IntegrationReceipt{}, err
+	}
+	if sourceSHA != request.ExpectedSourceSHA {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("source ref changed: %w", localcontrol.ErrStaleRevision)
+	}
+	expectedTargetSHA := request.ExpectedTargetSHA
+	if expectedTargetSHA == "" {
+		expectedTargetSHA = targetSHA
+	}
+
+	// A crash may happen after the target push but before the idempotency
+	// response is stored. If the target now contains the exact source, accept
+	// that durable Git fact and finish the optional source alignment instead of
+	// creating a second merge commit.
+	if _, ancestorErr := git.Run(ctx, profile.ControlCheckout, "merge-base", "--is-ancestor", sourceSHA, targetSHA); ancestorErr == nil {
+		updated, updateErr := alignIntegrationSource(ctx, git, profile, request, sourceSHA, targetSHA)
+		if updateErr != nil {
+			return localcontrol.IntegrationReceipt{}, updateErr
+		}
+		return localcontrol.IntegrationReceipt{
+			ID: integrationReceiptID(request.IdempotencyKey), RepositoryID: request.RepositoryID,
+			SourceRef: request.SourceRef, TargetRef: request.TargetRef, SourceSHA: sourceSHA,
+			PreviousTargetSHA: expectedTargetSHA, MergeSHA: targetSHA, SourceUpdated: updated,
+			Verification: "configured verification passed before the durable target push",
+			ObservedAt:   time.Now().UTC(),
+		}, nil
+	}
+	if targetSHA != expectedTargetSHA {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("target ref changed: %w", localcontrol.ErrStaleRevision)
+	}
+
+	worktree := filepath.Join(profile.WorktreeRoot, "integrate-"+integrationPathID(request.IdempotencyKey))
+	// A stale path from a terminated integration is routine recovery. Git owns
+	// the cleanup and refuses paths outside this profile's worktree root.
+	if rel, relErr := filepath.Rel(profile.WorktreeRoot, worktree); relErr != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return localcontrol.IntegrationReceipt{}, bridgegit.ErrPathCollision
+	}
+	_, _ = git.Run(context.WithoutCancel(ctx), profile.ControlCheckout, "worktree", "remove", "--force", worktree)
+	if _, err := git.Run(ctx, profile.ControlCheckout, "worktree", "add", "--detach", worktree, targetSHA); err != nil {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("prepare integration worktree: %w", err)
+	}
+	defer func() {
+		_, _ = git.Run(context.Background(), profile.ControlCheckout, "worktree", "remove", "--force", worktree)
+	}()
+	if _, err := git.Run(ctx, worktree, "merge", "--no-ff", sourceSHA, "-m", request.Message); err != nil {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("merge source into target: %w", err)
+	}
+	mergeSHA, err := resolveCommit(ctx, git, worktree, "HEAD")
+	if err != nil {
+		return localcontrol.IntegrationReceipt{}, err
+	}
+	if err := i.operations.delivery.Verify(ctx, workmodel.Task{RepoProfileID: request.RepositoryID}, bridgeapp.Workspace{
+		BaseSHA: targetSHA, Path: worktree,
+	}); err != nil {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("verify integrated result: %w", err)
+	}
+	lease := "--force-with-lease=" + request.TargetRef + ":" + targetSHA
+	if _, err := git.Run(ctx, worktree, "push", lease, remote, mergeSHA+":"+request.TargetRef); err != nil {
+		return localcontrol.IntegrationReceipt{}, fmt.Errorf("push integrated target: %w", err)
+	}
+	updated, err := alignIntegrationSource(ctx, git, profile, request, sourceSHA, mergeSHA)
+	if err != nil {
+		return localcontrol.IntegrationReceipt{}, err
+	}
+	return localcontrol.IntegrationReceipt{
+		ID: integrationReceiptID(request.IdempotencyKey), RepositoryID: request.RepositoryID,
+		SourceRef: request.SourceRef, TargetRef: request.TargetRef, SourceSHA: sourceSHA,
+		PreviousTargetSHA: targetSHA, MergeSHA: mergeSHA, SourceUpdated: updated,
+		Verification: "configured verification passed", ObservedAt: time.Now().UTC(),
+	}, nil
+}
+
+func remoteTrackingRef(remote, head string) string {
+	return "refs/remotes/" + remote + "/" + strings.TrimPrefix(head, "refs/heads/")
+}
+
+func resolveCommit(ctx context.Context, git bridgegit.Runner, directory, ref string) (string, error) {
+	result, err := git.Run(ctx, directory, "rev-parse", "--verify", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", ref, err)
+	}
+	return strings.ToLower(strings.TrimSpace(result.Stdout)), nil
+}
+
+func alignIntegrationSource(ctx context.Context, git bridgegit.Runner, profile bridgegit.RepositoryProfile, request localcontrol.IntegrateRepositoryRequest, sourceSHA, mergeSHA string) (bool, error) {
+	if !request.UpdateSource || sourceSHA == mergeSHA {
+		return false, nil
+	}
+	lease := "--force-with-lease=" + request.SourceRef + ":" + sourceSHA
+	if _, err := git.Run(ctx, profile.ControlCheckout, "push", lease, profile.Remote, mergeSHA+":"+request.SourceRef); err != nil {
+		return false, fmt.Errorf("align source after integration: %w", err)
+	}
+	return true, nil
+}
+
+func integrationPathID(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:8])
+}
+
+func integrationReceiptID(key string) string {
+	return "integration-" + integrationPathID(key)
+}
+
 var _ localcontrol.Executor = (*localRuntimeExecutor)(nil)
 var _ localcontrol.Verifier = localVerifier{}
 var _ localcontrol.Committer = localCommitter{}
+var _ localcontrol.RepositoryIntegrator = localRepositoryIntegrator{}
 var _ localcontrol.DeviceObserver = (*reachabilityDeviceRuntime)(nil)
 
 // maxDiffBytes bounds what a keeper is shown. A huge patch is reported as

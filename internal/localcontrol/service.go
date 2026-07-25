@@ -39,6 +39,7 @@ type Service struct {
 	executor   Executor
 	verifier   Verifier
 	committer  Committer
+	integrator RepositoryIntegrator
 	clock      func() time.Time
 	newID      func(string) string
 }
@@ -61,8 +62,91 @@ func New(config Config) (*Service, error) {
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
-		clock: config.Clock, newID: config.NewID,
+		integrator: config.Integrator,
+		clock:      config.Clock, newID: config.NewID,
 	}, nil
+}
+
+func (s *Service) IntegrateRepository(ctx context.Context, request IntegrateRepositoryRequest) (IntegrationResponse, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+
+	payload := struct {
+		RepositoryID      string `json:"repository_id"`
+		SourceRef         string `json:"source_ref"`
+		TargetRef         string `json:"target_ref"`
+		ExpectedSourceSHA string `json:"expected_source_sha"`
+		ExpectedTargetSHA string `json:"expected_target_sha,omitempty"`
+		Message           string `json:"message"`
+		UpdateSource      bool   `json:"update_source"`
+	}{
+		RepositoryID:      strings.TrimSpace(request.RepositoryID),
+		SourceRef:         strings.TrimSpace(request.SourceRef),
+		TargetRef:         strings.TrimSpace(request.TargetRef),
+		ExpectedSourceSHA: strings.ToLower(strings.TrimSpace(request.ExpectedSourceSHA)),
+		ExpectedTargetSHA: strings.ToLower(strings.TrimSpace(request.ExpectedTargetSHA)),
+		Message:           strings.TrimSpace(request.Message),
+		UpdateSource:      request.UpdateSource,
+	}
+	var cached IntegrationResponse
+	if done, err := s.replay(ctx, request.IdempotencyKey, "integrate_repository", payload, &cached); done || err != nil {
+		return cached, err
+	}
+	if s.integrator == nil || !validID(payload.RepositoryID) || payload.SourceRef == payload.TargetRef ||
+		!validHeadRef(payload.SourceRef) || !validHeadRef(payload.TargetRef) ||
+		!validGitObjectID(payload.ExpectedSourceSHA) ||
+		(payload.ExpectedTargetSHA != "" && !validGitObjectID(payload.ExpectedTargetSHA)) ||
+		payload.Message == "" || len(payload.Message) > 200 || strings.ContainsAny(payload.Message, "\x00\r\n") {
+		if s.integrator == nil {
+			return IntegrationResponse{}, ErrNotConfigured
+		}
+		return IntegrationResponse{}, ErrInvalidRequest
+	}
+	request.RepositoryID = payload.RepositoryID
+	request.SourceRef = payload.SourceRef
+	request.TargetRef = payload.TargetRef
+	request.ExpectedSourceSHA = payload.ExpectedSourceSHA
+	request.ExpectedTargetSHA = payload.ExpectedTargetSHA
+	request.Message = payload.Message
+	receipt, err := s.integrator.Integrate(ctx, request)
+	if err != nil {
+		return IntegrationResponse{}, err
+	}
+	response := IntegrationResponse{Receipt: receipt}
+	if err := s.remember(ctx, request.IdempotencyKey, "integrate_repository", payload, response); err != nil {
+		return IntegrationResponse{}, err
+	}
+	return response, nil
+}
+
+func validHeadRef(ref string) bool {
+	const prefix = "refs/heads/"
+	branch := strings.TrimPrefix(ref, prefix)
+	if branch == ref || branch == "" || strings.ContainsAny(branch, " ~^:?*[\\") ||
+		strings.Contains(branch, "..") || strings.Contains(branch, "//") ||
+		strings.Contains(branch, "@{") || strings.HasSuffix(branch, "/") ||
+		strings.HasSuffix(branch, ".") {
+		return false
+	}
+	for _, part := range strings.Split(branch, "/") {
+		if part == "" || part == "." || part == ".." || strings.HasPrefix(part, ".") ||
+			strings.HasSuffix(part, ".lock") {
+			return false
+		}
+	}
+	return true
+}
+
+func validGitObjectID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, letter := range value {
+		if !((letter >= '0' && letter <= '9') || (letter >= 'a' && letter <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) CreateProject(ctx context.Context, request CreateProjectRequest) (ProjectResponse, error) {

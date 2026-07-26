@@ -70,6 +70,31 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 			}
 			event.Tool = params.Item.Name
 		}
+	case "account/rateLimits/updated":
+		// A rolling window update, pushed while she flies. The schema calls it
+		// sparse: a client merges what arrives into the last full read rather
+		// than treating an absent field as zero. So absent windows are omitted
+		// here and a consumer keeps whatever it already had — reporting a missing
+		// window as 0% used would tell the keeper their allowance is untouched at
+		// the exact moment it is running out.
+		var params struct {
+			RateLimits struct {
+				Primary   *rateLimitWindow `json:"primary"`
+				Secondary *rateLimitWindow `json:"secondary"`
+			} `json:"rateLimits"`
+		}
+		if json.Unmarshal(message.Params, &params) != nil {
+			return provider.Event{}, false
+		}
+		usage := provider.Usage{Provider: workmodel.CodexSubscription, ObservedAt: now}
+		usage.Windows = appendWindow(usage.Windows, "primary", params.RateLimits.Primary)
+		usage.Windows = appendWindow(usage.Windows, "secondary", params.RateLimits.Secondary)
+		if len(usage.Windows) == 0 {
+			// Nothing usable arrived, so nothing is claimed.
+			return provider.Event{}, false
+		}
+		event.Type = provider.EventUsage
+		event.Usage = &usage
 	case "thread/tokenUsage/updated":
 		// Codex reports what a turn cost, per turn, and this was dropped on the
 		// floor: the notification was not in this switch, so EventUsage was

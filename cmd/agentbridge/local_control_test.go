@@ -3,15 +3,79 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/berkayahi/agentbridge/internal/config"
+	bridgegit "github.com/berkayahi/agentbridge/internal/git"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
+
+func TestAlignedIntegrationRecoveryRequiresExactMergeEvidence(t *testing.T) {
+	ctx := context.Background()
+	checkout := filepath.Join(t.TempDir(), "repository")
+	runGit := func(args ...string) string {
+		t.Helper()
+		result, err := (bridgegit.Runner{}).Run(ctx, checkout, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(result.Stdout)
+	}
+	if err := os.MkdirAll(checkout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.name", "AgentBridge Test")
+	runGit("config", "user.email", "agentbridge@example.invalid")
+	if err := os.WriteFile(filepath.Join(checkout, "base.txt"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "base.txt")
+	runGit("commit", "-m", "test: base")
+	runGit("checkout", "-b", "hive/landing")
+	if err := os.WriteFile(filepath.Join(checkout, "source.txt"), []byte("source\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "source.txt")
+	runGit("commit", "-m", "test: source")
+	sourceSHA := runGit("rev-parse", "HEAD")
+	runGit("checkout", "main")
+	if err := os.WriteFile(filepath.Join(checkout, "target.txt"), []byte("target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "target.txt")
+	runGit("commit", "-m", "test: target")
+	message := "merge: integrate objective"
+	runGit("merge", "--no-ff", sourceSHA, "-m", message)
+	mergeSHA := runGit("rev-parse", "HEAD")
+
+	request := localcontrol.IntegrateRepositoryRequest{
+		ExpectedSourceSHA: sourceSHA,
+		Message:           message,
+		UpdateSource:      true,
+	}
+	recovered, err := alignedIntegrationRecovery(ctx, bridgegit.Runner{}, checkout, request, mergeSHA, mergeSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered {
+		t.Fatal("exact aligned merge was not recovered")
+	}
+	request.Message = "merge: a different objective"
+	recovered, err = alignedIntegrationRecovery(ctx, bridgegit.Runner{}, checkout, request, mergeSHA, mergeSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered {
+		t.Fatal("aligned merge with a different message was recovered")
+	}
+}
 
 func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) {
 	adapter := &approvalCaptureRuntime{}

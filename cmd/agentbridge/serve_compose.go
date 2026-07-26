@@ -444,7 +444,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	if err != nil {
 		return fail(err)
 	}
-	claudeUsage := claude.NewUsageCache()
+	claudeUsage := claude.NewUsageCache(filepath.Join(paths.data, "claude-usage.json"))
 	control := controlsocket.NewServer(paths.controlSocket, controlHandler{store: data, messenger: client, claudeUsage: claudeUsage, approvals: approvalBroker, redactor: redactor})
 	if err := control.Start(); err != nil {
 		return fail(err)
@@ -626,7 +626,7 @@ func buildHeadlessDeviceDaemon(ctx context.Context, cfg config.Config, paths run
 	if err != nil {
 		return fail(err)
 	}
-	claudeUsage := claude.NewUsageCache()
+	claudeUsage := claude.NewUsageCache(filepath.Join(paths.data, "claude-usage.json"))
 	control := controlsocket.NewServer(paths.controlSocket, controlHandler{
 		store: data, messenger: messenger, claudeUsage: claudeUsage, approvals: approvalBroker, redactor: redactor,
 	})
@@ -711,7 +711,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return fail(err)
 	}
-	claudeUsage := claude.NewUsageCache()
+	claudeUsage := claude.NewUsageCache(filepath.Join(paths.data, "claude-usage.json"))
 	control := controlsocket.NewServer(paths.controlSocket, controlHandler{
 		store: data, messenger: messenger, claudeUsage: claudeUsage, approvals: approvalBroker, redactor: redactor,
 	})

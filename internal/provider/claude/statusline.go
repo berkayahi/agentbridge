@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -31,11 +33,40 @@ type UsageSnapshot struct {
 type UsageCache struct {
 	mu     sync.RWMutex
 	latest UsageSnapshot
+	path   string
 }
 
-func NewUsageCache() *UsageCache                    { return &UsageCache{} }
-func (c *UsageCache) Update(snapshot UsageSnapshot) { c.mu.Lock(); c.latest = snapshot; c.mu.Unlock() }
-func (c *UsageCache) Snapshot() UsageSnapshot       { c.mu.RLock(); defer c.mu.RUnlock(); return c.latest }
+// NewUsageCache restores the last safe status-line observation when a durable
+// path is supplied. The snapshot contains allowance windows only; credentials,
+// transcript paths, and session identifiers are never written.
+func NewUsageCache(paths ...string) *UsageCache {
+	cache := &UsageCache{}
+	if len(paths) != 1 || !filepath.IsAbs(paths[0]) {
+		return cache
+	}
+	cache.path = filepath.Clean(paths[0])
+	info, err := os.Lstat(cache.path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxStatuslineBytes {
+		return cache
+	}
+	body, err := os.ReadFile(cache.path)
+	if err != nil {
+		return cache
+	}
+	var snapshot UsageSnapshot
+	if json.Unmarshal(body, &snapshot) == nil && durableSnapshot(snapshot, time.Now().UTC()) {
+		cache.latest = snapshot
+	}
+	return cache
+}
+
+func (c *UsageCache) Update(snapshot UsageSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.latest = snapshot
+	c.persist(snapshot)
+}
+func (c *UsageCache) Snapshot() UsageSnapshot { c.mu.RLock(); defer c.mu.RUnlock(); return c.latest }
 func (c *UsageCache) ProviderUsage() (provider.Usage, error) {
 	snapshot := c.Snapshot()
 	if snapshot.ObservedAt.IsZero() {
@@ -49,6 +80,41 @@ func (c *UsageCache) ProviderUsage() (provider.Usage, error) {
 		usage.Windows = append(usage.Windows, provider.UsageWindow{Name: "seven_day", UsedPercent: snapshot.SevenDay.UsedPercent, ResetsAt: snapshot.SevenDay.ResetsAt.UTC()})
 	}
 	return usage, nil
+}
+
+func durableSnapshot(snapshot UsageSnapshot, now time.Time) bool {
+	if snapshot.ObservedAt.IsZero() || snapshot.ObservedAt.After(now.Add(5*time.Minute)) ||
+		now.Sub(snapshot.ObservedAt) > 8*24*time.Hour {
+		return false
+	}
+	return snapshot.FiveHour != nil || snapshot.SevenDay != nil
+}
+
+func (c *UsageCache) persist(snapshot UsageSnapshot) {
+	if c.path == "" || !durableSnapshot(snapshot, time.Now().UTC()) {
+		return
+	}
+	snapshot.SessionID = ""
+	body, err := json.Marshal(snapshot)
+	if err != nil || len(body) > maxStatuslineBytes {
+		return
+	}
+	directory := filepath.Dir(c.path)
+	file, err := os.CreateTemp(directory, ".claude-usage-*")
+	if err != nil {
+		return
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if file.Chmod(0o600) != nil {
+		_ = file.Close()
+		return
+	}
+	if _, err = file.Write(body); err != nil || file.Sync() != nil || file.Close() != nil {
+		_ = file.Close()
+		return
+	}
+	_ = os.Rename(temporary, c.path)
 }
 
 type StatuslineScope struct {

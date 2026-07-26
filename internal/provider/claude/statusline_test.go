@@ -3,6 +3,8 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +41,36 @@ func TestStatuslineRejectsOversizedOrTrailingInput(t *testing.T) {
 		if err := CaptureStatusline(context.Background(), strings.NewReader(input), caller, StatuslineScope{}, time.Now); err == nil {
 			t.Fatalf("invalid input accepted")
 		}
+	}
+}
+
+func TestUsageCacheSurvivesRestartWithoutPersistingSessionIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "claude-usage.json")
+	cache := NewUsageCache(path)
+	cache.Update(UsageSnapshot{
+		SessionID:  "private-session",
+		ObservedAt: time.Now().UTC(),
+		FiveHour:   &UsageWindow{UsedPercent: 42, ResetsAt: time.Now().Add(time.Hour).UTC()},
+	})
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "private-session") {
+		t.Fatal("the persisted allowance disclosed a provider session identifier")
+	}
+	restarted := NewUsageCache(path)
+	usage, err := restarted.ProviderUsage()
+	if err != nil || len(usage.Windows) != 1 || usage.Windows[0].UsedPercent != 42 {
+		t.Fatalf("restored usage = %#v, err = %v", usage, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("persisted mode = %o", info.Mode().Perm())
 	}
 }
 

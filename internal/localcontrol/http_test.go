@@ -285,3 +285,4 @@ func TestLocalTransportAuthOnOwnerUnixSocket(t *testing.T) {
 		t.Fatal("local API did not stop")
 	}
 }
+

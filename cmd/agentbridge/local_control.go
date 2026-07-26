@@ -498,7 +498,12 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 	result := make([]localcontrol.RepositoryProfile, 0, len(ids))
 	for _, id := range ids {
 		profile := c.workspace.profiles[id]
-		result = append(result, localcontrol.RepositoryProfile{ID: id, Remote: profile.Remote, BaseRef: profile.BaseRef})
+		result = append(result, localcontrol.RepositoryProfile{
+			ID:           id,
+			Remote:       profile.Remote,
+			BaseRef:      profile.BaseRef,
+			CheckoutPath: profile.ControlCheckout,
+		})
 	}
 	return result, nil
 }

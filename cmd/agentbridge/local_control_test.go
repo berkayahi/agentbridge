@@ -200,3 +200,38 @@ func (*approvalCaptureRuntime) AuthStatus(context.Context) (bridgeRuntime.AuthSt
 }
 
 var _ bridgeRuntime.Adapter = (*approvalCaptureRuntime)(nil)
+
+// A client that cannot locate a repository on disk cannot show anything the
+// repository itself holds, which is what kept Kovan from ever reading the hive's
+// own memory files. The checkout is reported; the id remains the only thing work
+// is resolved against.
+func TestRepositoryProfilesReportTheControlCheckout(t *testing.T) {
+	catalog := repositoryCatalog{workspace: &workspaceAdapter{
+		profiles: map[string]bridgegit.RepositoryProfile{
+			"platform": {
+				ControlCheckout: "/Users/keeper/kovan-hive/checkouts/platform",
+				Remote:          "origin",
+				BaseRef:         "refs/heads/hive/landing",
+				WorktreeRoot:    "/Users/keeper/kovan-hive/worktrees/platform",
+			},
+		},
+	}}
+
+	profiles, err := catalog.RepositoryProfiles(context.Background())
+	if err != nil {
+		t.Fatalf("profiles: %v", err)
+	}
+	if len(profiles) != 1 {
+		t.Fatalf("expected one profile, got %d", len(profiles))
+	}
+	got := profiles[0]
+	if got.ID != "platform" {
+		t.Fatalf("id must stay the configured id, got %q", got.ID)
+	}
+	if got.CheckoutPath != "/Users/keeper/kovan-hive/checkouts/platform" {
+		t.Fatalf("checkout path not reported, got %q", got.CheckoutPath)
+	}
+	if got.Remote != "origin" || got.BaseRef != "refs/heads/hive/landing" {
+		t.Fatalf("existing fields must be unchanged, got %+v", got)
+	}
+}

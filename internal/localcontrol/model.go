@@ -43,6 +43,13 @@ type RepositoryProfile struct {
 	ID      string `json:"id"`
 	Remote  string `json:"remote,omitempty"`
 	BaseRef string `json:"base_ref,omitempty"`
+	// CheckoutPath is the control checkout this profile resolves to. It is
+	// reported because a client that cannot locate a repository on disk cannot
+	// show anything the repository itself holds — the hive's own memory files
+	// being the case that prompted this. It is a loopback-only API on the
+	// keeper's own machine describing the keeper's own paths, and it grants no
+	// authority: work is still resolved against the configured id.
+	CheckoutPath string `json:"checkout_path,omitempty"`
 }
 
 // RepositoryCatalog reports the configured repository profiles. It is the one

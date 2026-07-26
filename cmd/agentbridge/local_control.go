@@ -722,7 +722,7 @@ func (i localRepositoryIntegrator) Integrate(ctx context.Context, request localc
 		return localcontrol.IntegrationReceipt{
 			ID: integrationReceiptID(request.IdempotencyKey), RepositoryID: request.RepositoryID,
 			SourceRef: request.SourceRef, TargetRef: request.TargetRef, SourceSHA: request.ExpectedSourceSHA,
-			PreviousTargetSHA: request.ExpectedTargetSHA, MergeSHA: targetSHA,
+			PreviousTargetSHA: request.ExpectedTargetSHA, MergeSHA: sourceSHA,
 			Verification: "configured verification passed before the recovered durable target push",
 			ObservedAt:   time.Now().UTC(),
 		}, nil
@@ -797,10 +797,12 @@ func (i localRepositoryIntegrator) Integrate(ctx context.Context, request localc
 // alignedIntegrationRecovery closes the crash window after both durable pushes
 // succeeded but before the local idempotency response was stored. In that
 // state UpdateSource has moved the source ref onto the target merge, so the
-// original expected source no longer equals either live ref. A retry is safe
-// only when the aligned tip is the exact no-ff merge AgentBridge was asked to
-// create: the expected source must be a direct parent and the subject must
-// still equal the bounded integration message.
+// original expected source no longer equals the live source ref. The target
+// may also have advanced after that merge. A retry is safe only when the
+// aligned source tip is the exact no-ff merge AgentBridge was asked to create:
+// the expected source must be a direct parent, the subject must still equal
+// the bounded integration message, and that merge must remain in the target's
+// history.
 func alignedIntegrationRecovery(
 	ctx context.Context,
 	git bridgegit.Runner,
@@ -808,10 +810,13 @@ func alignedIntegrationRecovery(
 	request localcontrol.IntegrateRepositoryRequest,
 	sourceSHA, targetSHA string,
 ) (bool, error) {
-	if !request.UpdateSource || sourceSHA != targetSHA || sourceSHA == request.ExpectedSourceSHA {
+	if !request.UpdateSource || sourceSHA == request.ExpectedSourceSHA {
 		return false, nil
 	}
-	result, err := git.Run(ctx, checkout, "rev-list", "--parents", "-n", "1", targetSHA)
+	if _, err := git.Run(ctx, checkout, "merge-base", "--is-ancestor", sourceSHA, targetSHA); err != nil {
+		return false, nil
+	}
+	result, err := git.Run(ctx, checkout, "rev-list", "--parents", "-n", "1", sourceSHA)
 	if err != nil {
 		return false, fmt.Errorf("inspect aligned integration parents: %w", err)
 	}
@@ -819,7 +824,7 @@ func alignedIntegrationRecovery(
 	if len(fields) < 3 || !slices.Contains(fields[1:], request.ExpectedSourceSHA) {
 		return false, nil
 	}
-	subject, err := git.Run(ctx, checkout, "show", "-s", "--format=%s", targetSHA)
+	subject, err := git.Run(ctx, checkout, "show", "-s", "--format=%s", sourceSHA)
 	if err != nil {
 		return false, fmt.Errorf("inspect aligned integration message: %w", err)
 	}

@@ -75,6 +75,20 @@ func TestAlignedIntegrationRecoveryRequiresExactMergeEvidence(t *testing.T) {
 	if recovered {
 		t.Fatal("aligned merge with a different message was recovered")
 	}
+	request.Message = message
+	if err := os.WriteFile(filepath.Join(checkout, "later.txt"), []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "later.txt")
+	runGit("commit", "-m", "test: target advances")
+	advancedTargetSHA := runGit("rev-parse", "HEAD")
+	recovered, err = alignedIntegrationRecovery(ctx, bridgegit.Runner{}, checkout, request, mergeSHA, advancedTargetSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recovered {
+		t.Fatal("exact aligned merge was not recovered after the target advanced")
+	}
 }
 
 func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) {

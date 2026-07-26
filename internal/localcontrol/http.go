@@ -54,6 +54,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/boards", a.listBoards)
 	mux.HandleFunc("GET /v1/tasks", a.listTasks)
 	mux.HandleFunc("GET /v1/providers", a.listProviders)
+	mux.HandleFunc("GET /v1/usage", a.usage)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -88,6 +89,14 @@ func (a *API) integrateRepository(w http.ResponseWriter, r *http.Request) {
 	}
 	request.RepositoryID = r.PathValue("id")
 	response, err := a.service.IntegrateRepository(r.Context(), request)
+	writeResult(w, http.StatusOK, response, err)
+}
+
+// usage is deliberately separate from the provider catalog. The catalog is
+// polled every couple of seconds by the surface; asking a runtime what a
+// subscription has left is not that cheap.
+func (a *API) usage(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.Usage(r.Context())
 	writeResult(w, http.StatusOK, response, err)
 }
 

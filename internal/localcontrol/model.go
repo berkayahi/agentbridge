@@ -106,6 +106,44 @@ type ProviderCatalog interface {
 	ProviderProfiles(ctx context.Context) ([]ProviderInfo, error)
 }
 
+// UsageWindowView is how much of one allowance is gone, and when it renews.
+type UsageWindowView struct {
+	Name        string    `json:"name"`
+	UsedPercent float64   `json:"used_percent"`
+	ResetsAt    time.Time `json:"resets_at,omitempty"`
+}
+
+// ProviderUsageView is what one runtime reports about the keeper's own
+// subscription. Absence is reported rather than filled in: "not reported" and
+// "nothing used" are different facts and only one of them is good news.
+type ProviderUsageView struct {
+	Provider   string            `json:"provider"`
+	Reported   bool              `json:"reported"`
+	Reason     string            `json:"reason,omitempty"`
+	ObservedAt time.Time         `json:"observed_at,omitempty"`
+	Windows    []UsageWindowView `json:"windows,omitempty"`
+	// Authenticated is a pointer so "the runtime did not say" stays distinct
+	// from "it said no".
+	Authenticated *bool  `json:"authenticated,omitempty"`
+	Account       string `json:"account,omitempty"`
+}
+
+type UsageResponse struct {
+	Providers []ProviderUsageView `json:"providers"`
+	// CachedFor tells a client how stale this may be, so it can decide for
+	// itself whether to ask again rather than guessing at the cadence.
+	CachedForSeconds int `json:"cached_for_seconds"`
+}
+
+// UsageSource reports subscription usage and authentication for one runtime.
+// Asking is not free — one adapter answers from an in-memory cache fed by a
+// statusline hook, another makes two live RPC calls against a running session —
+// which is why this is its own endpoint with its own cache rather than a field
+// on the provider catalog that the surface polls every 2.5 seconds.
+type UsageSource interface {
+	ProviderUsage(ctx context.Context) ([]ProviderUsageView, error)
+}
+
 type Project struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`

@@ -929,3 +929,62 @@ func (e *localRuntimeExecutor) Diff(ctx context.Context, view localcontrol.TaskV
 	}
 	return diff, nil
 }
+
+// providerUsage answers what each configured runtime says about the keeper's own
+// subscription. It exists as its own source rather than as fields on the provider
+// catalog because the two adapters cost wildly different things to ask: Claude
+// answers from an in-memory snapshot fed by a statusline hook, while Codex makes
+// two live RPC calls against a running session. The catalog is polled every
+// couple of seconds; this is not.
+type providerUsage struct {
+	providers map[string]config.ProviderConfig
+	live      map[workmodel.Provider]provider.Provider
+}
+
+func (u providerUsage) ProviderUsage(ctx context.Context) ([]localcontrol.ProviderUsageView, error) {
+	ids := make([]string, 0, len(u.providers))
+	for id := range u.providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	views := make([]localcontrol.ProviderUsageView, 0, len(ids))
+	for _, id := range ids {
+		view := localcontrol.ProviderUsageView{Provider: id}
+		native := u.live[workmodel.Provider(id)]
+		if native == nil {
+			// Not reported is not nothing used. A runtime this host cannot ask
+			// says so, rather than appearing to have an untouched allowance.
+			view.Reason = "this runtime does not report usage on this host"
+			views = append(views, view)
+			continue
+		}
+		usage, err := native.Usage(ctx)
+		if err != nil {
+			view.Reason = "the runtime did not answer"
+			views = append(views, view)
+			continue
+		}
+		view.Reported = len(usage.Windows) > 0
+		view.ObservedAt = usage.ObservedAt
+		for _, window := range usage.Windows {
+			view.Windows = append(view.Windows, localcontrol.UsageWindowView{
+				Name:        window.Name,
+				UsedPercent: window.UsedPercent,
+				ResetsAt:    window.ResetsAt,
+			})
+		}
+		if !view.Reported {
+			view.Reason = "the runtime reported no window"
+		}
+		// Authentication is asked separately and is allowed to be unknown: a
+		// pointer keeps "it did not say" apart from "it said no".
+		if status, authErr := native.AuthStatus(ctx); authErr == nil {
+			authenticated := status.Authenticated
+			view.Authenticated = &authenticated
+			view.Account = status.Account
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}

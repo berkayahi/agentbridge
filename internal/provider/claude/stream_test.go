@@ -198,6 +198,39 @@ func TestParseStreamMapsVisibleEventsAndStructuredFailures(t *testing.T) {
 	}
 }
 
+// K9: the assistant_message contract promises a complete message. Claude has
+// no delta notion — every "text" content block already is the whole message
+// — so the adapter must never emit the fragment type Codex uses for
+// streaming tokens.
+func TestParseLineEmitsWholeAssistantMessagesOnly(t *testing.T) {
+	events := parseLine([]byte(`{"type":"assistant","session_id":"s-1","message":{"content":[{"type":"text","text":"whole reply"}]}}`))
+	if len(events) != 1 || events[0].Event.Type != provider.EventAssistantMessage || events[0].Event.Message != "whole reply" {
+		t.Fatalf("events = %#v", events)
+	}
+	for _, event := range events {
+		if event.Event.Type == provider.EventAssistantMessageDelta {
+			t.Fatal("Claude adapter must never emit the fragment type; it has no delta notion")
+		}
+	}
+}
+
+// K10: an envelope type parseLine does not recognize (for example a future
+// "stream_event" partial-message notification) must still surface as an
+// event instead of vanishing, or the conversation would look like it went
+// silent while the provider kept talking.
+func TestParseLineReportsUnknownEnvelopeInsteadOfDroppingIt(t *testing.T) {
+	events := parseLine([]byte(`{"type":"stream_event","session_id":"s-1"}`))
+	if len(events) != 1 {
+		t.Fatalf("events = %#v, want exactly one", events)
+	}
+	if events[0].Event.Type != provider.EventHeartbeat {
+		t.Fatalf("type = %q, want %q: an unrecognized envelope is not known to be a failure", events[0].Event.Type, provider.EventHeartbeat)
+	}
+	if !strings.Contains(events[0].Event.Message, "stream_event") {
+		t.Fatalf("message = %q, want it to name the unrecognized envelope type", events[0].Event.Message)
+	}
+}
+
 func TestInputMessagePreservesUnicodeAttachmentPathsWithoutShell(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ekran görüntüsü final.png")

@@ -12,21 +12,35 @@ import (
 type EventType string
 
 const (
+	// EventAssistantMessage carries one complete assistant message: the full
+	// text a consumer can display or store as-is. A provider that streams
+	// tokens must assemble them into this type on completion; it must never
+	// map an individual token or chunk to EventAssistantMessage, because
+	// events already stored in the spool carry this type meaning "whole
+	// message" and consumers rely on that meaning to render or replay history.
 	EventAssistantMessage EventType = "assistant_message"
-	EventCommandStarted   EventType = "command_started"
-	EventCommandEnded     EventType = "command_ended"
-	EventFileStarted      EventType = "file_started"
-	EventFileEnded        EventType = "file_ended"
-	EventToolStarted      EventType = "tool_started"
-	EventToolEnded        EventType = "tool_ended"
-	EventApprovalRequired EventType = "approval_required"
-	EventApprovalExpired  EventType = "approval_expired"
-	EventAuthRequired     EventType = "auth_required"
-	EventRateLimited      EventType = "rate_limited"
-	EventUsage            EventType = "usage"
-	EventHeartbeat        EventType = "heartbeat"
-	EventError            EventType = "error"
-	EventCompleted        EventType = "completed"
+	// EventAssistantMessageDelta carries one fragment of an in-progress
+	// assistant message — a partial token or chunk, not yet the full text.
+	// Consumers that want the running text must concatenate deltas
+	// themselves; the durable record of what was actually said is the single
+	// EventAssistantMessage emitted when the message completes, not the sum
+	// of its deltas. A provider with no streaming notion (one message per
+	// turn) simply never emits this type.
+	EventAssistantMessageDelta EventType = "assistant_message_delta"
+	EventCommandStarted        EventType = "command_started"
+	EventCommandEnded          EventType = "command_ended"
+	EventFileStarted           EventType = "file_started"
+	EventFileEnded             EventType = "file_ended"
+	EventToolStarted           EventType = "tool_started"
+	EventToolEnded             EventType = "tool_ended"
+	EventApprovalRequired      EventType = "approval_required"
+	EventApprovalExpired       EventType = "approval_expired"
+	EventAuthRequired          EventType = "auth_required"
+	EventRateLimited           EventType = "rate_limited"
+	EventUsage                 EventType = "usage"
+	EventHeartbeat             EventType = "heartbeat"
+	EventError                 EventType = "error"
+	EventCompleted             EventType = "completed"
 )
 
 // Event contains observable provider output only. Hidden reasoning is neither

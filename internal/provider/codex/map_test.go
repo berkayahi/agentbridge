@@ -38,3 +38,77 @@ func TestRetryableProviderErrorKeepsTheBeeAlive(t *testing.T) {
 		})
 	}
 }
+
+// K7: a streaming delta is a fragment of an in-progress message, never the
+// whole thing. Mapping it to EventAssistantMessage — the pre-fix behavior —
+// turns one spoken sentence into as many "complete messages" as it has
+// tokens, and events already sitting in the spool carry EventAssistantMessage
+// to mean exactly one whole message, so the delta needs its own type instead
+// of redefining that one.
+func TestAgentMessageDeltaIsAFragmentNotAWholeMessage(t *testing.T) {
+	event, ok := mapNotification(ServerMessage{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread-1","delta":"partial answer"}`)}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("delta notification was dropped")
+	}
+	if event.Type != provider.EventAssistantMessageDelta {
+		t.Fatalf("type = %q, want %q", event.Type, provider.EventAssistantMessageDelta)
+	}
+	if event.Message != "partial answer" {
+		t.Fatalf("message = %q, want the delta text", event.Message)
+	}
+}
+
+// K8: a completed agentMessage item carries the assistant's full text (see
+// the codex-app-server AgentMessageThreadItem schema: required id, text,
+// type). Falling into the tool default branch — the pre-fix behavior — turns
+// it into an EventToolEnded with an empty Tool name, because a message item
+// has no Name field, and drops the text on the floor.
+func TestCompletedAgentMessageItemEmitsTheWholeText(t *testing.T) {
+	params := json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage","text":"the whole answer"}}`)
+	event, ok := mapNotification(ServerMessage{Method: "item/completed", Params: params}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("completed agentMessage notification was dropped")
+	}
+	if event.Type != provider.EventAssistantMessage {
+		t.Fatalf("type = %q, want %q", event.Type, provider.EventAssistantMessage)
+	}
+	if event.Message != "the whole answer" {
+		t.Fatalf("message = %q, want the item's full text", event.Message)
+	}
+	if event.Tool != "" {
+		t.Fatalf("tool = %q, want empty: an assistant message is not a tool", event.Tool)
+	}
+}
+
+// K8: item/started fires before an agentMessage item has any text, so there
+// is nothing yet to report. The pre-fix behavior reported an EventToolStarted
+// with an empty Tool name instead of staying silent.
+func TestStartedAgentMessageItemEmitsNothing(t *testing.T) {
+	params := json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage"}}`)
+	_, ok := mapNotification(ServerMessage{Method: "item/started", Params: params}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if ok {
+		t.Fatal("item/started for an agentMessage should not produce an event; it has no text yet")
+	}
+}
+
+// K9: the assistant_message contract promises Codex emits every delta as the
+// fragment type and exactly one whole message when the item completes. This
+// exercises both halves together so a future change to one cannot silently
+// violate the other.
+func TestAgentMessageContractDeltaThenOneWholeMessage(t *testing.T) {
+	now := time.Unix(1, 0).UTC()
+	taskID := provider.MustID("task-1")
+	for _, chunk := range []string{"Hel", "lo, ", "world"} {
+		event, ok := mapNotification(ServerMessage{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread-1","delta":"` + chunk + `"}`)}, taskID, now)
+		if !ok || event.Type != provider.EventAssistantMessageDelta {
+			t.Fatalf("delta event = %#v, ok = %v", event, ok)
+		}
+	}
+	completed, ok := mapNotification(ServerMessage{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage","text":"Hello, world"}}`)}, taskID, now)
+	if !ok {
+		t.Fatal("completed notification was dropped")
+	}
+	if completed.Type != provider.EventAssistantMessage || completed.Message != "Hello, world" {
+		t.Fatalf("completed event = %#v", completed)
+	}
+}

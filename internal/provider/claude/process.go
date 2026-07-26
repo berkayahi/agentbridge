@@ -489,6 +489,19 @@ func parseLine(line []byte) []ParsedEvent {
 			event.Event = provider.Event{Type: provider.EventCompleted, Message: envelope.Result}
 		}
 		events = append(events, event)
+	default:
+		// An envelope type this adapter does not yet parse (for example a
+		// future "stream_event" partial-message notification) must not
+		// vanish silently: that would make the conversation look like it
+		// went quiet when the provider is still talking. It is not known to
+		// be a failure, so EventError would claim a problem that may not
+		// exist; it is reported as a heartbeat — the session is alive, here
+		// is an envelope, its shape is just not understood yet — the same
+		// truthful-but-non-terminal treatment Codex gives a retry it expects
+		// to survive.
+		event := base
+		event.Event = provider.Event{Type: provider.EventHeartbeat, Message: "unrecognized Claude stream envelope: " + envelope.Type}
+		events = append(events, event)
 	}
 	return events
 }

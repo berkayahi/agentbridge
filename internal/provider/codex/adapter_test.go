@@ -250,7 +250,7 @@ func TestUsageAndAuthReadAccountWithoutStartingTurn(t *testing.T) {
 
 func TestVisibleNotificationMappingAndAuthError(t *testing.T) {
 	event, ok := mapNotification(ServerMessage{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread-1","delta":"visible answer"}`)}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
-	if !ok || event.Type != provider.EventAssistantMessage || event.Message != "visible answer" {
+	if !ok || event.Type != provider.EventAssistantMessageDelta || event.Message != "visible answer" {
 		t.Fatalf("event = %#v, ok = %v", event, ok)
 	}
 	event, ok = mapNotification(ServerMessage{Method: "error", Params: json.RawMessage(`{"threadId":"thread-1","error":{"message":"login required","codexErrorInfo":"unauthorized"},"willRetry":false}`)}, provider.MustID("task-1"), time.Unix(1, 0).UTC())

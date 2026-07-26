@@ -18,7 +18,10 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 		if json.Unmarshal(message.Params, &params) != nil {
 			return provider.Event{}, false
 		}
-		event.Type, event.Message = provider.EventAssistantMessage, params.Delta
+		// A delta is one fragment of an in-progress message, not the message
+		// itself. Mapping it to EventAssistantMessage would turn one spoken
+		// sentence into as many "complete messages" as it has tokens.
+		event.Type, event.Message = provider.EventAssistantMessageDelta, params.Delta
 	case "item/started", "item/completed":
 		var params struct {
 			Item struct {
@@ -26,6 +29,7 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				Command string `json:"command"`
 				Path    string `json:"path"`
 				Name    string `json:"name"`
+				Text    string `json:"text"`
 			} `json:"item"`
 		}
 		if json.Unmarshal(message.Params, &params) != nil {
@@ -47,6 +51,16 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				event.Type = provider.EventFileEnded
 			}
 			event.Path = params.Item.Path
+		case "agentMessage":
+			// The item only carries its final text on completion (see the
+			// AgentMessageThreadItem schema: id, text, type). item/started
+			// fires before that text exists, so there is nothing yet to
+			// report; reporting it here would just be the empty-tool bug this
+			// case exists to avoid.
+			if started {
+				return provider.Event{}, false
+			}
+			event.Type, event.Message = provider.EventAssistantMessage, params.Item.Text
 		default:
 			if started {
 				event.Type = provider.EventToolStarted

@@ -60,16 +60,18 @@ func TestSupervisorCancellationTerminatesProcess(t *testing.T) {
 
 func TestSupervisorUsesExplicitEnvironmentAllowlist(t *testing.T) {
 	s := Supervisor{AllowedEnvironment: map[string]struct{}{"VISIBLE": {}}}
-	result, err := s.Run(context.Background(), Command{Argv: []string{"/usr/bin/env"}, Env: map[string]string{"VISIBLE": "yes", "SECRET": "no"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var output strings.Builder
-	for _, event := range result.Events {
-		output.WriteString(event.Line)
-	}
-	if !strings.Contains(output.String(), "VISIBLE=yes") || strings.Contains(output.String(), "SECRET=no") {
-		t.Fatalf("output = %q", output.String())
+	for attempt := 0; attempt < 25; attempt++ {
+		result, err := s.Run(context.Background(), Command{Argv: []string{"/usr/bin/env"}, Env: map[string]string{"VISIBLE": "yes", "SECRET": "no"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output strings.Builder
+		for _, event := range result.Events {
+			output.WriteString(event.Line)
+		}
+		if !strings.Contains(output.String(), "VISIBLE=yes") || strings.Contains(output.String(), "SECRET=no") {
+			t.Fatalf("attempt %d output = %q", attempt, output.String())
+		}
 	}
 	if _, err := exec.LookPath("env"); err != nil {
 		t.Fatal(err)

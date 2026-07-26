@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os/exec"
 	"sort"
 	"sync"
@@ -83,25 +82,6 @@ func (s Supervisor) Run(ctx context.Context, command Command) (Result, error) {
 			return Result{}, fmt.Errorf("%w: isolation: %v", ErrStart, err)
 		}
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: stdout: %v", ErrStart, err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return Result{}, fmt.Errorf("%w: stderr: %v", ErrStart, err)
-	}
-	if err := cmd.Start(); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrStart, err)
-	}
-	if command.Isolation != nil {
-		if err := isolation.ApplyStartedProcess(cmd.Process, *command.Isolation); err != nil {
-			_ = killProcessGroup(cmd.Process)
-			_, _ = cmd.Process.Wait()
-			return Result{}, fmt.Errorf("%w: isolation limits: %v", ErrStart, err)
-		}
-	}
-
 	var mu sync.Mutex
 	events := make([]Event, 0)
 	appendEvent := func(event Event) {
@@ -116,10 +96,21 @@ func (s Supervisor) Run(ctx context.Context, command Command) (Result, error) {
 			events = append(events, event)
 		}
 	}
-	var readers sync.WaitGroup
-	readers.Add(2)
-	go func() { defer readers.Done(); readLines(stdout, Stdout, maxLine, appendEvent) }()
-	go func() { defer readers.Done(); readLines(stderr, Stderr, maxLine, appendEvent) }()
+	stdout := &lineWriter{stream: Stdout, limit: maxLine, emit: appendEvent}
+	stderr := &lineWriter{stream: Stderr, limit: maxLine, emit: appendEvent}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrStart, err)
+	}
+	if command.Isolation != nil {
+		if err := isolation.ApplyStartedProcess(cmd.Process, *command.Isolation); err != nil {
+			_ = killProcessGroup(cmd.Process)
+			_ = cmd.Wait()
+			return Result{}, fmt.Errorf("%w: isolation limits: %v", ErrStart, err)
+		}
+	}
+
 	wait := make(chan error, 1)
 	go func() { wait <- cmd.Wait() }()
 	canceled := false
@@ -140,7 +131,8 @@ func (s Supervisor) Run(ctx context.Context, command Command) (Result, error) {
 			waitErr = <-wait
 		}
 	}
-	readers.Wait()
+	stdout.Flush()
+	stderr.Flush()
 	mu.Lock()
 	resultEvents := append([]Event(nil), events...)
 	mu.Unlock()
@@ -176,36 +168,37 @@ func (s Supervisor) environment(values map[string]string) []string {
 	return isolation.FilterEnvironment(filtered, isolation.EnvironmentPolicy{Allowed: allowed})
 }
 
-func readLines(r io.Reader, stream Stream, limit int, emit func(Event)) {
-	buf := make([]byte, 4096)
-	line := make([]byte, 0, limit)
-	truncated := false
-	flush := func() {
-		if len(line) > 0 || truncated {
-			emit(Event{Stream: stream, Line: string(line), Truncated: truncated})
-		}
-		line = line[:0]
-		truncated = false
-	}
-	for {
-		n, err := r.Read(buf)
-		for _, b := range buf[:n] {
-			if b == '\n' {
-				flush()
-				continue
-			}
-			if len(line) < limit {
-				line = append(line, b)
-			} else {
-				truncated = true
-			}
-		}
-		if err != nil {
-			flush()
-			return
-		}
-	}
+type lineWriter struct {
+	stream    Stream
+	limit     int
+	emit      func(Event)
+	line      []byte
+	truncated bool
 }
+
+func (w *lineWriter) Write(data []byte) (int, error) {
+	for _, b := range data {
+		if b == '\n' {
+			w.Flush()
+			continue
+		}
+		if len(w.line) < w.limit {
+			w.line = append(w.line, b)
+		} else {
+			w.truncated = true
+		}
+	}
+	return len(data), nil
+}
+
+func (w *lineWriter) Flush() {
+	if len(w.line) > 0 || w.truncated {
+		w.emit(Event{Stream: w.stream, Line: string(w.line), Truncated: w.truncated})
+	}
+	w.line = w.line[:0]
+	w.truncated = false
+}
+
 func exitCode(err error) int {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {

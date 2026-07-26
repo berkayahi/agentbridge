@@ -16,12 +16,15 @@ check_generic() {
   if git grep -a -q '\[PL\]' -- . ':(exclude)scripts/check-public-boundary.sh'; then
     die 'private planning marker detected'
   fi
-  if rg --hidden -a -q '\[PL\]' --glob '!.git/**' --glob '!scripts/check-public-boundary.sh' .; then
-    die 'private planning marker detected'
-  fi
+  while IFS= read -r -d '' candidate_file; do
+    [[ "$candidate_file" != ./scripts/check-public-boundary.sh ]] || continue
+    if grep -a -q '\[PL\]' "$candidate_file"; then
+      die 'private planning marker detected'
+    fi
+  done < <(find . -path ./.git -prune -o -type f -print0)
   for module_file in go.mod go.work; do
     [[ -f "$module_file" ]] || continue
-    if rg -q '^[[:space:]]*replace[[:space:]].*=>[[:space:]]*(/|[.][.]?/)' "$module_file"; then
+    if grep -E -q '^[[:space:]]*replace[[:space:]].*=>[[:space:]]*(/|[.][.]?/)' "$module_file"; then
       die 'local module replacement detected'
     fi
   done

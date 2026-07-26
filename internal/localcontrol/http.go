@@ -57,6 +57,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/usage", a.usage)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
+	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
 	mux.HandleFunc("POST /v1/boards", a.createBoard)
 	mux.HandleFunc("POST /v1/tasks", a.createTask)
@@ -98,6 +99,15 @@ func (a *API) integrateRepository(w http.ResponseWriter, r *http.Request) {
 func (a *API) usage(w http.ResponseWriter, r *http.Request) {
 	response, err := a.service.Usage(r.Context())
 	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) configureRepository(w http.ResponseWriter, r *http.Request) {
+	var request ConfigureRepositoryRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	response, err := a.service.ConfigureRepository(r.Context(), request)
+	writeResult(w, http.StatusCreated, response, err)
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {

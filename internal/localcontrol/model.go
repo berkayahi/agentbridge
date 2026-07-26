@@ -135,6 +135,34 @@ type UsageResponse struct {
 	CachedForSeconds int `json:"cached_for_seconds"`
 }
 
+// ConfigureRepositoryRequest adds a repository to the host's configuration.
+// Unlike RegisterRepositoryRequest, which resolves a remote against an already
+// configured profile, this one creates the profile.
+type ConfigureRepositoryRequest struct {
+	ID             string   `json:"id"`
+	CheckoutPath   string   `json:"checkout_path"`
+	Remote         string   `json:"remote,omitempty"`
+	BaseRef        string   `json:"base_ref"`
+	Verification   []string `json:"verification,omitempty"`
+	Delivery       bool     `json:"delivery"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+type ConfigureRepositoryResponse struct {
+	Repository RepositoryProfile `json:"repository"`
+	// AppliesAfterRestart is always true today and says so rather than letting a
+	// keeper watch for a repository that cannot appear: the engine reads its
+	// configuration at startup, and restarting it pauses every bee in flight.
+	AppliesAfterRestart bool `json:"applies_after_restart"`
+}
+
+// RepositoryConfigurator writes a repository into the host's configuration. The
+// implementation lives where the configuration path is known; the authority only
+// knows that something can do it.
+type RepositoryConfigurator interface {
+	ConfigureRepository(ctx context.Context, request ConfigureRepositoryRequest) (RepositoryProfile, error)
+}
+
 // UsageSource reports subscription usage and authentication for one runtime.
 // Asking is not free — one adapter answers from an in-memory cache fed by a
 // statusline hook, another makes two live RPC calls against a running session —

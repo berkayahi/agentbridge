@@ -43,7 +43,8 @@ type Service struct {
 	clock      func() time.Time
 	newID      func(string) string
 
-	usage UsageSource
+	usage        UsageSource
+	configurator RepositoryConfigurator
 	// usageMu guards the cached answer. Concurrent callers must not multiply the
 	// live RPC calls one of the adapters makes to answer this.
 	usageMu     sync.Mutex
@@ -56,6 +57,29 @@ type Service struct {
 // an in-memory snapshot fed by a statusline hook, while Codex's is two live RPC
 // calls against a running session.
 const usageTTL = 30 * time.Second
+
+// SetRepositoryConfigurator attaches the writer that can add a repository.
+func (s *Service) SetRepositoryConfigurator(value RepositoryConfigurator) { s.configurator = value }
+
+// ConfigureRepository adds a repository to this host's configuration.
+func (s *Service) ConfigureRepository(ctx context.Context, request ConfigureRepositoryRequest) (ConfigureRepositoryResponse, error) {
+	if s == nil {
+		return ConfigureRepositoryResponse{}, ErrInvalidRequest
+	}
+	if s.configurator == nil {
+		return ConfigureRepositoryResponse{}, ErrNotConfigured
+	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if !validID(request.ID) {
+		return ConfigureRepositoryResponse{}, ErrInvalidRequest
+	}
+	profile, err := s.configurator.ConfigureRepository(ctx, request)
+	if err != nil {
+		return ConfigureRepositoryResponse{}, err
+	}
+	return ConfigureRepositoryResponse{Repository: profile, AppliesAfterRestart: true}, nil
+}
 
 // SetUsageSource attaches the runtime usage reporter.
 func (s *Service) SetUsageSource(source UsageSource) { s.usage = source }

@@ -510,6 +510,9 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		return fail(err, providerClosers...)
 	}
 	localService.SetUsageSource(providerUsage{providers: cfg.Providers, live: providers})
+	if cfg.Path != "" {
+		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path})
+	}
 	deviceServer, err := composeDeviceAgent(cfg.DeviceAgent, data, localExecutor, localVerifier{operations: localOperations}, localCommitter{operations: localOperations})
 	if err != nil {
 		control.Close()
@@ -757,6 +760,9 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 		return closeOnError(err, providerClosers...)
 	}
 	localService.SetUsageSource(providerUsage{providers: cfg.Providers, live: providers})
+	if cfg.Path != "" {
+		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path})
+	}
 	localExecutor.progress = localService
 	progressStarter := localService.StartProgress
 	// A restart kills every native provider session, so a task left mid-flight is

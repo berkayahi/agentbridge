@@ -988,3 +988,56 @@ func (u providerUsage) ProviderUsage(ctx context.Context) ([]localcontrol.Provid
 	}
 	return views, nil
 }
+
+// repositoryConfigurator writes a repository into this host's configuration file.
+// It lives here because this is where the configuration path is known; the
+// authority only knows that something can do it.
+type repositoryConfigurator struct {
+	configPath string
+}
+
+func (c repositoryConfigurator) ConfigureRepository(_ context.Context, request localcontrol.ConfigureRepositoryRequest) (localcontrol.RepositoryProfile, error) {
+	checkout := strings.TrimSpace(request.CheckoutPath)
+	if !filepath.IsAbs(checkout) {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: checkout path must be absolute", localcontrol.ErrInvalidRequest)
+	}
+	// A directory that is not a checkout cannot hold a worktree, and finding that
+	// out at dispatch would strand a bee instead of refusing here.
+	if info, err := os.Stat(filepath.Join(checkout, ".git")); err != nil || info == nil {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: that folder is not a Git checkout", localcontrol.ErrInvalidRequest)
+	}
+	remote := strings.TrimSpace(request.Remote)
+	if remote == "" {
+		remote = "origin"
+	}
+	baseRef := strings.TrimSpace(request.BaseRef)
+	verification := request.Verification
+	if len(verification) == 0 {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: a repository needs a verification command", localcontrol.ErrInvalidRequest)
+	}
+
+	profile := config.RepositoryProfile{
+		CheckoutPath: checkout,
+		Remote:       remote,
+		BaseRef:      baseRef,
+		Verification: []config.VerificationCommand{{Argv: verification, Dir: "."}},
+	}
+	if request.Delivery {
+		// Delivery's allowed ref must equal the base ref, and the base ref can
+		// never be a production branch. config.Validate enforces both; setting it
+		// here keeps the caller from having to know the rule to satisfy it.
+		profile.Delivery = config.DeliveryPolicy{Enabled: true, AllowedRef: baseRef}
+	}
+	if err := config.AddRepository(c.configPath, request.ID, profile); err != nil {
+		if errors.Is(err, config.ErrRepositoryExists) {
+			return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: %s is already configured", localcontrol.ErrInvalidRequest, request.ID)
+		}
+		return localcontrol.RepositoryProfile{}, err
+	}
+	return localcontrol.RepositoryProfile{
+		ID:           request.ID,
+		Remote:       remote,
+		BaseRef:      baseRef,
+		CheckoutPath: checkout,
+	}, nil
+}

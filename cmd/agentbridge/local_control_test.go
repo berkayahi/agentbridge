@@ -235,3 +235,41 @@ func TestRepositoryProfilesReportTheControlCheckout(t *testing.T) {
 		t.Fatalf("existing fields must be unchanged, got %+v", got)
 	}
 }
+
+// Adding a repository was possible only at first open. What the configurator
+// refuses matters more than what it accepts: a bee stranded at dispatch is worse
+// than a registration turned down.
+func TestConfigureRepositoryRefusesWhatCannotHoldAWorktree(t *testing.T) {
+	configurator := repositoryConfigurator{configPath: "/nonexistent/config.yaml"}
+
+	_, err := configurator.ConfigureRepository(context.Background(), localcontrol.ConfigureRepositoryRequest{
+		ID: "platform", CheckoutPath: "relative/path", BaseRef: "refs/heads/hive/landing",
+		Verification: []string{"go", "test", "./..."},
+	})
+	if err == nil {
+		t.Fatal("a relative checkout must be refused")
+	}
+
+	// An existing directory that is not a checkout cannot hold a worktree, and
+	// finding that out at dispatch would strand a bee.
+	_, err = configurator.ConfigureRepository(context.Background(), localcontrol.ConfigureRepositoryRequest{
+		ID: "platform", CheckoutPath: t.TempDir(), BaseRef: "refs/heads/hive/landing",
+		Verification: []string{"go", "test", "./..."},
+	})
+	if err == nil {
+		t.Fatal("a folder that is not a Git checkout must be refused")
+	}
+
+	// A repository with no verification can never produce durable evidence, so it
+	// is refused rather than configured into uselessness.
+	checkout := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(checkout, ".git"), 0o755); err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	_, err = configurator.ConfigureRepository(context.Background(), localcontrol.ConfigureRepositoryRequest{
+		ID: "platform", CheckoutPath: checkout, BaseRef: "refs/heads/hive/landing",
+	})
+	if err == nil {
+		t.Fatal("a repository without a verification command must be refused")
+	}
+}

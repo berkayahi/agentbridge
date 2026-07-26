@@ -185,22 +185,39 @@ type ApprovalDecision struct {
 }
 
 type UsageWindow struct {
-	Name        string
-	UsedPercent float64
-	ResetsAt    time.Time
+	Name        string    `json:"name"`
+	UsedPercent float64   `json:"used_percent"`
+	ResetsAt    time.Time `json:"resets_at"`
+}
+
+// TokenUsage is what one turn actually cost. A subscription window says how much
+// of an allowance is gone; this says which bee spent it, which is the question a
+// keeper asks when a window is nearly closed.
+type TokenUsage struct {
+	Input           int64 `json:"input"`
+	CachedInput     int64 `json:"cached_input"`
+	Output          int64 `json:"output"`
+	ReasoningOutput int64 `json:"reasoning_output"`
+	Total           int64 `json:"total"`
 }
 
 type Usage struct {
-	Provider   workmodel.Provider
-	ObservedAt time.Time
-	Windows    []UsageWindow
-	Credits    *float64
+	Provider   workmodel.Provider `json:"provider"`
+	ObservedAt time.Time          `json:"observed_at"`
+	Windows    []UsageWindow      `json:"windows,omitempty"`
+	Credits    *float64           `json:"credits,omitempty"`
+	// Tokens is present when the provider reported the cost of a specific turn
+	// rather than the state of an account-wide allowance.
+	Tokens *TokenUsage `json:"tokens,omitempty"`
+	// TurnID ties a token report to the turn that spent them, so a cost can be
+	// attributed to one bee instead of to the session as a whole.
+	TurnID string `json:"turn_id,omitempty"`
 }
 
 type AuthStatus struct {
-	Authenticated bool
-	Account       string
-	CheckedAt     time.Time
+	Authenticated bool      `json:"authenticated"`
+	Account       string    `json:"account"`
+	CheckedAt     time.Time `json:"checked_at"`
 }
 
 type Provider interface {

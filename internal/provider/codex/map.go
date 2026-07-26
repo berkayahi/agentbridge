@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (provider.Event, bool) {
@@ -18,7 +19,10 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 		if json.Unmarshal(message.Params, &params) != nil {
 			return provider.Event{}, false
 		}
-		event.Type, event.Message = provider.EventAssistantMessage, params.Delta
+		// A delta is one fragment of an in-progress message, not the message
+		// itself. Mapping it to EventAssistantMessage would turn one spoken
+		// sentence into as many "complete messages" as it has tokens.
+		event.Type, event.Message = provider.EventAssistantMessageDelta, params.Delta
 	case "item/started", "item/completed":
 		var params struct {
 			Item struct {
@@ -26,6 +30,7 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				Command string `json:"command"`
 				Path    string `json:"path"`
 				Name    string `json:"name"`
+				Text    string `json:"text"`
 			} `json:"item"`
 		}
 		if json.Unmarshal(message.Params, &params) != nil {
@@ -47,6 +52,16 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				event.Type = provider.EventFileEnded
 			}
 			event.Path = params.Item.Path
+		case "agentMessage":
+			// The item only carries its final text on completion (see the
+			// AgentMessageThreadItem schema: id, text, type). item/started
+			// fires before that text exists, so there is nothing yet to
+			// report; reporting it here would just be the empty-tool bug this
+			// case exists to avoid.
+			if started {
+				return provider.Event{}, false
+			}
+			event.Type, event.Message = provider.EventAssistantMessage, params.Item.Text
 		default:
 			if started {
 				event.Type = provider.EventToolStarted
@@ -54,6 +69,62 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				event.Type = provider.EventToolEnded
 			}
 			event.Tool = params.Item.Name
+		}
+	case "account/rateLimits/updated":
+		// A rolling window update, pushed while she flies. The schema calls it
+		// sparse: a client merges what arrives into the last full read rather
+		// than treating an absent field as zero. So absent windows are omitted
+		// here and a consumer keeps whatever it already had — reporting a missing
+		// window as 0% used would tell the keeper their allowance is untouched at
+		// the exact moment it is running out.
+		var params struct {
+			RateLimits struct {
+				Primary   *rateLimitWindow `json:"primary"`
+				Secondary *rateLimitWindow `json:"secondary"`
+			} `json:"rateLimits"`
+		}
+		if json.Unmarshal(message.Params, &params) != nil {
+			return provider.Event{}, false
+		}
+		usage := provider.Usage{Provider: workmodel.CodexSubscription, ObservedAt: now}
+		usage.Windows = appendWindow(usage.Windows, "primary", params.RateLimits.Primary)
+		usage.Windows = appendWindow(usage.Windows, "secondary", params.RateLimits.Secondary)
+		if len(usage.Windows) == 0 {
+			// Nothing usable arrived, so nothing is claimed.
+			return provider.Event{}, false
+		}
+		event.Type = provider.EventUsage
+		event.Usage = &usage
+	case "thread/tokenUsage/updated":
+		// Codex reports what a turn cost, per turn, and this was dropped on the
+		// floor: the notification was not in this switch, so EventUsage was
+		// declared and never emitted anywhere in the engine. A keeper could see
+		// that an allowance was nearly gone and never which bee spent it.
+		var params struct {
+			TurnID     string `json:"turnId"`
+			TokenUsage struct {
+				InputTokens           int64 `json:"inputTokens"`
+				CachedInputTokens     int64 `json:"cachedInputTokens"`
+				OutputTokens          int64 `json:"outputTokens"`
+				ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+				TotalTokens           int64 `json:"totalTokens"`
+			} `json:"tokenUsage"`
+		}
+		if json.Unmarshal(message.Params, &params) != nil {
+			return provider.Event{}, false
+		}
+		event.Type = provider.EventUsage
+		event.Usage = &provider.Usage{
+			Provider:   workmodel.CodexSubscription,
+			ObservedAt: now,
+			TurnID:     params.TurnID,
+			Tokens: &provider.TokenUsage{
+				Input:           params.TokenUsage.InputTokens,
+				CachedInput:     params.TokenUsage.CachedInputTokens,
+				Output:          params.TokenUsage.OutputTokens,
+				ReasoningOutput: params.TokenUsage.ReasoningOutputTokens,
+				Total:           params.TokenUsage.TotalTokens,
+			},
 		}
 	case "turn/completed":
 		event.Type = provider.EventCompleted

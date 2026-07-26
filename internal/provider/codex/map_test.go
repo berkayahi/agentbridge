@@ -38,3 +38,164 @@ func TestRetryableProviderErrorKeepsTheBeeAlive(t *testing.T) {
 		})
 	}
 }
+
+// K7: a streaming delta is a fragment of an in-progress message, never the
+// whole thing. Mapping it to EventAssistantMessage — the pre-fix behavior —
+// turns one spoken sentence into as many "complete messages" as it has
+// tokens, and events already sitting in the spool carry EventAssistantMessage
+// to mean exactly one whole message, so the delta needs its own type instead
+// of redefining that one.
+func TestAgentMessageDeltaIsAFragmentNotAWholeMessage(t *testing.T) {
+	event, ok := mapNotification(ServerMessage{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread-1","delta":"partial answer"}`)}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("delta notification was dropped")
+	}
+	if event.Type != provider.EventAssistantMessageDelta {
+		t.Fatalf("type = %q, want %q", event.Type, provider.EventAssistantMessageDelta)
+	}
+	if event.Message != "partial answer" {
+		t.Fatalf("message = %q, want the delta text", event.Message)
+	}
+}
+
+// K8: a completed agentMessage item carries the assistant's full text (see
+// the codex-app-server AgentMessageThreadItem schema: required id, text,
+// type). Falling into the tool default branch — the pre-fix behavior — turns
+// it into an EventToolEnded with an empty Tool name, because a message item
+// has no Name field, and drops the text on the floor.
+func TestCompletedAgentMessageItemEmitsTheWholeText(t *testing.T) {
+	params := json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage","text":"the whole answer"}}`)
+	event, ok := mapNotification(ServerMessage{Method: "item/completed", Params: params}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if !ok {
+		t.Fatal("completed agentMessage notification was dropped")
+	}
+	if event.Type != provider.EventAssistantMessage {
+		t.Fatalf("type = %q, want %q", event.Type, provider.EventAssistantMessage)
+	}
+	if event.Message != "the whole answer" {
+		t.Fatalf("message = %q, want the item's full text", event.Message)
+	}
+	if event.Tool != "" {
+		t.Fatalf("tool = %q, want empty: an assistant message is not a tool", event.Tool)
+	}
+}
+
+// K8: item/started fires before an agentMessage item has any text, so there
+// is nothing yet to report. The pre-fix behavior reported an EventToolStarted
+// with an empty Tool name instead of staying silent.
+func TestStartedAgentMessageItemEmitsNothing(t *testing.T) {
+	params := json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage"}}`)
+	_, ok := mapNotification(ServerMessage{Method: "item/started", Params: params}, provider.MustID("task-1"), time.Unix(1, 0).UTC())
+	if ok {
+		t.Fatal("item/started for an agentMessage should not produce an event; it has no text yet")
+	}
+}
+
+// K9: the assistant_message contract promises Codex emits every delta as the
+// fragment type and exactly one whole message when the item completes. This
+// exercises both halves together so a future change to one cannot silently
+// violate the other.
+func TestAgentMessageContractDeltaThenOneWholeMessage(t *testing.T) {
+	now := time.Unix(1, 0).UTC()
+	taskID := provider.MustID("task-1")
+	for _, chunk := range []string{"Hel", "lo, ", "world"} {
+		event, ok := mapNotification(ServerMessage{Method: "item/agentMessage/delta", Params: json.RawMessage(`{"threadId":"thread-1","delta":"` + chunk + `"}`)}, taskID, now)
+		if !ok || event.Type != provider.EventAssistantMessageDelta {
+			t.Fatalf("delta event = %#v, ok = %v", event, ok)
+		}
+	}
+	completed, ok := mapNotification(ServerMessage{Method: "item/completed", Params: json.RawMessage(`{"threadId":"thread-1","item":{"id":"item-1","type":"agentMessage","text":"Hello, world"}}`)}, taskID, now)
+	if !ok {
+		t.Fatal("completed notification was dropped")
+	}
+	if completed.Type != provider.EventAssistantMessage || completed.Message != "Hello, world" {
+		t.Fatalf("completed event = %#v", completed)
+	}
+}
+
+// Codex reports what each turn cost, per turn. The notification was not in the
+// mapping switch at all, so EventUsage was a declared type the engine never
+// emitted: a keeper could see an allowance nearly gone and never learn which bee
+// spent it.
+func TestThreadTokenUsageIsReportedPerTurn(t *testing.T) {
+	params := []byte(`{
+		"threadId": "thread-1",
+		"turnId": "turn-7",
+		"tokenUsage": {
+			"inputTokens": 1200,
+			"cachedInputTokens": 800,
+			"outputTokens": 340,
+			"reasoningOutputTokens": 120,
+			"totalTokens": 1660
+		}
+	}`)
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	event, ok := mapNotification(ServerMessage{Method: "thread/tokenUsage/updated", Params: params}, provider.MustID("task-1"), now)
+	if !ok {
+		t.Fatal("a token report must not be dropped")
+	}
+	if event.Type != provider.EventUsage {
+		t.Fatalf("type = %q, want usage", event.Type)
+	}
+	if event.Usage == nil || event.Usage.Tokens == nil {
+		t.Fatalf("the tokens themselves must travel: %+v", event.Usage)
+	}
+	if event.Usage.TurnID != "turn-7" {
+		t.Fatalf("a cost has to be attributable to a turn, got %q", event.Usage.TurnID)
+	}
+	tokens := event.Usage.Tokens
+	if tokens.Input != 1200 || tokens.CachedInput != 800 || tokens.Output != 340 ||
+		tokens.ReasoningOutput != 120 || tokens.Total != 1660 {
+		t.Fatalf("token counts must be reported exactly: %+v", tokens)
+	}
+	if event.Usage.Provider == "" {
+		t.Fatal("the provider that reported the cost must travel with it")
+	}
+}
+
+func TestAMalformedTokenReportIsDroppedRatherThanGuessed(t *testing.T) {
+	if _, ok := mapNotification(ServerMessage{
+		Method: "thread/tokenUsage/updated",
+		Params: []byte(`{"tokenUsage": "not an object"}`),
+	}, provider.MustID("task-1"), time.Now()); ok {
+		t.Fatal("an unreadable token report must not become an event with invented zeros")
+	}
+}
+
+// The rolling rate-limit update is pushed while she flies, so a keeper's window
+// can be shown without anyone polling for it. The schema calls the update sparse:
+// a client merges what arrives rather than treating an absent field as zero.
+func TestRollingRateLimitUpdateIsReportedAsUsage(t *testing.T) {
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+	params := []byte(`{"rateLimits":{"primary":{"usedPercent":73.5,"resetsAt":1785000000}}}`)
+
+	event, ok := mapNotification(ServerMessage{Method: "account/rateLimits/updated", Params: params}, provider.MustID("task-1"), now)
+	if !ok {
+		t.Fatal("a pushed window update must not be dropped")
+	}
+	if event.Type != provider.EventUsage || event.Usage == nil {
+		t.Fatalf("type = %q usage = %+v", event.Type, event.Usage)
+	}
+	if len(event.Usage.Windows) != 1 {
+		t.Fatalf("only the window that arrived may be reported: %+v", event.Usage.Windows)
+	}
+	window := event.Usage.Windows[0]
+	if window.Name != "primary" || window.UsedPercent != 73.5 {
+		t.Fatalf("window = %+v", window)
+	}
+	if window.ResetsAt.IsZero() {
+		t.Fatal("when the window resets is the half a keeper plans around")
+	}
+}
+
+// Reporting an absent window as 0% used would tell the keeper their allowance is
+// untouched at the exact moment it is running out.
+func TestAnEmptyRateLimitUpdateClaimsNothing(t *testing.T) {
+	if _, ok := mapNotification(ServerMessage{
+		Method: "account/rateLimits/updated",
+		Params: []byte(`{"rateLimits":{}}`),
+	}, provider.MustID("task-1"), time.Now()); ok {
+		t.Fatal("an update with no usable window must not become a usage event")
+	}
+}

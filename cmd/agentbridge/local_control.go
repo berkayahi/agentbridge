@@ -498,7 +498,12 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 	result := make([]localcontrol.RepositoryProfile, 0, len(ids))
 	for _, id := range ids {
 		profile := c.workspace.profiles[id]
-		result = append(result, localcontrol.RepositoryProfile{ID: id, Remote: profile.Remote, BaseRef: profile.BaseRef})
+		result = append(result, localcontrol.RepositoryProfile{
+			ID:           id,
+			Remote:       profile.Remote,
+			BaseRef:      profile.BaseRef,
+			CheckoutPath: profile.ControlCheckout,
+		})
 	}
 	return result, nil
 }
@@ -923,4 +928,116 @@ func (e *localRuntimeExecutor) Diff(ctx context.Context, view localcontrol.TaskV
 		diff.Truncated = true
 	}
 	return diff, nil
+}
+
+// providerUsage answers what each configured runtime says about the keeper's own
+// subscription. It exists as its own source rather than as fields on the provider
+// catalog because the two adapters cost wildly different things to ask: Claude
+// answers from an in-memory snapshot fed by a statusline hook, while Codex makes
+// two live RPC calls against a running session. The catalog is polled every
+// couple of seconds; this is not.
+type providerUsage struct {
+	providers map[string]config.ProviderConfig
+	live      map[workmodel.Provider]provider.Provider
+}
+
+func (u providerUsage) ProviderUsage(ctx context.Context) ([]localcontrol.ProviderUsageView, error) {
+	ids := make([]string, 0, len(u.providers))
+	for id := range u.providers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	views := make([]localcontrol.ProviderUsageView, 0, len(ids))
+	for _, id := range ids {
+		view := localcontrol.ProviderUsageView{Provider: id}
+		native := u.live[workmodel.Provider(id)]
+		if native == nil {
+			// Not reported is not nothing used. A runtime this host cannot ask
+			// says so, rather than appearing to have an untouched allowance.
+			view.Reason = "this runtime does not report usage on this host"
+			views = append(views, view)
+			continue
+		}
+		usage, err := native.Usage(ctx)
+		if err != nil {
+			view.Reason = "the runtime did not answer"
+			views = append(views, view)
+			continue
+		}
+		view.Reported = len(usage.Windows) > 0
+		view.ObservedAt = usage.ObservedAt
+		for _, window := range usage.Windows {
+			view.Windows = append(view.Windows, localcontrol.UsageWindowView{
+				Name:        window.Name,
+				UsedPercent: window.UsedPercent,
+				ResetsAt:    window.ResetsAt,
+			})
+		}
+		if !view.Reported {
+			view.Reason = "the runtime reported no window"
+		}
+		// Authentication is asked separately and is allowed to be unknown: a
+		// pointer keeps "it did not say" apart from "it said no".
+		if status, authErr := native.AuthStatus(ctx); authErr == nil {
+			authenticated := status.Authenticated
+			view.Authenticated = &authenticated
+			view.Account = status.Account
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+// repositoryConfigurator writes a repository into this host's configuration file.
+// It lives here because this is where the configuration path is known; the
+// authority only knows that something can do it.
+type repositoryConfigurator struct {
+	configPath string
+}
+
+func (c repositoryConfigurator) ConfigureRepository(_ context.Context, request localcontrol.ConfigureRepositoryRequest) (localcontrol.RepositoryProfile, error) {
+	checkout := strings.TrimSpace(request.CheckoutPath)
+	if !filepath.IsAbs(checkout) {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: checkout path must be absolute", localcontrol.ErrInvalidRequest)
+	}
+	// A directory that is not a checkout cannot hold a worktree, and finding that
+	// out at dispatch would strand a bee instead of refusing here.
+	if info, err := os.Stat(filepath.Join(checkout, ".git")); err != nil || info == nil {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: that folder is not a Git checkout", localcontrol.ErrInvalidRequest)
+	}
+	remote := strings.TrimSpace(request.Remote)
+	if remote == "" {
+		remote = "origin"
+	}
+	baseRef := strings.TrimSpace(request.BaseRef)
+	verification := request.Verification
+	if len(verification) == 0 {
+		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: a repository needs a verification command", localcontrol.ErrInvalidRequest)
+	}
+
+	profile := config.RepositoryProfile{
+		CheckoutPath: checkout,
+		Remote:       remote,
+		BaseRef:      baseRef,
+		Verification: []config.VerificationCommand{{Argv: verification, Dir: "."}},
+	}
+	if request.Delivery {
+		// Delivery's allowed ref must equal the base ref, and the base ref can
+		// never be a production branch. config.Validate enforces both; setting it
+		// here keeps the caller from having to know the rule to satisfy it.
+		profile.Delivery = config.DeliveryPolicy{Enabled: true, AllowedRef: baseRef}
+	}
+	if err := config.AddRepository(c.configPath, request.ID, profile); err != nil {
+		if errors.Is(err, config.ErrRepositoryExists) {
+			return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: %s is already configured", localcontrol.ErrInvalidRequest, request.ID)
+		}
+		return localcontrol.RepositoryProfile{}, err
+	}
+	return localcontrol.RepositoryProfile{
+		ID:           request.ID,
+		Remote:       remote,
+		BaseRef:      baseRef,
+		CheckoutPath: checkout,
+	}, nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -23,6 +24,10 @@ type Config struct {
 	Providers         map[string]ProviderConfig    `yaml:"providers"`
 	Repositories      map[string]RepositoryProfile `yaml:"repositories"`
 	Spool             SpoolConfig                  `yaml:"spool"`
+	// Path is where this configuration was loaded from. It is not part of the
+	// document — Load fills it in — so a composition that holds a Config can also
+	// write to it without every caller having to thread the path separately.
+	Path string `yaml:"-"`
 }
 
 type ManagedConfig struct {
@@ -195,6 +200,9 @@ func Load(path string) (Config, error) {
 	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		cfg.Path = absolute
 	}
 	return cfg, nil
 }

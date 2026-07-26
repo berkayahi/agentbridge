@@ -42,6 +42,77 @@ type Service struct {
 	integrator RepositoryIntegrator
 	clock      func() time.Time
 	newID      func(string) string
+
+	usage        UsageSource
+	configurator RepositoryConfigurator
+	// usageMu guards the cached answer. Concurrent callers must not multiply the
+	// live RPC calls one of the adapters makes to answer this.
+	usageMu     sync.Mutex
+	usageCached UsageResponse
+	usageAt     time.Time
+}
+
+// usageTTL is how long a usage answer is reused. A five-hour window does not
+// need second-level freshness, and the reads behind it are not free: Claude's is
+// an in-memory snapshot fed by a statusline hook, while Codex's is two live RPC
+// calls against a running session.
+const usageTTL = 30 * time.Second
+
+// SetRepositoryConfigurator attaches the writer that can add a repository.
+func (s *Service) SetRepositoryConfigurator(value RepositoryConfigurator) { s.configurator = value }
+
+// ConfigureRepository adds a repository to this host's configuration.
+func (s *Service) ConfigureRepository(ctx context.Context, request ConfigureRepositoryRequest) (ConfigureRepositoryResponse, error) {
+	if s == nil {
+		return ConfigureRepositoryResponse{}, ErrInvalidRequest
+	}
+	if s.configurator == nil {
+		return ConfigureRepositoryResponse{}, ErrNotConfigured
+	}
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	if !validID(request.ID) {
+		return ConfigureRepositoryResponse{}, ErrInvalidRequest
+	}
+	profile, err := s.configurator.ConfigureRepository(ctx, request)
+	if err != nil {
+		return ConfigureRepositoryResponse{}, err
+	}
+	return ConfigureRepositoryResponse{Repository: profile, AppliesAfterRestart: true}, nil
+}
+
+// SetUsageSource attaches the runtime usage reporter.
+func (s *Service) SetUsageSource(source UsageSource) { s.usage = source }
+
+// Usage reports what each runtime says about the keeper's own subscription.
+func (s *Service) Usage(ctx context.Context) (UsageResponse, error) {
+	if s == nil {
+		return UsageResponse{}, ErrInvalidRequest
+	}
+	if s.usage == nil {
+		return UsageResponse{}, ErrNotConfigured
+	}
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	now := s.clock().UTC()
+	if !s.usageAt.IsZero() && now.Sub(s.usageAt) < usageTTL {
+		return s.usageCached, nil
+	}
+	providers, err := s.usage.ProviderUsage(ctx)
+	if err != nil {
+		// A stale answer is more useful than none, and it is labelled by its own
+		// observed_at, so a caller can see it has not moved.
+		if !s.usageAt.IsZero() {
+			return s.usageCached, nil
+		}
+		return UsageResponse{}, err
+	}
+	if providers == nil {
+		providers = []ProviderUsageView{}
+	}
+	s.usageCached = UsageResponse{Providers: providers, CachedForSeconds: int(usageTTL.Seconds())}
+	s.usageAt = now
+	return s.usageCached, nil
 }
 
 func New(config Config) (*Service, error) {

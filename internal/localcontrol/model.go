@@ -43,6 +43,13 @@ type RepositoryProfile struct {
 	ID      string `json:"id"`
 	Remote  string `json:"remote,omitempty"`
 	BaseRef string `json:"base_ref,omitempty"`
+	// CheckoutPath is the control checkout this profile resolves to. It is
+	// reported because a client that cannot locate a repository on disk cannot
+	// show anything the repository itself holds — the hive's own memory files
+	// being the case that prompted this. It is a loopback-only API on the
+	// keeper's own machine describing the keeper's own paths, and it grants no
+	// authority: work is still resolved against the configured id.
+	CheckoutPath string `json:"checkout_path,omitempty"`
 }
 
 // RepositoryCatalog reports the configured repository profiles. It is the one
@@ -97,6 +104,72 @@ type ProviderApprovalMode struct {
 // models, so a client never has to hardcode a provider list or guess a model.
 type ProviderCatalog interface {
 	ProviderProfiles(ctx context.Context) ([]ProviderInfo, error)
+}
+
+// UsageWindowView is how much of one allowance is gone, and when it renews.
+type UsageWindowView struct {
+	Name        string    `json:"name"`
+	UsedPercent float64   `json:"used_percent"`
+	ResetsAt    time.Time `json:"resets_at,omitempty"`
+}
+
+// ProviderUsageView is what one runtime reports about the keeper's own
+// subscription. Absence is reported rather than filled in: "not reported" and
+// "nothing used" are different facts and only one of them is good news.
+type ProviderUsageView struct {
+	Provider   string            `json:"provider"`
+	Reported   bool              `json:"reported"`
+	Reason     string            `json:"reason,omitempty"`
+	ObservedAt time.Time         `json:"observed_at,omitempty"`
+	Windows    []UsageWindowView `json:"windows,omitempty"`
+	// Authenticated is a pointer so "the runtime did not say" stays distinct
+	// from "it said no".
+	Authenticated *bool  `json:"authenticated,omitempty"`
+	Account       string `json:"account,omitempty"`
+}
+
+type UsageResponse struct {
+	Providers []ProviderUsageView `json:"providers"`
+	// CachedFor tells a client how stale this may be, so it can decide for
+	// itself whether to ask again rather than guessing at the cadence.
+	CachedForSeconds int `json:"cached_for_seconds"`
+}
+
+// ConfigureRepositoryRequest adds a repository to the host's configuration.
+// Unlike RegisterRepositoryRequest, which resolves a remote against an already
+// configured profile, this one creates the profile.
+type ConfigureRepositoryRequest struct {
+	ID             string   `json:"id"`
+	CheckoutPath   string   `json:"checkout_path"`
+	Remote         string   `json:"remote,omitempty"`
+	BaseRef        string   `json:"base_ref"`
+	Verification   []string `json:"verification,omitempty"`
+	Delivery       bool     `json:"delivery"`
+	IdempotencyKey string   `json:"idempotency_key"`
+}
+
+type ConfigureRepositoryResponse struct {
+	Repository RepositoryProfile `json:"repository"`
+	// AppliesAfterRestart is always true today and says so rather than letting a
+	// keeper watch for a repository that cannot appear: the engine reads its
+	// configuration at startup, and restarting it pauses every bee in flight.
+	AppliesAfterRestart bool `json:"applies_after_restart"`
+}
+
+// RepositoryConfigurator writes a repository into the host's configuration. The
+// implementation lives where the configuration path is known; the authority only
+// knows that something can do it.
+type RepositoryConfigurator interface {
+	ConfigureRepository(ctx context.Context, request ConfigureRepositoryRequest) (RepositoryProfile, error)
+}
+
+// UsageSource reports subscription usage and authentication for one runtime.
+// Asking is not free — one adapter answers from an in-memory cache fed by a
+// statusline hook, another makes two live RPC calls against a running session —
+// which is why this is its own endpoint with its own cache rather than a field
+// on the provider catalog that the surface polls every 2.5 seconds.
+type UsageSource interface {
+	ProviderUsage(ctx context.Context) ([]ProviderUsageView, error)
 }
 
 type Project struct {

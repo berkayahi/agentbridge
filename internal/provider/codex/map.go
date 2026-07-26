@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
+	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
 
 func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (provider.Event, bool) {
@@ -68,6 +69,37 @@ func mapNotification(message ServerMessage, taskID provider.ID, now time.Time) (
 				event.Type = provider.EventToolEnded
 			}
 			event.Tool = params.Item.Name
+		}
+	case "thread/tokenUsage/updated":
+		// Codex reports what a turn cost, per turn, and this was dropped on the
+		// floor: the notification was not in this switch, so EventUsage was
+		// declared and never emitted anywhere in the engine. A keeper could see
+		// that an allowance was nearly gone and never which bee spent it.
+		var params struct {
+			TurnID     string `json:"turnId"`
+			TokenUsage struct {
+				InputTokens           int64 `json:"inputTokens"`
+				CachedInputTokens     int64 `json:"cachedInputTokens"`
+				OutputTokens          int64 `json:"outputTokens"`
+				ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+				TotalTokens           int64 `json:"totalTokens"`
+			} `json:"tokenUsage"`
+		}
+		if json.Unmarshal(message.Params, &params) != nil {
+			return provider.Event{}, false
+		}
+		event.Type = provider.EventUsage
+		event.Usage = &provider.Usage{
+			Provider:   workmodel.CodexSubscription,
+			ObservedAt: now,
+			TurnID:     params.TurnID,
+			Tokens: &provider.TokenUsage{
+				Input:           params.TokenUsage.InputTokens,
+				CachedInput:     params.TokenUsage.CachedInputTokens,
+				Output:          params.TokenUsage.OutputTokens,
+				ReasoningOutput: params.TokenUsage.ReasoningOutputTokens,
+				Total:           params.TokenUsage.TotalTokens,
+			},
 		}
 	case "turn/completed":
 		event.Type = provider.EventCompleted

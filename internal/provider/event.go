@@ -45,19 +45,25 @@ const (
 
 // Event contains observable provider output only. Hidden reasoning is neither
 // requested from providers nor represented by this contract.
+// The field names are tagged. They were untagged for a long time, which put Go
+// field names on the wire — Message, Tool, Path — and the only reader is Kovan's
+// surface. That reader now accepts either casing, so new events carry proper
+// names while events already in the spool keep theirs. The history is mixed and
+// that is simply true: rewriting durable evidence to make a casing uniform would
+// trade the one thing the hive treats as sacred for tidiness.
 type Event struct {
-	ID        ID
-	TaskID    ID
-	RequestID ID
-	Type      EventType
-	Message   string
-	Tool      string
-	Path      string
-	ExitCode  *int
-	Usage     *Usage
-	ResetAt   *time.Time
-	Lane      spool.Lane
-	CreatedAt time.Time
+	ID        ID         `json:"id"`
+	TaskID    ID         `json:"task_id"`
+	RequestID ID         `json:"request_id,omitempty"`
+	Type      EventType  `json:"type"`
+	Message   string     `json:"message,omitempty"`
+	Tool      string     `json:"tool,omitempty"`
+	Path      string     `json:"path,omitempty"`
+	ExitCode  *int       `json:"exit_code,omitempty"`
+	Usage     *Usage     `json:"usage,omitempty"`
+	ResetAt   *time.Time `json:"reset_at,omitempty"`
+	Lane      spool.Lane `json:"lane,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
 }
 
 // SpoolSink is the provider-facing durable event boundary. Implementations

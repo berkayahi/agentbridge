@@ -112,3 +112,53 @@ func TestAgentMessageContractDeltaThenOneWholeMessage(t *testing.T) {
 		t.Fatalf("completed event = %#v", completed)
 	}
 }
+
+// Codex reports what each turn cost, per turn. The notification was not in the
+// mapping switch at all, so EventUsage was a declared type the engine never
+// emitted: a keeper could see an allowance nearly gone and never learn which bee
+// spent it.
+func TestThreadTokenUsageIsReportedPerTurn(t *testing.T) {
+	params := []byte(`{
+		"threadId": "thread-1",
+		"turnId": "turn-7",
+		"tokenUsage": {
+			"inputTokens": 1200,
+			"cachedInputTokens": 800,
+			"outputTokens": 340,
+			"reasoningOutputTokens": 120,
+			"totalTokens": 1660
+		}
+	}`)
+	now := time.Date(2026, 7, 26, 12, 0, 0, 0, time.UTC)
+
+	event, ok := mapNotification(ServerMessage{Method: "thread/tokenUsage/updated", Params: params}, provider.MustID("task-1"), now)
+	if !ok {
+		t.Fatal("a token report must not be dropped")
+	}
+	if event.Type != provider.EventUsage {
+		t.Fatalf("type = %q, want usage", event.Type)
+	}
+	if event.Usage == nil || event.Usage.Tokens == nil {
+		t.Fatalf("the tokens themselves must travel: %+v", event.Usage)
+	}
+	if event.Usage.TurnID != "turn-7" {
+		t.Fatalf("a cost has to be attributable to a turn, got %q", event.Usage.TurnID)
+	}
+	tokens := event.Usage.Tokens
+	if tokens.Input != 1200 || tokens.CachedInput != 800 || tokens.Output != 340 ||
+		tokens.ReasoningOutput != 120 || tokens.Total != 1660 {
+		t.Fatalf("token counts must be reported exactly: %+v", tokens)
+	}
+	if event.Usage.Provider == "" {
+		t.Fatal("the provider that reported the cost must travel with it")
+	}
+}
+
+func TestAMalformedTokenReportIsDroppedRatherThanGuessed(t *testing.T) {
+	if _, ok := mapNotification(ServerMessage{
+		Method: "thread/tokenUsage/updated",
+		Params: []byte(`{"tokenUsage": "not an object"}`),
+	}, provider.MustID("task-1"), time.Now()); ok {
+		t.Fatal("an unreadable token report must not become an event with invented zeros")
+	}
+}

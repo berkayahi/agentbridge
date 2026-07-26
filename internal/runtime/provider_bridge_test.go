@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -101,4 +102,66 @@ func (s *failingSink) Append(context.Context, kernel.Event) error {
 	}
 	s.appended++
 	return nil
+}
+
+// Fragments are batched and nothing else is. A fragment is a live preview of what
+// she is saying — Codex's own schema warns a completed item may not match the
+// concatenation of its deltas — while an approval or a commit is something a
+// keeper acts on and a crash must not lose.
+func TestOnlyStreamingFragmentsAreBatched(t *testing.T) {
+	source := make(chan provider.Event, 16)
+	sink := new(recordingEventSink)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- RelayProviderEvents(ctx, "execution-1", source, sink) }()
+
+	for _, fragment := range []string{"The build ", "identity is ", "reconciled."} {
+		source <- provider.Event{Type: provider.EventAssistantMessageDelta, Message: fragment}
+	}
+	// An approval ends the fragment it interrupted, so the order a keeper reads
+	// is the order things happened.
+	source <- provider.Event{Type: provider.EventApprovalRequired, Message: "May I write outside the worktree?"}
+	close(source)
+
+	if err := <-done; err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+
+	events := sink.events
+	if len(events) != 2 {
+		t.Fatalf("three fragments and one approval must be two durable events, got %d: %+v", len(events), events)
+	}
+	if got := events[0].Type; got != kernel.EventType("provider_assistant_message_delta") {
+		t.Fatalf("first event type = %q", got)
+	}
+	var first struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(events[0].Payload, &first); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if first.Message != "The build identity is reconciled." {
+		t.Fatalf("the batch must carry the joined text, got %q", first.Message)
+	}
+	if events[1].Type != kernel.EventType("provider_approval_required") {
+		t.Fatalf("the approval must be its own durable event, got %q", events[1].Type)
+	}
+}
+
+func TestAFragmentIsNotLostWhenTheProviderStops(t *testing.T) {
+	source := make(chan provider.Event, 4)
+	sink := new(recordingEventSink)
+	done := make(chan error, 1)
+	go func() { done <- RelayProviderEvents(context.Background(), "execution-1", source, sink) }()
+
+	source <- provider.Event{Type: provider.EventAssistantMessageDelta, Message: "half a thought"}
+	close(source)
+	if err := <-done; err != nil {
+		t.Fatalf("relay: %v", err)
+	}
+	if len(sink.events) != 1 {
+		t.Fatalf("a fragment already spoken is still worth having: %+v", sink.events)
+	}
 }

@@ -96,12 +96,19 @@ func TestWorkspaceRejectsUnsafeInputsDirtyCheckoutAndCollisions(t *testing.T) {
 	}
 }
 
-func TestWorkspaceMissingRefAndCancellation(t *testing.T) {
+func TestWorkspacePreparesMissingRefAndHonorsCancellation(t *testing.T) {
 	fixture := newGitFixture(t, "staging")
 	manager := WorkspaceManager{Git: Runner{}, Port: &savedWorkspace{}}
 	profile := RepositoryProfile{ControlCheckout: fixture.control, Remote: "origin", BaseRef: "refs/heads/missing", WorktreeRoot: filepath.Join(fixture.root, "worktrees")}
-	if _, err := manager.Prepare(context.Background(), profile, "missing"); err == nil {
-		t.Fatal("missing ref accepted")
+	workspace, err := manager.Prepare(context.Background(), profile, "missing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(gitOutput(t, fixture.control, "ls-remote", "--heads", "origin", profile.BaseRef)); got == "" {
+		t.Fatal("missing ref was not prepared")
+	}
+	if err := manager.Cleanup(context.Background(), profile, workspace.Path); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

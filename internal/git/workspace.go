@@ -34,6 +34,26 @@ func (p RepositoryProfile) Validate() error {
 	return nil
 }
 
+// EnsureRemoteBaseRef makes Kovan's private work ref an implementation detail.
+// It publishes only the checkout's committed HEAD, so local uncommitted files
+// are never staged or committed as part of workspace preparation.
+func EnsureRemoteBaseRef(ctx context.Context, runner Runner, checkout, remote, baseRef string) error {
+	if !filepath.IsAbs(checkout) || !safeName.MatchString(remote) || !validHeadRef(baseRef) {
+		return ErrInvalidProfile
+	}
+	result, err := runner.Run(ctx, checkout, "ls-remote", "--heads", remote, baseRef)
+	if err != nil {
+		return fmt.Errorf("inspect configured base ref: %w", err)
+	}
+	if strings.TrimSpace(result.Stdout) != "" {
+		return nil
+	}
+	if _, err := runner.Run(ctx, checkout, "push", remote, "HEAD:"+baseRef); err != nil {
+		return fmt.Errorf("prepare configured base ref: %w", err)
+	}
+	return nil
+}
+
 type Workspace struct{ BaseSHA, Path string }
 type WorkspacePort interface {
 	SaveWorkspace(context.Context, string, string, string) error
@@ -69,6 +89,9 @@ func (m WorkspaceManager) Prepare(ctx context.Context, profile RepositoryProfile
 	branch := strings.TrimPrefix(profile.BaseRef, "refs/heads/")
 	tracking := "refs/remotes/" + profile.Remote + "/" + branch
 	refspec := "+" + profile.BaseRef + ":" + tracking
+	if err := EnsureRemoteBaseRef(ctx, m.Git, profile.ControlCheckout, profile.Remote, profile.BaseRef); err != nil {
+		return Workspace{}, err
+	}
 	if _, err := m.Git.Run(ctx, profile.ControlCheckout, "fetch", "--no-tags", profile.Remote, refspec); err != nil {
 		return Workspace{}, fmt.Errorf("fetch configured base ref: %w", err)
 	}

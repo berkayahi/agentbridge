@@ -115,6 +115,46 @@ func (s *Service) Usage(ctx context.Context) (UsageResponse, error) {
 	return s.usageCached, nil
 }
 
+// UsageAnalytics reports only task costs actually emitted by a provider. The
+// empty state is explanatory because an empty measurement is not zero spend.
+func (s *Service) UsageAnalytics(ctx context.Context, projectID string) (UsageAnalyticsResponse, error) {
+	if s == nil || s.store == nil {
+		return UsageAnalyticsResponse{}, ErrNotConfigured
+	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID != "" && !validID(projectID) {
+		return UsageAnalyticsResponse{}, ErrInvalidRequest
+	}
+	authority, ok := s.store.(UsageAnalyticsAuthority)
+	if !ok {
+		return UsageAnalyticsResponse{}, ErrNotConfigured
+	}
+	tasks, err := authority.TaskUsage(ctx, projectID)
+	if err != nil {
+		return UsageAnalyticsResponse{}, err
+	}
+	response := UsageAnalyticsResponse{
+		Reported: len(tasks) > 0,
+		Reason:   "No runtime has reported per-turn token usage for this scope yet.",
+		Tasks:    tasks,
+	}
+	if response.Reported {
+		response.Reason = ""
+	}
+	for _, task := range tasks {
+		response.Turns += task.Turns
+		response.Tokens.Input += task.Tokens.Input
+		response.Tokens.CachedInput += task.Tokens.CachedInput
+		response.Tokens.Output += task.Tokens.Output
+		response.Tokens.ReasoningOutput += task.Tokens.ReasoningOutput
+		response.Tokens.Total += task.Tokens.Total
+	}
+	if response.Tasks == nil {
+		response.Tasks = []TaskUsageView{}
+	}
+	return response, nil
+}
+
 func New(config Config) (*Service, error) {
 	if config.Store == nil || config.Runtimes == nil {
 		return nil, ErrInvalidRequest

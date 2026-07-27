@@ -135,6 +135,34 @@ type UsageResponse struct {
 	CachedForSeconds int `json:"cached_for_seconds"`
 }
 
+// TokenUsageView is provider-reported turn usage. These are measurements, not
+// estimates: a runtime that does not report tokens remains absent rather than
+// being assigned a guessed cost.
+type TokenUsageView struct {
+	Input           int64 `json:"input"`
+	CachedInput     int64 `json:"cached_input"`
+	Output          int64 `json:"output"`
+	ReasoningOutput int64 `json:"reasoning_output"`
+	Total           int64 `json:"total"`
+}
+
+type TaskUsageView struct {
+	TaskID       string         `json:"task_id"`
+	ProjectID    string         `json:"project_id"`
+	RepositoryID string         `json:"repository_id"`
+	Provider     string         `json:"provider"`
+	Turns        int            `json:"turns"`
+	Tokens       TokenUsageView `json:"tokens"`
+}
+
+type UsageAnalyticsResponse struct {
+	Reported bool            `json:"reported"`
+	Reason   string          `json:"reason,omitempty"`
+	Turns    int             `json:"turns"`
+	Tokens   TokenUsageView  `json:"tokens"`
+	Tasks    []TaskUsageView `json:"tasks"`
+}
+
 // ConfigureRepositoryRequest adds a repository to the host's configuration.
 // Unlike RegisterRepositoryRequest, which resolves a remote against an already
 // configured profile, this one creates the profile.
@@ -170,6 +198,12 @@ type RepositoryConfigurator interface {
 // on the provider catalog that the surface polls every 2.5 seconds.
 type UsageSource interface {
 	ProviderUsage(ctx context.Context) ([]ProviderUsageView, error)
+}
+
+// UsageAnalyticsAuthority projects provider-reported turn costs onto the task,
+// repository, and project that spent them.
+type UsageAnalyticsAuthority interface {
+	TaskUsage(ctx context.Context, projectID string) ([]TaskUsageView, error)
 }
 
 type Project struct {

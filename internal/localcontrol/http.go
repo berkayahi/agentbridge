@@ -55,6 +55,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/tasks", a.listTasks)
 	mux.HandleFunc("GET /v1/providers", a.listProviders)
 	mux.HandleFunc("GET /v1/usage", a.usage)
+	mux.HandleFunc("GET /v1/analytics/usage", a.usageAnalytics)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
@@ -98,6 +99,11 @@ func (a *API) integrateRepository(w http.ResponseWriter, r *http.Request) {
 // subscription has left is not that cheap.
 func (a *API) usage(w http.ResponseWriter, r *http.Request) {
 	response, err := a.service.Usage(r.Context())
+	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) usageAnalytics(w http.ResponseWriter, r *http.Request) {
+	response, err := a.service.UsageAnalytics(r.Context(), strings.TrimSpace(r.URL.Query().Get("project_id")))
 	writeResult(w, http.StatusOK, response, err)
 }
 

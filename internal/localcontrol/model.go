@@ -332,6 +332,16 @@ type CreateTaskRequest struct {
 	IdempotencyKey   string                     `json:"idempotency_key"`
 }
 
+// ContinueTaskRequest creates a successor task on the completed task's
+// provider session and workspace. It is a new task for planning/history, while
+// keeping one AI conversation for the work and its follow-up.
+type ContinueTaskRequest struct {
+	ParentTaskID   string `json:"parent_task_id,omitempty"`
+	Title          string `json:"title,omitempty"`
+	Prompt         string `json:"prompt"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
 type UpdateTaskRequest struct {
 	TaskID         string `json:"task_id"`
 	Revision       int64  `json:"revision"`

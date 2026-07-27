@@ -160,6 +160,148 @@ func (s *RuntimeStore) CreateTaskAtomically(ctx context.Context, creation localc
 	return s.createTaskInContext(ctx, creation.ProjectID, creation.BoardID, creation.TargetDeviceID, creation.Task, creation.InitialEvent, creation.LocalEvent, &creation.Idempotency)
 }
 
+// CreateTaskContinuation moves a completed task's one resumable session onto a
+// successor task. The new task, execution, session binding, route, audit event,
+// and idempotent response are one transaction, so a crash cannot leave the
+// provider conversation bound to two tasks or to neither task.
+func (s *RuntimeStore) CreateTaskContinuation(ctx context.Context, continuation localcontrol.AtomicTaskContinuation) (localcontrol.Event, error) {
+	value := continuation.Task
+	if s == nil || s.db == nil || strings.TrimSpace(continuation.ParentTaskID) == "" ||
+		strings.TrimSpace(continuation.ProjectID) == "" || strings.TrimSpace(continuation.BoardID) == "" ||
+		strings.TrimSpace(continuation.TargetDeviceID) == "" || strings.TrimSpace(continuation.SessionID) == "" ||
+		value.ID == "" || value.RepoProfileID == "" || !value.Provider.Valid() ||
+		strings.TrimSpace(value.Title) == "" || strings.TrimSpace(value.Prompt) == "" ||
+		strings.TrimSpace(value.BaseSHA) == "" || strings.TrimSpace(value.WorktreePath) == "" ||
+		strings.TrimSpace(value.ProviderSessionID) == "" || value.CreatedAt.IsZero() ||
+		continuation.InitialEvent.TaskID != value.ID || continuation.LocalEvent.TaskID != value.ID {
+		return localcontrol.Event{}, fmt.Errorf("create local task continuation: %w", localcontrol.ErrInvalidRequest)
+	}
+	now := value.CreatedAt.UTC()
+	profile, err := json.Marshal(value.ExecutionProfile)
+	if err != nil {
+		return localcontrol.Event{}, fmt.Errorf("encode continuation execution profile: %w", err)
+	}
+	executionID, commandID := value.ID+"-execution", value.ID+"-command"
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return localcontrol.Event{}, fmt.Errorf("begin local task continuation: %w", err)
+	}
+	defer tx.Rollback()
+
+	var (
+		parentState, parentRepository, parentProvider, parentCommit, parentWorktree string
+		parentProviderSession, parentProviderThread                                 string
+	)
+	if err := tx.QueryRowContext(ctx, `
+		SELECT state, repo_profile_id, provider, commit_sha, worktree_path, provider_session_id, provider_thread_id
+		FROM local_tasks WHERE id = ? AND controller_owner = ?`,
+		continuation.ParentTaskID, workmodel.TaskControllerLocal,
+	).Scan(&parentState, &parentRepository, &parentProvider, &parentCommit, &parentWorktree, &parentProviderSession, &parentProviderThread); err != nil {
+		return localcontrol.Event{}, runtimeNotFound("load continuation parent", err)
+	}
+	if parentState != string(workmodel.Completed) || parentRepository != value.RepoProfileID ||
+		parentProvider != string(value.Provider) || parentCommit != value.BaseSHA ||
+		parentWorktree != value.WorktreePath || parentProviderSession != value.ProviderSessionID ||
+		parentProviderThread != value.ProviderThreadID {
+		return localcontrol.Event{}, fmt.Errorf("continuation parent changed: %w", store.ErrConflict)
+	}
+	var activeTaskID string
+	var resumable int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COALESCE(active_local_task_id, ''), resumable
+		FROM sessions WHERE id = ? AND repository_id = ? AND runtime_id = ?`,
+		continuation.SessionID, value.RepoProfileID, value.Provider,
+	).Scan(&activeTaskID, &resumable); err != nil {
+		return localcontrol.Event{}, runtimeNotFound("load continuation session", err)
+	}
+	if resumable != 1 || (activeTaskID != "" && activeTaskID != continuation.ParentTaskID) {
+		return localcontrol.Event{}, fmt.Errorf("continuation session is already bound: %w", store.ErrConflict)
+	}
+
+	for _, check := range []struct {
+		query string
+		args  []any
+		label string
+	}{
+		{`SELECT id FROM local_projects WHERE id = ?`, []any{continuation.ProjectID}, "project"},
+		{`SELECT id FROM local_boards WHERE id = ? AND project_id = ?`, []any{continuation.BoardID, continuation.ProjectID}, "board"},
+		{`SELECT id FROM local_devices WHERE id = ? AND state = 'paired'`, []any{continuation.TargetDeviceID}, "device"},
+	} {
+		var found string
+		if err := tx.QueryRowContext(ctx, check.query, check.args...).Scan(&found); err != nil {
+			return localcontrol.Event{}, runtimeNotFound("validate continuation "+check.label, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO local_tasks (
+			id, repo_profile_id, title, prompt, state, provider, model, execution_profile,
+			active_execution_id, controller_owner, base_sha, worktree_path,
+			provider_session_id, provider_thread_id, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		value.ID, value.RepoProfileID, value.Title, value.Prompt, workmodel.Paused,
+		value.Provider, value.Model, profile, executionID, workmodel.TaskControllerLocal,
+		value.BaseSHA, value.WorktreePath, value.ProviderSessionID, value.ProviderThreadID,
+		timestamp(now), timestamp(now),
+	); err != nil {
+		return localcontrol.Event{}, runtimeConflict("insert continuation task", err)
+	}
+	sessionResult, err := tx.ExecContext(ctx, `
+		UPDATE sessions
+		SET active_local_task_id = ?, status = 'paused', resumable = 1, updated_at = ?
+		WHERE id = ? AND (active_local_task_id IS NULL OR active_local_task_id = ?) AND resumable = 1`,
+		value.ID, timestamp(now), continuation.SessionID, continuation.ParentTaskID,
+	)
+	if err != nil {
+		return localcontrol.Event{}, runtimeConflict("bind continuation session", err)
+	}
+	if err := requireRuntimeChanged(sessionResult, "bind continuation session"); err != nil {
+		return localcontrol.Event{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO executions (
+			id, local_task_id, session_id, runtime_id, repository_id, retry_of_execution_id,
+			state, attempt, fencing_epoch, command_id, max_transient_attempts,
+			policy_snapshot, source_state, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, NULL, 'paused', 0, 1, ?, 0, ?, 'continuation', ?, ?)`,
+		executionID, value.ID, continuation.SessionID, value.Provider, value.RepoProfileID,
+		commandID, []byte(`{}`), timestamp(now), timestamp(now),
+	); err != nil {
+		return localcontrol.Event{}, runtimeConflict("insert continuation execution", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO task_presentations (local_task_id, telegram_chat_id, telegram_message_id) VALUES (?, 0, 0)`, value.ID); err != nil {
+		return localcontrol.Event{}, runtimeConflict("insert continuation presentation", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO local_task_contexts (local_task_id, project_id, board_id, created_at) VALUES (?, ?, ?, ?)`,
+		value.ID, continuation.ProjectID, continuation.BoardID, timestamp(now)); err != nil {
+		return localcontrol.Event{}, runtimeConflict("link continuation context", err)
+	}
+	var assignmentEpoch uint64
+	if err := tx.QueryRowContext(ctx, `SELECT connection_epoch FROM local_devices WHERE id = ?`, continuation.TargetDeviceID).Scan(&assignmentEpoch); err != nil {
+		return localcontrol.Event{}, runtimeNotFound("load continuation device epoch", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO local_task_devices (local_task_id, device_id, assignment_epoch, last_ack_cursor, last_observed_cursor, state, updated_at)
+		VALUES (?, ?, ?, 0, 0, 'assigned', ?)`,
+		value.ID, continuation.TargetDeviceID, assignmentEpoch, timestamp(now),
+	); err != nil {
+		return localcontrol.Event{}, runtimeConflict("assign continuation device", err)
+	}
+	if err := insertRuntimeEvent(ctx, tx, continuation.InitialEvent, value.ID, executionID); err != nil {
+		return localcontrol.Event{}, err
+	}
+	stored, err := insertLocalEventTx(ctx, tx, continuation.LocalEvent)
+	if err != nil {
+		return localcontrol.Event{}, err
+	}
+	if err := saveIdempotencyTx(ctx, tx, continuation.Idempotency); err != nil {
+		return localcontrol.Event{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return localcontrol.Event{}, fmt.Errorf("commit local task continuation: %w", err)
+	}
+	return stored, nil
+}
+
 func (s *RuntimeStore) createTaskInContext(ctx context.Context, projectID, boardID, targetDeviceID string, value workmodel.Task, initial workmodel.Event, localEvent localcontrol.Event, idempotency *localcontrol.IdempotencyRecord) (localcontrol.Event, error) {
 	if s == nil || s.db == nil || strings.TrimSpace(projectID) == "" || strings.TrimSpace(boardID) == "" || strings.TrimSpace(targetDeviceID) == "" || value.ID == "" || value.RepoProfileID == "" || !value.Provider.Valid() || strings.TrimSpace(value.Title) == "" || strings.TrimSpace(value.Prompt) == "" || value.CreatedAt.IsZero() || initial.TaskID != value.ID {
 		return localcontrol.Event{}, fmt.Errorf("create local task: %w", localcontrol.ErrInvalidRequest)

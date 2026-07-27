@@ -199,6 +199,94 @@ func TestLocalCancelIsDurableBeforeExecutorInterruption(t *testing.T) {
 	}
 }
 
+func TestCompletedTaskContinuesOnTheSameDurableSession(t *testing.T) {
+	ctx := context.Background()
+	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "continuation.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	now := time.Unix(1_700_000_200, 0).UTC()
+	executor := &fakeExecutor{}
+	service, err := localcontrol.New(localcontrol.Config{
+		Store: data, Runtimes: fakeCatalog{}, Executor: executor,
+		Verifier: fakeVerifier{}, Committer: fakeCommitter{},
+		Clock: func() time.Time { return now }, NewID: deterministicIDs(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project, _ := service.CreateProject(ctx, localcontrol.CreateProjectRequest{Name: "p", IdempotencyKey: "continuation-p"})
+	repo, _ := service.RegisterRepository(ctx, localcontrol.RegisterRepositoryRequest{Remote: "origin", IdempotencyKey: "continuation-r"})
+	board, _ := service.CreateBoard(ctx, localcontrol.CreateBoardRequest{ProjectID: project.Project.ID, Name: "b", IdempotencyKey: "continuation-b"})
+	parent, err := service.CreateTask(ctx, localcontrol.CreateTaskRequest{
+		ProjectID: project.Project.ID, BoardID: board.Board.ID, RepositoryID: repo.Repository.ID,
+		Provider: workmodel.CodexSubscription, Prompt: "build the first result", IdempotencyKey: "continuation-parent",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SaveWorkspace(ctx, parent.Task.ID, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "/tmp/continuation-worktree"); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SaveProviderSession(ctx, parent.Task.ID, workmodel.Session{
+		ID: parent.Task.SessionID, TaskID: parent.Task.ID, Provider: workmodel.CodexSubscription,
+		ProviderSessionID: "provider-session-one", ProviderThreadID: "thread-one",
+		Status: "running", Resumable: true, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := service.Observe(ctx, localcontrol.ObserveRequest{TaskID: parent.Task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := service.Start(ctx, localcontrol.StartRequest{
+		TaskID: current.Task.ID, Revision: current.Task.Revision, IdempotencyKey: "continuation-start",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := service.Verify(ctx, localcontrol.VerifyRequest{
+		TaskID: started.Task.ID, Revision: started.Task.Revision, IdempotencyKey: "continuation-verify",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := service.Commit(ctx, localcontrol.CommitRequest{
+		TaskID: verified.Task.ID, Revision: verified.Task.Revision, IdempotencyKey: "continuation-commit",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.ContinueTask(ctx, localcontrol.ContinueTaskRequest{
+		ParentTaskID: completed.Task.ID, Prompt: "add the requested follow-up",
+		IdempotencyKey: "continuation-child",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if child.Task.ID == parent.Task.ID || child.Task.State != workmodel.Paused || child.Task.SessionID != parent.Task.SessionID {
+		t.Fatalf("continued task = %#v, want a paused successor on session %q", child.Task, parent.Task.SessionID)
+	}
+	resumed, err := service.Resume(ctx, localcontrol.ResumeRequest{
+		TaskID: child.Task.ID, Revision: child.Task.Revision,
+		Input: "continue in the same conversation", IdempotencyKey: "continuation-resume",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Task.State != workmodel.Running || len(executor.resumed) != 1 || executor.resumed[0] != child.Task.ID {
+		t.Fatalf("resumed continuation = %#v executor=%#v", resumed.Task, executor)
+	}
+	sessions, err := data.ResumableSessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].TaskID != child.Task.ID {
+		t.Fatalf("resumable sessions = %#v, want active continuation %q", sessions, child.Task.ID)
+	}
+}
+
 func TestLocalAuthorityRejectsStandaloneOwnedTask(t *testing.T) {
 	ctx := context.Background()
 	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "standalone-owner.db"))
@@ -232,6 +320,7 @@ func (fakeCatalog) Get(string) (runtime.Adapter, error) { return nil, nil }
 
 type fakeExecutor struct {
 	started      []string
+	resumed      []string
 	approved     bool
 	approvedUser string
 }
@@ -240,7 +329,8 @@ func (f *fakeExecutor) Start(_ context.Context, task localcontrol.TaskView, _ lo
 	f.started = append(f.started, task.ID)
 	return nil
 }
-func (*fakeExecutor) Resume(context.Context, localcontrol.TaskView, localcontrol.ResumeRequest) error {
+func (f *fakeExecutor) Resume(_ context.Context, task localcontrol.TaskView, _ localcontrol.ResumeRequest) error {
+	f.resumed = append(f.resumed, task.ID)
 	return nil
 }
 func (f *fakeExecutor) Approve(_ context.Context, _ localcontrol.TaskView, _ string, userID string, _ bool) error {

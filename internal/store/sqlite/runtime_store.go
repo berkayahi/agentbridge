@@ -426,7 +426,10 @@ func boolInt(value bool) int {
 }
 
 func (s *RuntimeStore) ResumableSessions(ctx context.Context) ([]workmodel.Session, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, local_task_id, runtime_id, provider_session_id, provider_thread_id, status, resumable, created_at, updated_at FROM sessions WHERE resumable = 1 ORDER BY updated_at, id`)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, COALESCE(active_local_task_id, local_task_id), runtime_id,
+		       provider_session_id, provider_thread_id, status, resumable, created_at, updated_at
+		FROM sessions WHERE resumable = 1 ORDER BY updated_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("query resumable v2 sessions: %w", err)
 	}

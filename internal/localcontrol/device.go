@@ -194,6 +194,24 @@ type AtomicTaskCreation struct {
 	Idempotency    IdempotencyRecord
 }
 
+// AtomicContinuationAuthority rebinds one released terminal session to its
+// successor task in the same transaction that creates the successor lineage.
+type AtomicContinuationAuthority interface {
+	CreateTaskContinuation(context.Context, AtomicTaskContinuation) (Event, error)
+}
+
+type AtomicTaskContinuation struct {
+	ParentTaskID   string
+	ProjectID      string
+	BoardID        string
+	TargetDeviceID string
+	SessionID      string
+	Task           workmodel.Task
+	InitialEvent   workmodel.Event
+	LocalEvent     Event
+	Idempotency    IdempotencyRecord
+}
+
 type AssignmentResponse struct {
 	Task       TaskView         `json:"task"`
 	Assignment DeviceAssignment `json:"assignment"`

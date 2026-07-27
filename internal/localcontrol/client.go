@@ -146,6 +146,12 @@ func (c *Client) CreateTask(ctx context.Context, request CreateTaskRequest) (Tas
 	return response, err
 }
 
+func (c *Client) ContinueTask(ctx context.Context, request ContinueTaskRequest) (TaskResponse, error) {
+	var response TaskResponse
+	err := c.do(ctx, http.MethodPost, "/v1/tasks/"+url.PathEscape(request.ParentTaskID)+"/continue", request, &response)
+	return response, err
+}
+
 func (c *Client) UpdateTask(ctx context.Context, request UpdateTaskRequest) (ActionResponse, error) {
 	var response ActionResponse
 	err := c.doWithHeaders(ctx, http.MethodPatch, "/v1/tasks/"+url.PathEscape(request.TaskID), request, &response, map[string]string{

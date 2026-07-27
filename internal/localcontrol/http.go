@@ -68,6 +68,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/tasks/{id}/approvals", a.pendingApprovals)
 	mux.HandleFunc("GET /v1/tasks/{id}/diff", a.taskDiff)
 	mux.HandleFunc("POST /v1/tasks/{id}/start", a.start)
+	mux.HandleFunc("POST /v1/tasks/{id}/continue", a.continueTask)
 	mux.HandleFunc("POST /v1/tasks/{id}/resume", a.resume)
 	mux.HandleFunc("POST /v1/tasks/{id}/steer", a.steer)
 	mux.HandleFunc("POST /v1/tasks/{id}/approve", a.approve)
@@ -327,6 +328,16 @@ func (a *API) start(w http.ResponseWriter, r *http.Request) {
 	request.TaskID = r.PathValue("id")
 	response, err := a.service.Start(r.Context(), request)
 	writeResult(w, http.StatusAccepted, response, err)
+}
+
+func (a *API) continueTask(w http.ResponseWriter, r *http.Request) {
+	var request ContinueTaskRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	request.ParentTaskID = r.PathValue("id")
+	response, err := a.service.ContinueTask(r.Context(), request)
+	writeResult(w, http.StatusCreated, response, err)
 }
 
 func (a *API) taskDiff(w http.ResponseWriter, r *http.Request) {

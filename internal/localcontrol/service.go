@@ -607,6 +607,111 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	return response, nil
 }
 
+// ContinueTask creates a successor task while preserving the completed task's
+// provider session. The successor begins paused so the ordinary Resume command
+// remains the single execution boundary and a crash after creation is
+// recoverable without allocating another session.
+func (s *Service) ContinueTask(ctx context.Context, request ContinueTaskRequest) (TaskResponse, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+
+	payload := struct {
+		ParentTaskID string `json:"parent_task_id"`
+		Title        string `json:"title"`
+		Prompt       string `json:"prompt"`
+	}{
+		ParentTaskID: strings.TrimSpace(request.ParentTaskID),
+		Title:        strings.TrimSpace(request.Title),
+		Prompt:       strings.TrimSpace(request.Prompt),
+	}
+	var cached TaskResponse
+	if done, err := s.replay(ctx, request.IdempotencyKey, "continue_task", payload, &cached); done || err != nil {
+		return cached, err
+	}
+	if !validID(payload.ParentTaskID) || payload.Prompt == "" {
+		return TaskResponse{}, ErrInvalidRequest
+	}
+	parent, err := s.taskView(ctx, payload.ParentTaskID)
+	if err != nil {
+		return TaskResponse{}, err
+	}
+	if parent.State != workmodel.Completed || strings.TrimSpace(parent.SessionID) == "" ||
+		strings.TrimSpace(parent.CommitSHA) == "" {
+		return TaskResponse{}, fmt.Errorf("continue task in %s without landed resumable session: %w", parent.State, store.ErrConflict)
+	}
+	parentTask, err := s.store.Task(ctx, parent.ID)
+	if err != nil {
+		return TaskResponse{}, err
+	}
+	if strings.TrimSpace(parentTask.ProviderSessionID) == "" || strings.TrimSpace(parentTask.WorktreePath) == "" {
+		return TaskResponse{}, fmt.Errorf("completed task has no durable provider workspace: %w", ErrNotConfigured)
+	}
+	device, err := s.store.GetDevice(ctx, parent.TargetDeviceID)
+	if err != nil {
+		return TaskResponse{}, err
+	}
+	if err := requirePairedDevice(device); err != nil {
+		return TaskResponse{}, err
+	}
+	atomic, ok := s.store.(AtomicContinuationAuthority)
+	if !ok {
+		return TaskResponse{}, ErrNotConfigured
+	}
+
+	now := s.clock().UTC()
+	taskID := s.newID("task")
+	title := payload.Title
+	if title == "" {
+		title = workmodel.Title(payload.Prompt, workmodel.DefaultTitleRunes)
+	}
+	task := workmodel.Task{
+		ID: taskID, RepoProfileID: parent.RepositoryID, Title: title, Prompt: payload.Prompt,
+		State: workmodel.Paused, Provider: parent.Provider, Model: parent.Model,
+		ExecutionProfile: parent.ExecutionProfile,
+		BaseSHA:          parent.CommitSHA, WorktreePath: parentTask.WorktreePath,
+		ProviderSessionID: parentTask.ProviderSessionID, ProviderThreadID: parentTask.ProviderThreadID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	initialPayload, err := json.Marshal(map[string]any{
+		"state": "paused", "continues_task_id": parent.ID, "session_id": parent.SessionID,
+		"execution_profile": parent.ExecutionProfile,
+	})
+	if err != nil {
+		return TaskResponse{}, err
+	}
+	initial := workmodel.Event{
+		ID: s.newID("event"), TaskID: taskID, Type: workmodel.EventTaskCreated,
+		Visibility: workmodel.VisibilityUser, Payload: initialPayload, CreatedAt: now,
+	}
+	auditEvent := localEvent(s.newID("event"), "task", taskID, taskID, 1, "task_continued", map[string]any{
+		"continues_task_id": parent.ID, "session_id": parent.SessionID,
+		"project_id": parent.ProjectID, "board_id": parent.BoardID,
+		"target_device_id": parent.TargetDeviceID, "execution_profile": parent.ExecutionProfile,
+	}, now)
+	view := TaskView{
+		ID: taskID, ProjectID: parent.ProjectID, BoardID: parent.BoardID,
+		RepositoryID: parent.RepositoryID, RepositoryRemote: parent.RepositoryRemote,
+		TargetDeviceID: parent.TargetDeviceID, TargetEpoch: device.ConnectionEpoch,
+		Title: title, Prompt: payload.Prompt, Provider: parent.Provider, Model: parent.Model,
+		ExecutionProfile: parent.ExecutionProfile, State: workmodel.Paused, Revision: 1,
+		ExecutionID: taskID + "-execution", SessionID: parent.SessionID, RuntimeID: parent.RuntimeID,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	response := TaskResponse{Task: view}
+	record, err := s.creationIdempotencyRecord(request.IdempotencyKey, "continue_task", payload, response)
+	if err != nil {
+		return TaskResponse{}, err
+	}
+	if _, err := atomic.CreateTaskContinuation(ctx, AtomicTaskContinuation{
+		ParentTaskID: parent.ID, ProjectID: parent.ProjectID, BoardID: parent.BoardID,
+		TargetDeviceID: parent.TargetDeviceID, SessionID: parent.SessionID,
+		Task: task, InitialEvent: initial, LocalEvent: auditEvent, Idempotency: record,
+	}); err != nil {
+		return TaskResponse{}, err
+	}
+	return response, nil
+}
+
 func (s *Service) UpdateTask(ctx context.Context, request UpdateTaskRequest) (ActionResponse, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()

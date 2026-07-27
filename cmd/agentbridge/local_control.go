@@ -994,9 +994,10 @@ func (u providerUsage) ProviderUsage(ctx context.Context) ([]localcontrol.Provid
 // authority only knows that something can do it.
 type repositoryConfigurator struct {
 	configPath string
+	git        bridgegit.Runner
 }
 
-func (c repositoryConfigurator) ConfigureRepository(_ context.Context, request localcontrol.ConfigureRepositoryRequest) (localcontrol.RepositoryProfile, error) {
+func (c repositoryConfigurator) ConfigureRepository(ctx context.Context, request localcontrol.ConfigureRepositoryRequest) (localcontrol.RepositoryProfile, error) {
 	checkout := strings.TrimSpace(request.CheckoutPath)
 	if !filepath.IsAbs(checkout) {
 		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: checkout path must be absolute", localcontrol.ErrInvalidRequest)
@@ -1014,6 +1015,9 @@ func (c repositoryConfigurator) ConfigureRepository(_ context.Context, request l
 	verification := request.Verification
 	if len(verification) == 0 {
 		return localcontrol.RepositoryProfile{}, fmt.Errorf("%w: a repository needs a verification command", localcontrol.ErrInvalidRequest)
+	}
+	if err := c.ensureRemoteBaseRef(ctx, checkout, remote, baseRef); err != nil {
+		return localcontrol.RepositoryProfile{}, err
 	}
 
 	profile := config.RepositoryProfile{
@@ -1040,4 +1044,23 @@ func (c repositoryConfigurator) ConfigureRepository(_ context.Context, request l
 		BaseRef:      baseRef,
 		CheckoutPath: checkout,
 	}, nil
+}
+
+// ensureRemoteBaseRef removes branch preparation from repository onboarding.
+// Worktrees always start from a remote ref, so when the keeper selects a
+// checkout whose Kovan branch does not exist yet, publish the checkout's
+// current committed HEAD to that exact ref. Uncommitted files remain untouched:
+// deciding whether they belong in Git is source ownership, not setup ceremony.
+func (c repositoryConfigurator) ensureRemoteBaseRef(ctx context.Context, checkout, remote, baseRef string) error {
+	result, err := c.git.Run(ctx, checkout, "ls-remote", "--heads", remote, baseRef)
+	if err != nil {
+		return fmt.Errorf("%w: inspect repository branch: %v", localcontrol.ErrInvalidRequest, err)
+	}
+	if strings.TrimSpace(result.Stdout) != "" {
+		return nil
+	}
+	if _, err := c.git.Run(ctx, checkout, "push", remote, "HEAD:"+baseRef); err != nil {
+		return fmt.Errorf("%w: prepare Kovan work branch: %v", localcontrol.ErrInvalidRequest, err)
+	}
+	return nil
 }

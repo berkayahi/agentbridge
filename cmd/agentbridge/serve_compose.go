@@ -511,7 +511,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	}
 	localService.SetUsageSource(providerUsage{providers: cfg.Providers, live: providers})
 	if cfg.Path != "" {
-		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path})
+		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path, git: bridgegit.Runner{}})
 	}
 	deviceServer, err := composeDeviceAgent(cfg.DeviceAgent, data, localExecutor, localVerifier{operations: localOperations}, localCommitter{operations: localOperations})
 	if err != nil {
@@ -761,7 +761,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	}
 	localService.SetUsageSource(providerUsage{providers: cfg.Providers, live: providers})
 	if cfg.Path != "" {
-		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path})
+		localService.SetRepositoryConfigurator(repositoryConfigurator{configPath: cfg.Path, git: bridgegit.Runner{}})
 	}
 	localExecutor.progress = localService
 	progressStarter := localService.StartProgress

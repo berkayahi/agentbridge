@@ -113,6 +113,16 @@ func (e *localRuntimeExecutor) HeldSessions() int {
 	return len(e.sessions)
 }
 
+func (e *localRuntimeExecutor) hasSession(taskID string) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.sessions[taskID]
+	return ok
+}
+
 func newLocalRuntimeExecutor(data *sqlite.RuntimeStore, runtimes *bridgeRuntime.Registry, workspace *workspaceAdapter, models map[workmodel.Provider]string, writable map[string][]string, approvalUser string) *localRuntimeExecutor {
 	return &localRuntimeExecutor{store: data, runtimes: runtimes, workspace: workspace, models: models, writable: writable, approvalUser: strings.TrimSpace(approvalUser), sessions: make(map[string]bridgeRuntime.Session)}
 }
@@ -370,7 +380,8 @@ func (e *localRuntimeExecutor) Resume(ctx context.Context, view localcontrol.Tas
 	profile := chosenExecutionProfile(task.ExecutionProfile, "", e.models[view.Provider])
 	session, err := adapter.Resume(startCtx, bridgeRuntime.ResumeRequest{
 		TaskID: view.ID, ExecutionID: view.ExecutionID, Model: profile.Model, ExecutionProfile: profile,
-		WritablePaths: e.writable[target.profileID],
+		WorkingDirectory: task.WorktreePath,
+		WritablePaths:    e.writable[target.profileID],
 		Session: bridgeRuntime.Session{
 			ID: providerSessionID.String(), TaskID: view.ID, ExternalID: task.ProviderSessionID,
 			ThreadID: task.ProviderThreadID, RuntimeID: view.RuntimeID,

@@ -87,7 +87,8 @@ func (a *RuntimeAdapter) Resume(ctx context.Context, request bridgeRuntime.Resum
 	}
 	session, events, err := a.native.Resume(ctx, provider.ResumeRequest{
 		TaskID: taskID, Session: native, Input: bridgeRuntime.ProviderInput(request.Input),
-		Model: request.Model, ExecutionProfile: request.ExecutionProfile, WritablePaths: request.WritablePaths,
+		WorkingDirectory: request.WorkingDirectory,
+		Model:            request.Model, ExecutionProfile: request.ExecutionProfile, WritablePaths: request.WritablePaths,
 	})
 	if err != nil {
 		return bridgeRuntime.Session{}, err

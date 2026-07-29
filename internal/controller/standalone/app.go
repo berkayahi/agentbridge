@@ -679,7 +679,8 @@ func (a *App) resume(ctx context.Context, value workmodel.Task, cancel context.C
 	}
 	session, stream, err := p.Resume(ctx, provider.ResumeRequest{
 		TaskID: taskID, Session: saved, Input: provider.Input{Text: input},
-		Model: profile.Model, ExecutionProfile: profile,
+		WorkingDirectory: value.WorktreePath,
+		Model:            profile.Model, ExecutionProfile: profile,
 	})
 	if err != nil {
 		a.endProviderStart(value.Provider)

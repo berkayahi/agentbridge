@@ -31,12 +31,12 @@ type StartRequest struct {
 	ExecutionProfile                             workmodel.ExecutionProfile
 }
 type ResumeRequest struct {
-	TaskID, ExecutionID string
-	Session             Session
-	Input               kernel.Input
-	Model               string
-	WritablePaths       []string
-	ExecutionProfile    workmodel.ExecutionProfile
+	TaskID, ExecutionID, WorkingDirectory string
+	Session                               Session
+	Input                                 kernel.Input
+	Model                                 string
+	WritablePaths                         []string
+	ExecutionProfile                      workmodel.ExecutionProfile
 }
 type ApprovalDecision struct {
 	RequestID, TaskID, ExecutionID, UserID string

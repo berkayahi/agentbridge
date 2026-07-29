@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/egressguard"
@@ -169,6 +170,7 @@ type Process struct {
 	stderrMu  sync.Mutex
 	stderr    string
 	egress    *egressguard.Guard
+	terminal  atomic.Bool
 }
 
 func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
@@ -271,12 +273,21 @@ func StartProcess(ctx context.Context, cfg ProcessConfig) (*Process, error) {
 		stderrWG.Wait()
 		if err != nil {
 			message := p.Stderr()
+			if strings.TrimSpace(message) == "" {
+				message = err.Error()
+			}
 			typeOfEvent := provider.EventError
 			lower := strings.ToLower(message)
 			if strings.Contains(lower, "login") || strings.Contains(lower, "oauth") || strings.Contains(lower, "authentication") {
 				typeOfEvent = provider.EventAuthRequired
 			}
 			p.emit(provider.Event{TaskID: cfg.TaskID, Type: typeOfEvent, Message: message})
+		} else if !p.terminal.Load() {
+			p.emit(provider.Event{
+				TaskID:  cfg.TaskID,
+				Type:    provider.EventError,
+				Message: "Claude exited before returning a terminal result",
+			})
 		}
 		close(p.events)
 		close(p.done)
@@ -375,6 +386,10 @@ func (p *Process) setSession(sessionID string) {
 }
 
 func (p *Process) emit(event provider.Event) {
+	switch event.Type {
+	case provider.EventCompleted, provider.EventAuthRequired, provider.EventError:
+		p.terminal.Store(true)
+	}
 	if p.egress != nil {
 		if guarded, err := p.egress.Check(egressguard.ClassStructuredMessage, []byte(event.Message)); guarded != nil {
 			event.Message = string(guarded)

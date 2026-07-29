@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/config"
@@ -87,12 +88,18 @@ type deviceExecutionHandler struct {
 	executor  *localRuntimeExecutor
 	verifier  localVerifier
 	committer localCommitter
+
+	recoveryMu sync.Mutex
+	recovering map[string]struct{}
 }
 
 const maxDeviceObservationEvents = 200
 
 func newDeviceExecutionHandler(data *sqlite.RuntimeStore, executor *localRuntimeExecutor, verifier localVerifier, committer localCommitter) *deviceExecutionHandler {
-	return &deviceExecutionHandler{store: data, executor: executor, verifier: verifier, committer: committer}
+	return &deviceExecutionHandler{
+		store: data, executor: executor, verifier: verifier, committer: committer,
+		recovering: make(map[string]struct{}),
+	}
 }
 
 func (h *deviceExecutionHandler) Handle(ctx context.Context, command localcontrol.DeviceCommand) (localcontrol.DeviceReply, error) {
@@ -102,12 +109,15 @@ func (h *deviceExecutionHandler) Handle(ctx context.Context, command localcontro
 	if err := h.ensureShadowTask(ctx, command); err != nil {
 		return localcontrol.DeviceReply{}, err
 	}
-	if command.Operation == "observe" {
-		return h.observe(ctx, command)
-	}
 	view, err := h.view(ctx, command)
 	if err != nil {
 		return localcontrol.DeviceReply{}, err
+	}
+	if command.Operation == "observe" {
+		if err := h.recoverObservedSession(ctx, view); err != nil {
+			return localcontrol.DeviceReply{}, err
+		}
+		return h.observe(ctx, command)
 	}
 	switch command.Operation {
 	case "start":
@@ -169,6 +179,55 @@ func (h *deviceExecutionHandler) Handle(ctx context.Context, command localcontro
 	default:
 		return localcontrol.DeviceReply{}, localcontrol.ErrInvalidRequest
 	}
+}
+
+// recoverObservedSession reconnects only work the controller is still actively
+// observing. A device-agent restart kills the native provider process but
+// preserves its provider session and worktree; without this check the
+// controller keeps reporting an in-flight bee that no process owns. Stale,
+// fenced tasks are not resumed because their controller no longer observes
+// them, and a recorded terminal provider event prevents a finished turn from
+// being reopened.
+func (h *deviceExecutionHandler) recoverObservedSession(ctx context.Context, view localcontrol.TaskView) error {
+	if h == nil || h.store == nil || h.executor == nil || h.executor.hasSession(view.ID) {
+		return nil
+	}
+	task, err := h.store.Task(ctx, view.ID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(task.ProviderSessionID) == "" || strings.TrimSpace(task.WorktreePath) == "" {
+		return nil
+	}
+	events, err := h.store.Events(ctx, view.ID)
+	if err != nil {
+		return err
+	}
+	for _, event := range events {
+		switch string(event.Type) {
+		case "provider_completed", "provider_error", "provider_auth_required":
+			return nil
+		}
+	}
+
+	h.recoveryMu.Lock()
+	if _, active := h.recovering[view.ID]; active || h.executor.hasSession(view.ID) {
+		h.recoveryMu.Unlock()
+		return nil
+	}
+	h.recovering[view.ID] = struct{}{}
+	h.recoveryMu.Unlock()
+	defer func() {
+		h.recoveryMu.Lock()
+		delete(h.recovering, view.ID)
+		h.recoveryMu.Unlock()
+	}()
+
+	return h.executor.Resume(ctx, view, localcontrol.ResumeRequest{
+		TaskID: view.ID, Revision: task.Revision,
+		Input:          "Continue the interrupted task from the durable session.",
+		IdempotencyKey: "device-observe-recovery-" + view.ExecutionID,
+	})
 }
 
 func (h *deviceExecutionHandler) observe(ctx context.Context, command localcontrol.DeviceCommand) (localcontrol.DeviceReply, error) {

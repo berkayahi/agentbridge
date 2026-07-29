@@ -122,6 +122,35 @@ func TestProcessHelperInitializesSessionAndStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestProcessReportsCleanExitWithoutTerminalResult(t *testing.T) {
+	if os.Getenv("GO_WANT_CLAUDE_CLEAN_EXIT") == "1" {
+		fmt.Fprintln(os.Stdout, `{"type":"system","subtype":"init","session_id":"clean-exit-session"}`)
+		time.Sleep(100 * time.Millisecond)
+		os.Exit(0)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	p, err := StartProcess(ctx, ProcessConfig{
+		Executable:      os.Args[0],
+		testArgs:        []string{"-test.run=TestProcessReportsCleanExitWithoutTerminalResult"},
+		Environment:     append(os.Environ(), "GO_WANT_CLAUDE_CLEAN_EXIT=1"),
+		ClaudeConfigDir: t.TempDir(), MCPConfigPath: "/tmp/test-mcp.json", Model: "opus",
+		ControlSocket: "/run/agentbridge/control.sock", Capability: []byte("task-capability"),
+		InitialInput: provider.Input{Text: "hello"}, TaskID: provider.MustID("task-1"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-p.Events():
+		if event.Type != provider.EventError || !strings.Contains(event.Message, "terminal result") {
+			t.Fatalf("event = %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clean provider exit was not reported")
+	}
+}
+
 func TestGeneratedMCPConfigIsOwnerOnlyAndContainsNoCapability(t *testing.T) {
 	path, err := WriteMCPConfig(t.TempDir(), "/usr/local/bin/agentbridge")
 	if err != nil {

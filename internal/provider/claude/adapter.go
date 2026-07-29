@@ -67,7 +67,7 @@ func (a *Adapter) Name() workmodel.Provider { return workmodel.ClaudeSubscriptio
 
 func (a *Adapter) Start(ctx context.Context, request provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	profile := claudeExecutionProfile(request.ExecutionProfile, request.Model)
-	return a.start(ctx, request.TaskID, request.Input, "", profile)
+	return a.start(ctx, request.TaskID, request.Input, "", request.WorkingDirectory, profile)
 }
 
 func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
@@ -76,7 +76,7 @@ func (a *Adapter) Resume(ctx context.Context, request provider.ResumeRequest) (p
 	if resume == "" {
 		resume = request.Session.ID.String()
 	}
-	return a.start(ctx, request.TaskID, request.Input, resume, profile)
+	return a.start(ctx, request.TaskID, request.Input, resume, request.WorkingDirectory, profile)
 }
 
 func claudeExecutionProfile(profile workmodel.ExecutionProfile, legacyModel string) workmodel.ExecutionProfile {
@@ -89,9 +89,19 @@ func claudeExecutionProfile(profile workmodel.ExecutionProfile, legacyModel stri
 	return profile
 }
 
-func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume string, profile workmodel.ExecutionProfile) (provider.Session, <-chan provider.Event, error) {
+func (a *Adapter) start(ctx context.Context, taskID provider.ID, input provider.Input, resume, workingDirectory string, profile workmodel.ExecutionProfile) (provider.Session, <-chan provider.Event, error) {
+	if a.auth != nil {
+		status, err := a.auth(ctx)
+		if err != nil {
+			return provider.Session{}, nil, fmt.Errorf("check Claude authentication: %w", err)
+		}
+		if !status.Authenticated {
+			return provider.Session{}, nil, errors.New("Claude authentication required")
+		}
+	}
 	cfg := a.process
 	cfg.TaskID, cfg.InitialInput, cfg.ResumeSession = taskID, input, resume
+	cfg.Dir = workingDirectory
 	// An empty model means the operator chose nothing, which is the configured
 	// default. A resume passes the model the session was dispatched with, so a
 	// restart cannot quietly move a session onto a different model.

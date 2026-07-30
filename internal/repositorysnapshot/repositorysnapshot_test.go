@@ -2,8 +2,10 @@ package repositorysnapshot_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -266,6 +268,105 @@ func TestGitInspectorFailsClosedWhenTreeOutputExceedsBound(t *testing.T) {
 	}
 }
 
+func TestGitInspectorIgnoresReplacementRefs(t *testing.T) {
+	ctx := context.Background()
+	checkout := filepath.Join(t.TempDir(), "repository")
+	if err := os.MkdirAll(checkout, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git := bridgegit.Runner{MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput}
+	runGit(t, git, checkout, "init", "-b", "main")
+	runGit(t, git, checkout, "config", "user.name", "Snapshot Test")
+	runGit(t, git, checkout, "config", "user.email", "snapshot@example.invalid")
+
+	writeFile(t, checkout, "go.mod", "module example.invalid/original\n\ngo 1.26\n")
+	runGit(t, git, checkout, "add", "go.mod")
+	runGit(t, git, checkout, "commit", "-m", "test: original tree")
+	originalCommit := runGit(t, git, checkout, "rev-parse", "HEAD")
+
+	if err := os.Remove(filepath.Join(checkout, "go.mod")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, checkout, "package.json", `{"scripts":{"test":"echo replacement"}}`)
+	runGit(t, git, checkout, "add", "-A")
+	runGit(t, git, checkout, "commit", "-m", "test: replacement tree")
+	replacementCommit := runGit(t, git, checkout, "rev-parse", "HEAD")
+	runGit(t, git, checkout, "replace", originalCommit, replacementCommit)
+
+	apparentTree := runGit(t, git, checkout, "ls-tree", "-r", "--name-only", originalCommit)
+	if !strings.Contains(apparentTree, "package.json") || strings.Contains(apparentTree, "go.mod") {
+		t.Fatalf("replacement ref did not falsify the unguarded control tree: %q", apparentTree)
+	}
+
+	objectsBefore := objectStoreState(t, filepath.Join(checkout, ".git", "objects"))
+	response, err := (repositorysnapshot.GitInspector{Git: git}).Inspect(
+		ctx,
+		repositorysnapshot.ConfiguredRepository{
+			ProfileID: "fixture", CheckoutPath: checkout, AllowedRef: "refs/heads/main",
+		},
+		repositorysnapshot.Request{RequestedRef: originalCommit, ScopedRoot: "."},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ExactCommitSHA != originalCommit {
+		t.Fatalf("exact commit = %q, want unreplaced object %q", response.ExactCommitSHA, originalCommit)
+	}
+	if !hasEvidencePath(response, "go.mod") {
+		t.Fatalf("unreplaced tree evidence is missing: %#v", response.Observations)
+	}
+	if hasEvidencePath(response, "package.json") {
+		t.Fatalf("replacement tree falsified snapshot evidence: %#v", response.Observations)
+	}
+	if objectsAfter := objectStoreState(t, filepath.Join(checkout, ".git", "objects")); objectsAfter != objectsBefore {
+		t.Fatal("replacement-safe inspection mutated the Git object store")
+	}
+}
+
+func TestGitInspectorDoesNotLazyFetchMissingPromisorObjects(t *testing.T) {
+	git := bridgegit.Runner{MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput}
+	root, remote, commit, blob := newPromisorFixture(t, git)
+	guardedClone := clonePromisorRepository(t, git, root, remote, "guarded")
+
+	if _, err := git.RunWithEnvironment(
+		context.Background(), guardedClone,
+		[]string{"GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1"},
+		"cat-file", "-e", blob,
+	); err == nil {
+		t.Skip("Git clone did not leave the filtered blob missing")
+	}
+	objectsBefore := objectStoreState(t, filepath.Join(guardedClone, ".git", "objects"))
+	response, err := (repositorysnapshot.GitInspector{Git: git}).Inspect(
+		context.Background(),
+		repositorysnapshot.ConfiguredRepository{
+			ProfileID: "fixture", CheckoutPath: guardedClone, AllowedRef: "refs/heads/main",
+		},
+		repositorysnapshot.Request{RequestedRef: commit, ScopedRoot: "."},
+	)
+	if err == nil {
+		t.Fatalf("snapshot unexpectedly succeeded with a missing promisor blob: %#v", response)
+	}
+	if objectsAfter := objectStoreState(t, filepath.Join(guardedClone, ".git", "objects")); objectsAfter != objectsBefore {
+		t.Fatal("snapshot lazily fetched into the Git object store")
+	}
+
+	controlClone := clonePromisorRepository(t, git, root, remote, "unguarded-control")
+	if _, err := git.RunWithEnvironment(
+		context.Background(), controlClone,
+		[]string{"GIT_NO_LAZY_FETCH=1", "GIT_NO_REPLACE_OBJECTS=1"},
+		"cat-file", "-e", blob,
+	); err == nil {
+		t.Skip("Git control clone did not leave the filtered blob missing")
+	}
+	controlBefore := objectStoreState(t, filepath.Join(controlClone, ".git", "objects"))
+	if _, err := git.Run(context.Background(), controlClone, "cat-file", "-s", blob); err != nil {
+		t.Fatalf("unguarded control read did not lazy-fetch the blob: %v", err)
+	}
+	if controlAfter := objectStoreState(t, filepath.Join(controlClone, ".git", "objects")); controlAfter == controlBefore {
+		t.Fatal("unguarded control read did not demonstrate object-store mutation")
+	}
+}
+
 type fixedCatalog struct {
 	profile repositorysnapshot.ConfiguredRepository
 }
@@ -303,6 +404,15 @@ func (g *recordingGit) Run(ctx context.Context, dir string, args ...string) (bri
 	return g.runner.Run(ctx, dir, args...)
 }
 
+func (g *recordingGit) RunWithEnvironment(ctx context.Context, dir string, environment []string, args ...string) (bridgegit.RunResult, error) {
+	g.mu.Lock()
+	if len(args) > 0 {
+		g.commands = append(g.commands, args[0])
+	}
+	g.mu.Unlock()
+	return g.runner.RunWithEnvironment(ctx, dir, environment, args...)
+}
+
 func (g *recordingGit) reset() {
 	g.mu.Lock()
 	g.commands = nil
@@ -319,7 +429,7 @@ type scriptedGit struct {
 	results []bridgegit.RunResult
 }
 
-func (g *scriptedGit) Run(context.Context, string, ...string) (bridgegit.RunResult, error) {
+func (g *scriptedGit) RunWithEnvironment(context.Context, string, []string, ...string) (bridgegit.RunResult, error) {
 	if len(g.results) == 0 {
 		return bridgegit.RunResult{}, errors.New("unexpected Git command")
 	}
@@ -340,7 +450,9 @@ func newService(t *testing.T, data *sqlite.RuntimeStore, catalog repositorysnaps
 	return service
 }
 
-func runGit(t *testing.T, git repositorysnapshot.GitRunner, dir string, args ...string) string {
+func runGit(t *testing.T, git interface {
+	Run(context.Context, string, ...string) (bridgegit.RunResult, error)
+}, dir string, args ...string) string {
 	t.Helper()
 	result, err := git.Run(context.Background(), dir, args...)
 	if err != nil {
@@ -378,6 +490,78 @@ func assertLimitation(t *testing.T, response repositorysnapshot.Response, code, 
 		}
 	}
 	t.Fatalf("missing limitation %q/%q in %#v", code, evidencePath, response.Limitations)
+}
+
+func hasEvidencePath(response repositorysnapshot.Response, evidencePath string) bool {
+	for _, observation := range response.Observations {
+		if observation.EvidencePath == evidencePath {
+			return true
+		}
+	}
+	return false
+}
+
+func newPromisorFixture(t *testing.T, git bridgegit.Runner) (root, remote, commit, blob string) {
+	t.Helper()
+	root = t.TempDir()
+	source := filepath.Join(root, "source")
+	remote = filepath.Join(root, "remote.git")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, git, root, "init", "--bare", remote)
+	runGit(t, git, remote, "config", "uploadpack.allowFilter", "true")
+	runGit(t, git, source, "init", "-b", "main")
+	runGit(t, git, source, "config", "user.name", "Snapshot Test")
+	runGit(t, git, source, "config", "user.email", "snapshot@example.invalid")
+	writeFile(t, source, "package.json", `{"scripts":{"test":"echo promisor"}}`)
+	runGit(t, git, source, "add", "package.json")
+	runGit(t, git, source, "commit", "-m", "test: promisor fixture")
+	commit = runGit(t, git, source, "rev-parse", "HEAD")
+	blob = runGit(t, git, source, "rev-parse", "HEAD:package.json")
+	runGit(t, git, source, "remote", "add", "origin", remote)
+	runGit(t, git, source, "push", "origin", "HEAD:refs/heads/main")
+	return root, remote, commit, blob
+}
+
+func clonePromisorRepository(t *testing.T, git bridgegit.Runner, root, remote, name string) string {
+	t.Helper()
+	clone := filepath.Join(root, name)
+	runGit(t, git, root, "-c", "protocol.file.allow=always", "clone",
+		"--filter=blob:none", "--no-checkout", "--no-local", remote, clone)
+	promisor := runGit(t, git, clone, "config", "--get", "remote.origin.promisor")
+	if promisor != "true" {
+		t.Skip("installed Git does not support a local partial/promisor clone")
+	}
+	return clone
+}
+
+func objectStoreState(t *testing.T, root string) string {
+	t.Helper()
+	var state strings.Builder
+	err := filepath.WalkDir(root, func(file string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		contents, err := os.ReadFile(file)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, file)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(contents)
+		_, _ = fmt.Fprintf(&state, "%s %d %x\n", filepath.ToSlash(relative), len(contents), digest)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state.String()
 }
 
 func mustJSON(t *testing.T, value any) []byte {

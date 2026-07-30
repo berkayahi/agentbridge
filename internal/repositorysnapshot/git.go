@@ -16,11 +16,16 @@ import (
 var treeLine = regexp.MustCompile(`^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})\t(.*)$`)
 
 type GitRunner interface {
-	Run(context.Context, string, ...string) (bridgegit.RunResult, error)
+	RunWithEnvironment(context.Context, string, []string, ...string) (bridgegit.RunResult, error)
 }
 
 type GitInspector struct {
 	Git GitRunner
+}
+
+var snapshotGitEnvironment = []string{
+	"GIT_NO_LAZY_FETCH=1",
+	"GIT_NO_REPLACE_OBJECTS=1",
 }
 
 type treeEntry struct {
@@ -34,7 +39,7 @@ func (g GitInspector) Inspect(ctx context.Context, profile ConfiguredRepository,
 	if g.Git == nil {
 		return Response{}, ErrInvalidRequest
 	}
-	resolved, err := g.Git.Run(ctx, profile.CheckoutPath, "rev-parse", "--verify", request.RequestedRef+"^{commit}")
+	resolved, err := g.run(ctx, profile.CheckoutPath, "rev-parse", "--verify", request.RequestedRef+"^{commit}")
 	if err != nil {
 		return Response{}, fmt.Errorf("%w: resolve requested commit", ErrInvalidRequest)
 	}
@@ -67,13 +72,13 @@ func (g GitInspector) Inspect(ctx context.Context, profile ConfiguredRepository,
 
 func (g GitInspector) validateScope(ctx context.Context, checkout, commit, scope string) error {
 	if scope == "." {
-		result, err := g.Git.Run(ctx, checkout, "cat-file", "-t", commit+"^{tree}")
+		result, err := g.run(ctx, checkout, "cat-file", "-t", commit+"^{tree}")
 		if err != nil || strings.TrimSpace(result.Stdout) != "tree" {
 			return ErrScopeNotFound
 		}
 		return nil
 	}
-	result, err := g.Git.Run(ctx, checkout, "cat-file", "-t", commit+":"+scope)
+	result, err := g.run(ctx, checkout, "cat-file", "-t", commit+":"+scope)
 	if err != nil || strings.TrimSpace(result.Stdout) != "tree" {
 		return ErrScopeNotFound
 	}
@@ -85,7 +90,7 @@ func (g GitInspector) listTree(ctx context.Context, checkout, commit, scope stri
 	if scope != "." {
 		args = append(args, "--", ":(literal)"+scope)
 	}
-	result, err := g.Git.Run(ctx, checkout, args...)
+	result, err := g.run(ctx, checkout, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list committed repository tree: %w", err)
 	}
@@ -122,7 +127,7 @@ func (g GitInspector) inspectSelectedBlobs(ctx context.Context, checkout string,
 			addLimitation(response, Limitation{Code: "symlink_not_read", EvidencePath: entry.path})
 			continue
 		}
-		sizeResult, err := g.Git.Run(ctx, checkout, "cat-file", "-s", entry.objectID)
+		sizeResult, err := g.run(ctx, checkout, "cat-file", "-s", entry.objectID)
 		if err != nil {
 			return fmt.Errorf("read selected blob size: %w", err)
 		}
@@ -138,7 +143,7 @@ func (g GitInspector) inspectSelectedBlobs(ctx context.Context, checkout string,
 			addLimitation(response, Limitation{Code: "total_blob_byte_limit"})
 			break
 		}
-		blob, err := g.Git.Run(ctx, checkout, "cat-file", "blob", entry.objectID)
+		blob, err := g.run(ctx, checkout, "cat-file", "blob", entry.objectID)
 		if err != nil {
 			return fmt.Errorf("read selected committed blob: %w", err)
 		}
@@ -150,6 +155,10 @@ func (g GitInspector) inspectSelectedBlobs(ctx context.Context, checkout string,
 		detectBlob(entry.path, []byte(blob.Stdout), response)
 	}
 	return nil
+}
+
+func (g GitInspector) run(ctx context.Context, checkout string, args ...string) (bridgegit.RunResult, error) {
+	return g.Git.RunWithEnvironment(ctx, checkout, snapshotGitEnvironment, args...)
 }
 
 func normalizeScope(value string) (string, error) {

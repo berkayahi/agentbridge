@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/provider"
+	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
@@ -233,6 +236,36 @@ func TestRepositoryProfilesReportTheControlCheckout(t *testing.T) {
 	}
 	if got.Remote != "origin" || got.BaseRef != "refs/heads/hive/landing" {
 		t.Fatalf("existing fields must be unchanged, got %+v", got)
+	}
+}
+
+func TestRepositoryCatalogResolvesSnapshotsThroughActiveWorkspaceProfiles(t *testing.T) {
+	catalog := repositoryCatalog{workspace: &workspaceAdapter{
+		profiles: map[string]bridgegit.RepositoryProfile{
+			"platform": {
+				ControlCheckout: "/Users/keeper/kovan-hive/checkouts/platform",
+				Remote:          "origin",
+				BaseRef:         "refs/heads/hive/landing",
+				WorktreeRoot:    "/Users/keeper/kovan-hive/worktrees/platform",
+			},
+		},
+	}}
+	resolved, err := catalog.ResolveRepositoryProfile(context.Background(), "platform")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ProfileID != "platform" || resolved.CheckoutPath == "" || resolved.AllowedRef != "refs/heads/hive/landing" {
+		t.Fatalf("resolved profile = %#v", resolved)
+	}
+	encoded, err := json.Marshal(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "checkout") || strings.Contains(string(encoded), "/Users/") {
+		t.Fatalf("internal resolved profile is not JSON path-safe: %s", encoded)
+	}
+	if _, err := catalog.ResolveRepositoryProfile(context.Background(), "missing"); !errors.Is(err, repositorysnapshot.ErrNotConfigured) {
+		t.Fatalf("missing profile error = %v", err)
 	}
 }
 

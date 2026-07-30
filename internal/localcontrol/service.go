@@ -40,6 +40,7 @@ type Service struct {
 	verifier   Verifier
 	committer  Committer
 	integrator RepositoryIntegrator
+	snapshots  RepositorySnapshotAuthority
 	clock      func() time.Time
 	newID      func(string) string
 
@@ -173,8 +174,8 @@ func New(config Config) (*Service, error) {
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
-		integrator: config.Integrator,
-		clock:      config.Clock, newID: config.NewID,
+		integrator: config.Integrator, snapshots: config.RepositorySnapshots,
+		clock: config.Clock, newID: config.NewID,
 	}, nil
 }
 

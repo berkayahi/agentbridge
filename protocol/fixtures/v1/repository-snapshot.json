@@ -1,0 +1,133 @@
+{
+  "contract_version": "repository-snapshot-v1",
+  "operation_id": "repository-snapshot-fixture-1",
+  "repository": {
+    "profile_id": "fixture-repository"
+  },
+  "exact_commit_sha": "0123456789abcdef0123456789abcdef01234567",
+  "ref": {
+    "requested": "refs/heads/main",
+    "kind": "configured_ref",
+    "allowed_ref": "refs/heads/main"
+  },
+  "scoped_root": ".",
+  "analyzer_version": "fixture-analyzer-v1",
+  "detectors": [
+    {
+      "id": "api-contract",
+      "version": "1"
+    },
+    {
+      "id": "ci-workflow",
+      "version": "1"
+    },
+    {
+      "id": "command-candidate",
+      "version": "1"
+    },
+    {
+      "id": "configuration-file",
+      "version": "1"
+    },
+    {
+      "id": "docker",
+      "version": "1"
+    },
+    {
+      "id": "environment-name",
+      "version": "1"
+    },
+    {
+      "id": "lockfile",
+      "version": "1"
+    },
+    {
+      "id": "manifest",
+      "version": "1"
+    },
+    {
+      "id": "migration-directory",
+      "version": "1"
+    },
+    {
+      "id": "workspace",
+      "version": "1"
+    }
+  ],
+  "observations": [
+    {
+      "detector_id": "api-contract",
+      "detector_version": "1",
+      "evidence_path": "openapi.yaml",
+      "observation": "api-contract"
+    },
+    {
+      "detector_id": "ci-workflow",
+      "detector_version": "1",
+      "evidence_path": ".github/workflows/test.yml",
+      "observation": "workflow-file"
+    },
+    {
+      "detector_id": "command-candidate",
+      "detector_version": "1",
+      "evidence_path": "go.mod",
+      "observation": "go test ./..."
+    },
+    {
+      "detector_id": "configuration-file",
+      "detector_version": "1",
+      "evidence_path": ".env.example",
+      "observation": "configuration-file"
+    },
+    {
+      "detector_id": "docker",
+      "detector_version": "1",
+      "evidence_path": "Dockerfile",
+      "observation": "dockerfile"
+    },
+    {
+      "detector_id": "environment-name",
+      "detector_version": "1",
+      "evidence_path": ".env.example",
+      "observation": "DATABASE_URL"
+    },
+    {
+      "detector_id": "lockfile",
+      "detector_version": "1",
+      "evidence_path": "go.sum",
+      "observation": "lockfile"
+    },
+    {
+      "detector_id": "manifest",
+      "detector_version": "1",
+      "evidence_path": "go.mod",
+      "observation": "go"
+    },
+    {
+      "detector_id": "migration-directory",
+      "detector_version": "1",
+      "evidence_path": "db/migrations",
+      "observation": "migration-directory"
+    },
+    {
+      "detector_id": "workspace",
+      "detector_version": "1",
+      "evidence_path": "go.work",
+      "observation": "workspace-definition"
+    }
+  ],
+  "limitations": [],
+  "bounds": {
+    "tree_entries": 10,
+    "selected_blobs": 2,
+    "selected_blob_bytes": 128,
+    "max_tree_entries": 20000,
+    "max_selected_blobs": 64,
+    "max_blob_bytes": 131072,
+    "max_total_blob_bytes": 1048576,
+    "max_observations": 1024,
+    "max_limitations": 128,
+    "max_tree_output_bytes": 2097152
+  },
+  "result_digest": "sha256:e347a7651a34a8625b6b497ceb9736244962a3a43a5fa4ef58a469ece99f5e90"
+}

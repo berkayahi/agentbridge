@@ -32,6 +32,32 @@ func TestMigrationLedgerRecordsV2SchemaVerification(t *testing.T) {
 	}
 }
 
+func TestMigrationLedgerRecordsRepositorySnapshotMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v2.db")
+	store, err := OpenV2(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer check.Close()
+	var name, checksum, fingerprint string
+	if err := check.QueryRow(
+		"SELECT name, checksum, structural_fingerprint FROM migration_ledger WHERE version = ?",
+		repositorySnapshotVersion,
+	).Scan(&name, &checksum, &fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	if name != repositorySnapshotName || checksum == "" || fingerprint == "" {
+		t.Fatalf("snapshot migration ledger = name=%q checksum=%q fingerprint=%q", name, checksum, fingerprint)
+	}
+}
+
 func TestOpenV2RejectsTamperedMigrationLedger(t *testing.T) {
 	tests := []struct {
 		name  string

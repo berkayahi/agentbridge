@@ -22,6 +22,17 @@ type Runner struct {
 }
 
 func (r Runner) Run(ctx context.Context, dir string, args ...string) (RunResult, error) {
+	return r.run(ctx, dir, gitEnvironment(r.Environment), args...)
+}
+
+// RunWithEnvironment runs Git with additional, call-scoped environment
+// settings. The settings replace matching entries in the runner's normal safe
+// environment instead of bypassing that environment.
+func (r Runner) RunWithEnvironment(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
+	return r.run(ctx, dir, mergeEnvironment(gitEnvironment(r.Environment), environment), args...)
+}
+
+func (r Runner) run(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RunResult{}, err
 	}
@@ -35,7 +46,7 @@ func (r Runner) Run(ctx context.Context, dir string, args ...string) (RunResult,
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = dir
-	cmd.Env = gitEnvironment(r.Environment)
+	cmd.Env = environment
 	var stdout, stderr boundedBuffer
 	stdout.limit, stderr.limit = limit, limit
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -81,6 +92,25 @@ func gitEnvironment(extra []string) []string {
 		}
 	}
 	return env
+}
+
+func mergeEnvironment(base, overrides []string) []string {
+	result := append([]string(nil), base...)
+	for _, override := range overrides {
+		key, _, ok := strings.Cut(override, "=")
+		if !ok || key == "" {
+			continue
+		}
+		filtered := result[:0]
+		for _, value := range result {
+			existingKey, _, existingOK := strings.Cut(value, "=")
+			if !existingOK || existingKey != key {
+				filtered = append(filtered, value)
+			}
+		}
+		result = append(filtered, override)
+	}
+	return result
 }
 
 type boundedBuffer struct {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
+	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
@@ -19,7 +20,7 @@ import (
 // APIVersion is the local control contract version. It increases when a client
 // would need to change: a host compares it before trusting this API, so an
 // engine that is too old fails a version gate instead of failing mid-flight.
-const APIVersion = 1
+const APIVersion = 2
 
 var (
 	ErrInvalidRequest               = errors.New("localcontrol: invalid request")
@@ -57,6 +58,13 @@ type RepositoryProfile struct {
 // it to resolve registrations and the executor uses it to prepare worktrees.
 type RepositoryCatalog interface {
 	RepositoryProfiles(ctx context.Context) ([]RepositoryProfile, error)
+}
+
+type RepositorySnapshotRequest = repositorysnapshot.Request
+type RepositorySnapshotResponse = repositorysnapshot.Response
+
+type RepositorySnapshotAuthority interface {
+	Snapshot(context.Context, repositorysnapshot.Request) (repositorysnapshot.Response, error)
 }
 
 // ProviderInfo describes a runtime this host can actually dispatch to. Available
@@ -629,6 +637,7 @@ type Config struct {
 	Identity            deviceidentity.Key
 	Runtimes            RuntimeCatalog
 	Repositories        RepositoryCatalog
+	RepositorySnapshots RepositorySnapshotAuthority
 	Providers           ProviderCatalog
 	Controller          CommandController
 	Executor            Executor

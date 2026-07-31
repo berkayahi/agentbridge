@@ -35,6 +35,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/claude"
 	"github.com/berkayahi/agentbridge/internal/provider/codex"
+	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
@@ -498,10 +499,16 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, composeWritablePaths(cfg), configuredApprovalUser(cfg))
 	localExecutor.approvals = approvalBroker
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
+	repositorySnapshots, err := composeRepositorySnapshots(data, workspace)
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots,
+		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -749,10 +756,15 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	localExecutor := newLocalRuntimeExecutor(data, runtimes, workspace, models, composeWritablePaths(cfg), configuredApprovalUser(cfg))
 	localExecutor.approvals = approvalBroker
 	localOperations := localRepositoryOperations{store: data, workspace: workspace, delivery: delivery}
+	repositorySnapshots, err := composeRepositorySnapshots(data, workspace)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots,
+		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -1209,6 +1221,19 @@ func composeProfiles(cfg config.Config, paths runtimePaths) map[string]bridgegit
 		result[name] = bridgegit.RepositoryProfile{ControlCheckout: value.CheckoutPath, Remote: value.Remote, BaseRef: value.BaseRef, WorktreeRoot: filepath.Join(paths.worktrees, name)}
 	}
 	return result
+}
+
+func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceAdapter) (*repositorysnapshot.Service, error) {
+	catalog := repositoryCatalog{workspace: workspace}
+	return repositorysnapshot.New(repositorysnapshot.Config{
+		Store: data, Catalog: catalog,
+		Inspector: repositorysnapshot.GitInspector{Git: bridgegit.Runner{
+			MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput,
+			Redactor: security.NewRedactor(security.Config{
+				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
+			}),
+		}},
+	})
 }
 
 // composeWritablePaths reports the extra roots each repository's sessions may

@@ -26,6 +26,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/managed"
 	"github.com/berkayahi/agentbridge/internal/provider"
 	"github.com/berkayahi/agentbridge/internal/provider/claude"
+	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	bridgeRuntime "github.com/berkayahi/agentbridge/internal/runtime"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
@@ -517,6 +518,19 @@ func (c repositoryCatalog) RepositoryProfiles(context.Context) ([]localcontrol.R
 		})
 	}
 	return result, nil
+}
+
+func (c repositoryCatalog) ResolveRepositoryProfile(_ context.Context, profileID string) (repositorysnapshot.ConfiguredRepository, error) {
+	if c.workspace == nil {
+		return repositorysnapshot.ConfiguredRepository{}, repositorysnapshot.ErrNotConfigured
+	}
+	profile, ok := c.workspace.profiles[profileID]
+	if !ok || profile.Validate() != nil {
+		return repositorysnapshot.ConfiguredRepository{}, repositorysnapshot.ErrNotConfigured
+	}
+	return repositorysnapshot.ConfiguredRepository{
+		ProfileID: profileID, CheckoutPath: profile.ControlCheckout, AllowedRef: profile.BaseRef,
+	}, nil
 }
 
 // providerCatalog reports configured runtimes and executable availability. A

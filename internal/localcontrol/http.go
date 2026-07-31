@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
@@ -57,6 +58,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/usage", a.usage)
 	mux.HandleFunc("GET /v1/analytics/usage", a.usageAnalytics)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
+	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -83,6 +85,15 @@ func (a *API) Handler() http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+func (a *API) createRepositorySnapshot(w http.ResponseWriter, r *http.Request) {
+	var request RepositorySnapshotRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	response, err := a.service.CreateRepositorySnapshot(r.Context(), request)
+	writeResult(w, http.StatusCreated, response, err)
 }
 
 func (a *API) integrateRepository(w http.ResponseWriter, r *http.Request) {
@@ -500,8 +511,15 @@ func writeResult(w http.ResponseWriter, successStatus int, value any, err error)
 func writeServiceError(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, "request_failed"
 	switch {
-	case errors.Is(err, ErrInvalidRequest):
+	case errors.Is(err, ErrInvalidRequest), errors.Is(err, repositorysnapshot.ErrInvalidRequest),
+		errors.Is(err, repositorysnapshot.ErrRefNotAllowed), errors.Is(err, repositorysnapshot.ErrScopeNotFound):
 		status, code = http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, repositorysnapshot.ErrNotConfigured):
+		status, code = http.StatusNotFound, "repository_not_configured"
+	case errors.Is(err, repositorysnapshot.ErrBoundsExceeded):
+		status, code = http.StatusUnprocessableEntity, "snapshot_bounds_exceeded"
+	case errors.Is(err, repositorysnapshot.ErrConflict):
+		status, code = http.StatusConflict, "idempotency_conflict"
 	case errors.Is(err, ErrUnknownProvider):
 		status, code = http.StatusBadRequest, "unknown_provider"
 	case errors.Is(err, ErrRepositoryNotConfigured):

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql schema/019_task_model.sql schema/020_task_execution_profile.sql
+//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql schema/019_task_model.sql schema/020_task_execution_profile.sql schema/021_repository_snapshots.sql
 var localControlSchemaFS embed.FS
 
 const (
@@ -34,6 +34,8 @@ const (
 	taskModelName               = "019_task_model.sql"
 	taskExecutionProfileVersion = 20
 	taskExecutionProfileName    = "020_task_execution_profile.sql"
+	repositorySnapshotVersion   = 21
+	repositorySnapshotName      = "021_repository_snapshots.sql"
 )
 
 type v2Migration struct {
@@ -53,6 +55,7 @@ func v2MigrationDefinitions() []v2Migration {
 		{version: controllerOwnerVersion, name: controllerOwnerName},
 		{version: taskModelVersion, name: taskModelName},
 		{version: taskExecutionProfileVersion, name: taskExecutionProfileName},
+		{version: repositorySnapshotVersion, name: repositorySnapshotName},
 	}
 }
 
@@ -194,6 +197,22 @@ func taskExecutionProfileSchema() (string, error) {
 
 func taskExecutionProfileChecksum() (string, error) {
 	contents, err := taskExecutionProfileSchema()
+	if err != nil {
+		return "", err
+	}
+	return checksum(contents), nil
+}
+
+func repositorySnapshotSchema() (string, error) {
+	contents, err := localControlSchemaFS.ReadFile("schema/021_repository_snapshots.sql")
+	if err != nil {
+		return "", fmt.Errorf("read repository snapshot schema: %w", err)
+	}
+	return string(contents), nil
+}
+
+func repositorySnapshotChecksum() (string, error) {
+	contents, err := repositorySnapshotSchema()
 	if err != nil {
 		return "", err
 	}

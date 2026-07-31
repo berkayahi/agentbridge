@@ -102,6 +102,10 @@ func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQuery
 	if err != nil {
 		return err
 	}
+	repositorySnapshotSchemaChecksum, err := repositorySnapshotChecksum()
+	if err != nil {
+		return err
+	}
 	expected := map[int]struct {
 		name     string
 		checksum string
@@ -117,6 +121,7 @@ func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQuery
 		controllerOwnerVersion:      {name: controllerOwnerName, checksum: controllerOwnerSchemaChecksum},
 		taskModelVersion:            {name: taskModelName, checksum: taskModelSchemaChecksum},
 		taskExecutionProfileVersion: {name: taskExecutionProfileName, checksum: taskExecutionProfileSchemaChecksum},
+		repositorySnapshotVersion:   {name: repositorySnapshotName, checksum: repositorySnapshotSchemaChecksum},
 	}
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum, structural_fingerprint, applied_at FROM migration_ledger ORDER BY version`)
 	if err != nil {

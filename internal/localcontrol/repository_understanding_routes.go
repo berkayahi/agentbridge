@@ -54,7 +54,7 @@ type UnderstandingRoleClaim struct {
 	Summary          string                            `json:"summary"`
 	Evidence         []UnderstandingEvidenceReference  `json:"evidence"`
 	Assumptions      []string                          `json:"assumptions"`
-	Confidence       float64                           `json:"confidence"`
+	Confidence       *float64                          `json:"confidence,omitempty"`
 	EvidenceState    repositorysnapshot.KnowledgeState `json:"evidence_state"`
 	ReviewState      string                            `json:"review_state"`
 	RepositoryCommit string                            `json:"repository_commit"`
@@ -73,7 +73,7 @@ type UnderstandingRoleCapability struct {
 	Summary                string                            `json:"summary"`
 	Evidence               []UnderstandingEvidenceReference  `json:"evidence"`
 	Assumptions            []string                          `json:"assumptions"`
-	Confidence             float64                           `json:"confidence"`
+	Confidence             *float64                          `json:"confidence,omitempty"`
 	PublicEligible         bool                              `json:"public_eligible"`
 	MarketingClaimEligible bool                              `json:"marketing_claim_eligible"`
 	EvidenceState          repositorysnapshot.KnowledgeState `json:"evidence_state"`

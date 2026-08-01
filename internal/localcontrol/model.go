@@ -9,6 +9,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
@@ -76,6 +77,16 @@ type RepositorySnapshotOperationReader interface {
 
 type RepositoryUnderstandingAuthority interface {
 	Understand(context.Context, repositorysnapshot.UnderstandingRequest) (repositorysnapshot.AnalysisResponse, error)
+}
+
+type AdvisorySessionRequest = advisory.SessionRequest
+type AdvisorySessionResponse = advisory.SessionResponse
+
+// AdvisorySessionAuthority is the generic read-only execution boundary. The
+// local-control service only supplies authenticated transport and durability;
+// it does not add product or repository semantics to this contract.
+type AdvisorySessionAuthority interface {
+	ExecuteAdvisorySession(context.Context, advisory.SessionRequest) (advisory.SessionResponse, error)
 }
 
 // ProviderInfo describes a runtime this host can actually dispatch to. Available
@@ -650,6 +661,7 @@ type Config struct {
 	Repositories            RepositoryCatalog
 	RepositorySnapshots     RepositorySnapshotAuthority
 	RepositoryUnderstanding RepositoryUnderstandingAuthority
+	Advisory                AdvisorySessionAuthority
 	Providers               ProviderCatalog
 	Controller              CommandController
 	Executor                Executor

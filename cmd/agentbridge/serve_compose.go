@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/approval"
 	"github.com/berkayahi/agentbridge/internal/attachment"
 	"github.com/berkayahi/agentbridge/internal/auth"
@@ -509,10 +510,15 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
+	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -769,10 +775,14 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
+	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -1287,6 +1297,26 @@ func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *worksp
 			}),
 		}},
 		Providers: configured, DefaultProvider: defaultProvider,
+	})
+}
+
+func composeAdvisoryAuthority(cfg config.Config, providers map[workmodel.Provider]provider.Provider, catalog localcontrol.ProviderCatalog) (*advisory.Service, error) {
+	configured := make(map[string]advisory.Provider, len(providers))
+	for name, value := range providers {
+		safe, ok := value.(provider.SafeAnalysisProvider)
+		if !ok || !safe.AnalysisIsolationAttestation().Valid() {
+			continue
+		}
+		configured[string(name)] = advisory.NativeProvider{
+			Provider: safe, ProviderID: string(name), ModelID: cfg.Providers[string(name)].Model,
+		}
+	}
+	if len(configured) == 0 {
+		return nil, nil
+	}
+	return advisory.New(advisory.Config{
+		Catalog:   localcontrol.ConfiguredAdvisoryCatalog{Catalog: catalog, Providers: configured},
+		Providers: configured,
 	})
 }
 

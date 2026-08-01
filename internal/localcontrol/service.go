@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repository"
@@ -42,6 +43,7 @@ type Service struct {
 	integrator    RepositoryIntegrator
 	snapshots     RepositorySnapshotAuthority
 	understanding RepositoryUnderstandingAuthority
+	advisory      AdvisorySessionAuthority
 	clock         func() time.Time
 	newID         func(string) string
 
@@ -176,8 +178,32 @@ func New(config Config) (*Service, error) {
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
-		clock: config.Clock, newID: config.NewID,
+		advisory: config.Advisory,
+		clock:    config.Clock, newID: config.NewID,
 	}, nil
+}
+
+// ExecuteAdvisorySession authenticates and durably replays a generic advisory
+// execution. The existing idempotency record is the durable receipt envelope;
+// no product-specific persistence is introduced here.
+func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	var cached advisory.SessionResponse
+	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
+		return cached, err
+	}
+	if s.advisory == nil {
+		return advisory.SessionResponse{}, ErrNotConfigured
+	}
+	response, err := s.advisory.ExecuteAdvisorySession(ctx, request)
+	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	if err := s.remember(ctx, request.IdempotencyKey, "advisory_session", request, response); err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) IntegrateRepository(ctx context.Context, request IntegrateRepositoryRequest) (IntegrationResponse, error) {

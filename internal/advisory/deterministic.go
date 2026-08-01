@@ -34,7 +34,7 @@ func (p DeterministicProvider) Execute(ctx context.Context, request ExecutionReq
 	if request.Policy != effectivePolicy() || request.WebResearch.Enabled {
 		return ExecutionResult{}, ErrPolicyViolation
 	}
-	if err := validateSchema(request.OutputSchema); err != nil {
+	if err := validateSchema(request.OutputSchema, nil); err != nil {
 		return ExecutionResult{}, err
 	}
 	output := append([]byte(nil), p.Output...)

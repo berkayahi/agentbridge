@@ -510,7 +510,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
-	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes}, redactor)
 	if err != nil {
 		control.Close()
 		return fail(err, providerClosers...)
@@ -518,7 +518,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority,
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -775,14 +775,14 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
-	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	advisoryAuthority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes}, redactor)
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority,
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -1300,7 +1300,7 @@ func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *worksp
 	})
 }
 
-func composeAdvisoryAuthority(cfg config.Config, providers map[workmodel.Provider]provider.Provider, catalog localcontrol.ProviderCatalog) (*advisory.Service, error) {
+func composeAdvisoryAuthority(cfg config.Config, providers map[workmodel.Provider]provider.Provider, catalog localcontrol.ProviderCatalog, redactor *security.Redactor) (*advisory.Service, error) {
 	configured := make(map[string]advisory.Provider, len(providers))
 	for name, value := range providers {
 		safe, ok := value.(provider.SafeAnalysisProvider)
@@ -1322,6 +1322,7 @@ func composeAdvisoryAuthority(cfg config.Config, providers map[workmodel.Provide
 	return advisory.New(advisory.Config{
 		Catalog:   localcontrol.ConfiguredAdvisoryCatalog{Catalog: catalog, Providers: configured},
 		Providers: configured,
+		Redactor:  redactor,
 	})
 }
 

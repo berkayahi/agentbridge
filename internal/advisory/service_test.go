@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
+	"github.com/berkayahi/agentbridge/internal/security"
 )
 
 const testSchema = `{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"}},"required":["answer"],"additionalProperties":false}`
@@ -44,6 +45,10 @@ func newTestProvider(output string) *testProvider {
 }
 
 func newService(t *testing.T, provider *testProvider) *advisory.Service {
+	return newServiceWithRedactor(t, provider, nil)
+}
+
+func newServiceWithRedactor(t *testing.T, provider *testProvider, redactor *security.Redactor) *advisory.Service {
 	t.Helper()
 	service, err := advisory.New(advisory.Config{
 		Catalog: testCatalog{profiles: []advisory.ProviderProfile{{
@@ -52,6 +57,7 @@ func newService(t *testing.T, provider *testProvider) *advisory.Service {
 		Providers: map[string]advisory.Provider{"provider-a": provider},
 		Clock:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
 		NewID:     func(prefix string) string { return prefix + "-1" },
+		Redactor:  redactor,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -195,6 +201,100 @@ func TestExecuteAdvisorySessionRejectsNestedSecretsInSchemaValuesAndContextBefor
 				t.Fatalf("nested secret reached provider: calls=%d request=%#v", provider.calls, provider.request)
 			}
 		})
+	}
+}
+
+func TestExecuteAdvisorySessionRejectsSchemaScalarSecretsAndDuplicateKeysBeforeProvider(t *testing.T) {
+	tests := []struct {
+		name   string
+		schema string
+		want   error
+	}{
+		{
+			name:   "description scalar",
+			schema: `{"type":"object","description":"schema-secret-value","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`,
+			want:   advisory.ErrPolicyViolation,
+		},
+		{
+			name:   "nested enum scalar",
+			schema: `{"type":"object","properties":{"answer":{"type":"string","enum":["safe",{"nested":[{"value":"enum-secret-value"}]}]}},"required":["answer"],"additionalProperties":false}`,
+			want:   advisory.ErrPolicyViolation,
+		},
+		{
+			name:   "nested const scalar",
+			schema: `{"type":"object","properties":{"answer":{"type":"string","const":{"nested":[{"value":"password=const-secret"}]} }},"required":["answer"],"additionalProperties":false}`,
+			want:   advisory.ErrPolicyViolation,
+		},
+		{
+			name:   "duplicate root key",
+			schema: `{"type":"object","type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`,
+			want:   advisory.ErrInvalidRequest,
+		},
+		{
+			name:   "duplicate nested key",
+			schema: `{"type":"object","properties":{"answer":{"type":"string","enum":[{"nested":{"value":"safe","value":"duplicate"}}]}},"required":["answer"],"additionalProperties":false}`,
+			want:   advisory.ErrInvalidRequest,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newTestProvider(`{"answer":"ok"}`)
+			service := newService(t, provider)
+			request := testRequest()
+			request.OutputSchema = json.RawMessage(test.schema)
+			if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, test.want) {
+				t.Fatalf("schema err = %v, want %v", err, test.want)
+			}
+			if provider.calls != 0 {
+				t.Fatalf("invalid schema reached provider: calls=%d request=%#v", provider.calls, provider.request)
+			}
+		})
+	}
+}
+
+func TestExecuteAdvisorySessionRecursivelyRedactsConfiguredContextScalars(t *testing.T) {
+	const secret = "configured-context-secret"
+	provider := newTestProvider(`{"answer":"ok"}`)
+	service := newServiceWithRedactor(t, provider, security.NewRedactor(security.Config{Secrets: []string{secret}}))
+	request := testRequest()
+	request.Context.Items[0].Value = `{"nested":[{"message":"configured-context-secret"}]}`
+	response, err := service.ExecuteAdvisorySession(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(provider.request.Context.Items[0].Value, secret) || strings.Contains(string(response.Output), secret) {
+		t.Fatalf("configured context secret crossed boundary: request=%#v response=%s", provider.request.Context, response.Output)
+	}
+	if !strings.Contains(provider.request.Context.Items[0].Value, "[REDACTED:configured]") {
+		t.Fatalf("nested configured context was not redacted: %#v", provider.request.Context)
+	}
+}
+
+func TestExecuteAdvisorySessionRejectsUnredactableNestedContextScalar(t *testing.T) {
+	provider := newTestProvider(`{"answer":"ok"}`)
+	service := newService(t, provider)
+	request := testRequest()
+	request.Context.Items[0].Value = `{"nested":[{"message":"secret-value"}]}`
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("nested scalar err = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("unredactable nested scalar reached provider: %d", provider.calls)
+	}
+}
+
+func TestExecuteAdvisorySessionUsesConfiguredRedactorForSchemaValues(t *testing.T) {
+	const secret = "opaque-configured-schema-secret"
+	provider := newTestProvider(`{"answer":"ok"}`)
+	service := newServiceWithRedactor(t, provider, security.NewRedactor(security.Config{Secrets: []string{secret}}))
+	request := testRequest()
+	request.OutputSchema = json.RawMessage(`{"type":"object","description":"opaque-configured-schema-secret","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`)
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("configured schema secret err = %v", err)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("configured schema secret reached provider: %d", provider.calls)
 	}
 }
 

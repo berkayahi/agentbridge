@@ -28,6 +28,7 @@ var (
 	ErrStructuredOutput     = errors.New("advisory: structured output validation failed")
 	ErrProviderIdentity     = errors.New("advisory: provider identity mismatch")
 	ErrProviderOutputBounds = errors.New("advisory: provider output exceeds bounds")
+	ErrReceiptIntegrity     = errors.New("advisory: receipt integrity validation failed")
 )
 
 type ContextBundle struct {

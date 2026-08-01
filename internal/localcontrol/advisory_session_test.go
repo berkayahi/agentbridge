@@ -3,6 +3,8 @@ package localcontrol_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -37,6 +39,40 @@ func advisoryRequest() advisory.SessionRequest {
 	}
 }
 
+func validAdvisoryResponse(request advisory.SessionRequest, now time.Time) advisory.SessionResponse {
+	output := json.RawMessage(`{"answer":"ok"}`)
+	policy := struct {
+		Policy      advisory.ExecutionPolicy   `json:"policy"`
+		WebResearch advisory.WebResearchPolicy `json:"web_research"`
+	}{Policy: advisory.ExecutionPolicy{ReadOnly: true}, WebResearch: request.WebResearch}
+	policyJSON, _ := json.Marshal(policy)
+	contextJSON, _ := json.Marshal(request.Context)
+	digest := func(value []byte) string {
+		sum := sha256.Sum256(value)
+		return hex.EncodeToString(sum[:])
+	}
+	return advisory.SessionResponse{
+		ContractVersion: advisory.ContractVersion,
+		Output:          output,
+		Receipt: advisory.ExecutionReceipt{
+			ReceiptID:          "receipt-1",
+			ExecutionSessionID: "session-1",
+			ProviderID:         "provider-a",
+			ModelID:            "model-a",
+			ContextDigest:      digest(contextJSON),
+			PromptDigest:       digest([]byte(request.Prompt)),
+			SchemaDigest:       digest(request.OutputSchema),
+			PolicyDigest:       digest(policyJSON),
+			OutputDigest:       digest(output),
+			SchemaVersion:      request.SchemaVersion,
+			ContractVersion:    advisory.ContractVersion,
+			StartedAt:          now,
+			CompletedAt:        now,
+			Status:             "completed",
+		},
+	}
+}
+
 func TestAdvisorySessionIsDurablyIdempotentAcrossStoreReopen(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "advisory.db")
@@ -45,16 +81,12 @@ func TestAdvisorySessionIsDurablyIdempotentAcrossStoreReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1_700_000_000, 0).UTC()
-	authority := &advisoryAuthority{response: advisory.SessionResponse{
-		ContractVersion: advisory.ContractVersion,
-		Output:          json.RawMessage(`{"answer":"ok"}`),
-		Receipt:         advisory.ExecutionReceipt{ReceiptID: "receipt-1", ExecutionSessionID: "session-1", ProviderID: "provider-a", ModelID: "model-a", SchemaVersion: "schema-1", Status: "completed", StartedAt: now, CompletedAt: now},
-	}}
+	request := advisoryRequest()
+	authority := &advisoryAuthority{response: validAdvisoryResponse(request, now)}
 	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority, Clock: func() time.Time { return now }, NewID: deterministicIDs()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := advisoryRequest()
 	first, err := service.ExecuteAdvisorySession(ctx, request)
 	if err != nil {
 		t.Fatal(err)
@@ -84,13 +116,84 @@ func TestAdvisorySessionIsDurablyIdempotentAcrossStoreReopen(t *testing.T) {
 	}
 }
 
+func TestAdvisorySessionRejectsReceiptBindingBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "receipt-binding.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	request := advisoryRequest()
+	response := validAdvisoryResponse(request, now)
+	response.Receipt.PromptDigest = strings.Repeat("0", sha256.Size*2)
+	authority := &advisoryAuthority{response: response}
+	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority, Clock: func() time.Time { return now }, NewID: deterministicIDs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.ExecuteAdvisorySession(ctx, request)
+	if !errors.Is(err, advisory.ErrReceiptIntegrity) {
+		t.Fatalf("receipt binding err = %v", err)
+	}
+	if authority.calls != 1 || len(got.Output) != 0 {
+		t.Fatalf("invalid receipt crossed boundary: calls=%d response=%#v", authority.calls, got)
+	}
+	if _, err := data.LoadIdempotency(ctx, request.IdempotencyKey); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("invalid receipt was persisted: %v", err)
+	}
+}
+
+func TestAdvisorySessionRejectsCorruptCachedReceiptInsteadOfReplaying(t *testing.T) {
+	ctx := context.Background()
+	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "corrupt-receipt.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	now := time.Unix(1_700_000_000, 0).UTC()
+	request := advisoryRequest()
+	authority := &advisoryAuthority{response: validAdvisoryResponse(request, now)}
+	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority, Clock: func() time.Time { return now }, NewID: deterministicIDs()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ExecuteAdvisorySession(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	record, err := data.LoadIdempotency(ctx, request.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached advisory.SessionResponse
+	if err := json.Unmarshal(record.ResponseBytes, &cached); err != nil {
+		t.Fatal(err)
+	}
+	cached.Receipt.OutputDigest = strings.Repeat("0", sha256.Size*2)
+	record.ResponseBytes, err = json.Marshal(cached)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SaveIdempotency(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := service.ExecuteAdvisorySession(ctx, request)
+	if !errors.Is(err, advisory.ErrReceiptIntegrity) {
+		t.Fatalf("corrupt replay err = %v", err)
+	}
+	if authority.calls != 1 || len(replayed.Output) != 0 {
+		t.Fatalf("corrupt receipt was replayed: calls=%d response=%#v", authority.calls, replayed)
+	}
+}
+
 func TestAdvisorySessionRouteUsesLocalAuthAndDoesNotExposeMutationFields(t *testing.T) {
 	data, err := sqlite.OpenV2Runtime(context.Background(), filepath.Join(t.TempDir(), "advisory-api.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer data.Close()
-	authority := &advisoryAuthority{response: advisory.SessionResponse{ContractVersion: advisory.ContractVersion, Output: json.RawMessage(`{"answer":"ok"}`)}}
+	requestBody := advisoryRequest()
+	authority := &advisoryAuthority{response: validAdvisoryResponse(requestBody, time.Now().UTC())}
 	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +203,7 @@ func TestAdvisorySessionRouteUsesLocalAuthAndDoesNotExposeMutationFields(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := json.Marshal(advisoryRequest())
+	body, _ := json.Marshal(requestBody)
 	request := httptest.NewRequest(http.MethodPost, "/v1/advisory-sessions", bytes.NewReader(body))
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, request)

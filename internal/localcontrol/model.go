@@ -14,6 +14,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/runtime"
+	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
@@ -662,14 +663,17 @@ type Config struct {
 	RepositorySnapshots     RepositorySnapshotAuthority
 	RepositoryUnderstanding RepositoryUnderstandingAuthority
 	Advisory                AdvisorySessionAuthority
-	Providers               ProviderCatalog
-	Controller              CommandController
-	Executor                Executor
-	Verifier                Verifier
-	Committer               Committer
-	Integrator              RepositoryIntegrator
-	RemoteDevices           map[string]DeviceRuntime
-	RemoteDeviceFactory     RemoteDeviceFactory
-	Clock                   func() time.Time
-	NewID                   func(string) string
+	// Redactor is an in-memory safe-output dependency. It is never serialized
+	// into local-control requests, responses, or idempotency records.
+	Redactor            *security.Redactor
+	Providers           ProviderCatalog
+	Controller          CommandController
+	Executor            Executor
+	Verifier            Verifier
+	Committer           Committer
+	Integrator          RepositoryIntegrator
+	RemoteDevices       map[string]DeviceRuntime
+	RemoteDeviceFactory RemoteDeviceFactory
+	Clock               func() time.Time
+	NewID               func(string) string
 }

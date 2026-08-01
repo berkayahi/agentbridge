@@ -536,7 +536,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status, code = http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, advisory.ErrPolicyViolation):
 		status, code = http.StatusForbidden, "policy_violation"
-	case errors.Is(err, advisory.ErrStructuredOutput), errors.Is(err, advisory.ErrProviderOutputBounds), errors.Is(err, advisory.ErrProviderIdentity):
+	case errors.Is(err, advisory.ErrStructuredOutput), errors.Is(err, advisory.ErrProviderOutputBounds), errors.Is(err, advisory.ErrProviderIdentity), errors.Is(err, advisory.ErrReceiptIntegrity):
 		status, code = http.StatusBadGateway, "provider_output_invalid"
 	case errors.Is(err, advisory.ErrNotConfigured):
 		status, code = http.StatusServiceUnavailable, "provider_not_configured"

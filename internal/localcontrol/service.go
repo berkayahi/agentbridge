@@ -19,6 +19,7 @@ import (
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repository"
+	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
@@ -44,6 +45,7 @@ type Service struct {
 	snapshots     RepositorySnapshotAuthority
 	understanding RepositoryUnderstandingAuthority
 	advisory      AdvisorySessionAuthority
+	redactor      *security.Redactor
 	clock         func() time.Time
 	newID         func(string) string
 
@@ -178,8 +180,8 @@ func New(config Config) (*Service, error) {
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
-		advisory: config.Advisory,
-		clock:    config.Clock, newID: config.NewID,
+		advisory: config.Advisory, redactor: config.Redactor,
+		clock: config.Clock, newID: config.NewID,
 	}, nil
 }
 
@@ -189,15 +191,18 @@ func New(config Config) (*Service, error) {
 func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
-	if err := advisory.ValidateSessionRequest(request); err != nil {
+	if err := advisory.ValidateSessionRequestWithRedactor(request, s.redactor); err != nil {
 		return advisory.SessionResponse{}, err
 	}
 	var cached advisory.SessionResponse
 	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
-		if done && err == nil {
-			cached, err = advisory.SanitizeSessionResponse(cached)
+		if err != nil {
+			return advisory.SessionResponse{}, err
 		}
-		return cached, err
+		if err := advisory.ValidateSessionResponseWithRedactor(request, cached, s.redactor); err != nil {
+			return advisory.SessionResponse{}, err
+		}
+		return cached, nil
 	}
 	if s.advisory == nil {
 		return advisory.SessionResponse{}, ErrNotConfigured
@@ -208,6 +213,9 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.S
 	}
 	response, err = advisory.SanitizeSessionResponse(response)
 	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	if err := advisory.ValidateSessionResponseWithRedactor(request, response, s.redactor); err != nil {
 		return advisory.SessionResponse{}, err
 	}
 	if err := s.remember(ctx, request.IdempotencyKey, "advisory_session", request, response); err != nil {

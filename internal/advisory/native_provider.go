@@ -40,7 +40,7 @@ func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (
 	if request.Policy != effectivePolicy() || request.WebResearch.Enabled {
 		return ExecutionResult{}, ErrPolicyViolation
 	}
-	if err := validateSchema(request.OutputSchema); err != nil {
+	if err := validateSchema(request.OutputSchema, nil); err != nil {
 		return ExecutionResult{}, err
 	}
 	workspace, err := os.MkdirTemp("", "agentbridge-advisory-")

@@ -45,7 +45,7 @@ func TestComposeProvidersFixtureServesProviderCatalogWithoutTaskRuntime(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = data.Close() })
-	authority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	authority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes}, nil)
 	if err != nil || authority == nil {
 		t.Fatalf("fixture advisory authority = %#v err=%v", authority, err)
 	}

@@ -13,8 +13,9 @@ import (
 )
 
 // UnderstandingRoleRequest is the AgentBridge-side wire contract consumed by
-// Platform's role adapter. PriorOutputs are accepted for compatibility with
-// the adapter, but the service never uses them as authoritative input.
+// Platform's role adapter. PriorOutputs contain only references to durable
+// role operations; the service never uses caller-supplied role JSON as
+// authoritative input.
 type UnderstandingRoleRequest struct {
 	ProjectID           string                      `json:"project_id"`
 	Role                string                      `json:"role"`
@@ -29,6 +30,11 @@ type UnderstandingRoleRequest struct {
 
 type UnderstandingRoleResponse struct {
 	Output UnderstandingRoleOutput `json:"output"`
+}
+
+type priorRoleReference struct {
+	Role           string `json:"role"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 // UnderstandingRoleOutput is intentionally a small compatibility projection
@@ -122,8 +128,12 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 	if synthesize {
 		analysis.Snapshot = &snapshot
 		analysis.PriorOutputs = make(map[repositorysnapshot.AnalysisRole]repositorysnapshot.PriorOutputReference, 3)
+		priorKeys, err := priorUnderstandingKeys(request.ProjectID, commit, digest, request.PriorOutputs)
+		if err != nil {
+			return UnderstandingRoleResponse{}, err
+		}
 		for _, priorRole := range []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations} {
-			priorKey := platformUnderstandingKey(request.ProjectID, commit, digest, priorRole)
+			priorKey := priorKeys[priorRole]
 			prior, err := s.understandingResult(ctx, priorKey)
 			if err != nil {
 				return UnderstandingRoleResponse{}, err
@@ -258,6 +268,44 @@ func platformUnderstandingKey(projectID, commit, digest string, role repositorys
 	seed := strings.Join([]string{projectID, commit, digest, string(role)}, "\x00")
 	sum := sha256.Sum256([]byte(seed))
 	return "platform-understanding-" + hex.EncodeToString(sum[:16])
+}
+
+func priorUnderstandingKeys(projectID, commit, digest string, raw []json.RawMessage) (map[repositorysnapshot.AnalysisRole]string, error) {
+	roles := []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations}
+	keys := make(map[repositorysnapshot.AnalysisRole]string, len(roles))
+	for _, role := range roles {
+		keys[role] = platformUnderstandingKey(projectID, commit, digest, role)
+	}
+	if len(raw) == 0 {
+		return keys, nil
+	}
+	if len(raw) != len(roles) {
+		return nil, repositorysnapshot.ErrInvalidRequest
+	}
+	seen := make(map[repositorysnapshot.AnalysisRole]struct{}, len(raw))
+	for _, encoded := range raw {
+		var reference priorRoleReference
+		if err := json.Unmarshal(encoded, &reference); err != nil {
+			return nil, repositorysnapshot.ErrInvalidRequest
+		}
+		role, err := platformRole(reference.Role)
+		if err != nil || role == repositorysnapshot.RoleSynthesizer {
+			return nil, repositorysnapshot.ErrInvalidRequest
+		}
+		if _, ok := seen[role]; ok {
+			return nil, repositorysnapshot.ErrConflict
+		}
+		seen[role] = struct{}{}
+		key := strings.TrimSpace(reference.IdempotencyKey)
+		if key == "" {
+			key = keys[role]
+		}
+		if !validID(key) {
+			return nil, repositorysnapshot.ErrInvalidRequest
+		}
+		keys[role] = key
+	}
+	return keys, nil
 }
 
 func projectUnderstandingRole(response repositorysnapshot.AnalysisResponse, snapshotDigest string) UnderstandingRoleOutput {

@@ -288,7 +288,11 @@ func (s *UnderstandingService) Understand(ctx context.Context, request Understan
 	}
 	response.Findings, response.Capabilities, response.Assumptions = output.Findings, output.Capabilities, output.Assumptions
 	response.Conflicts, response.Unknowns = output.Conflicts, output.Unknowns
-	response.Provider = ProviderMetadata{ID: providerID, Model: providerResult.Model, Status: "completed"}
+	reportedProviderID := strings.TrimSpace(providerResult.ProviderID)
+	if !safeIdentifier.MatchString(reportedProviderID) {
+		return AnalysisResponse{}, ErrProviderOutput
+	}
+	response.Provider = ProviderMetadata{ID: reportedProviderID, Model: providerResult.Model, Status: "completed"}
 	response.Status = "completed"
 	response.ErrorCode = ""
 	return s.persistUnderstanding(ctx, normalized, requestDigest, response)

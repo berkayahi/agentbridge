@@ -297,6 +297,27 @@ func TestUnderstandingStrictProviderOutputApprovalAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestUnderstandingPersistsProviderReportedIdentity(t *testing.T) {
+	provider := &reportedProvider{}
+	service, err := repositorysnapshot.NewUnderstandingService(repositorysnapshot.UnderstandingConfig{
+		Store:   &understandingStore{operations: make(map[string]repositorysnapshot.UnderstandingOperation)},
+		Catalog: understandingCatalog{}, Evidence: understandingEvidence{},
+		Providers: map[string]repositorysnapshot.AnalysisProvider{"configured": provider}, DefaultProvider: "configured",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := understandingRequest("reported-provider", repositorysnapshot.RoleCartographer)
+	request.ProviderID = "configured"
+	response, err := service.Understand(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Provider.ID != "reported" {
+		t.Fatalf("provider identity = %q, want provider-reported identity", response.Provider.ID)
+	}
+}
+
 func TestUnderstandingRejectsSecretLikeAndControlProviderOutputBeforePersistence(t *testing.T) {
 	outputs := []struct {
 		name   string
@@ -328,6 +349,16 @@ type understandingProvider struct {
 	approval  bool
 	workspace string
 	calls     int
+}
+
+type reportedProvider struct{}
+
+func (reportedProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {
+	output, _ := json.Marshal(repositorysnapshot.StructuredOutput{
+		Role: request.Role, Findings: []repositorysnapshot.Finding{}, Capabilities: []string{},
+		Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
+	})
+	return repositorysnapshot.ProviderResult{ProviderID: "reported", Model: "reported-model", Output: output}, nil
 }
 
 type roleUnderstandingProvider struct{}

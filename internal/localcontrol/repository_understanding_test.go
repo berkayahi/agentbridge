@@ -158,7 +158,7 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 	}
 	requestBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
 		ProjectID: "platform-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
-		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID,
+		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: "custom-cartographer",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -183,6 +183,52 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 	}
 	if got := roleResponse.Output.Capabilities[0].EvidenceDigest; got != snapshot.ResultDigest {
 		t.Fatalf("capability evidence digest = %q, want %q", got, snapshot.ResultDigest)
+	}
+	for _, value := range []struct {
+		role string
+		key  string
+	}{
+		{role: "Product Archaeologist", key: "custom-archaeologist"},
+		{role: "Quality/Operations Analyst", key: "custom-quality"},
+	} {
+		body, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
+			ProjectID: "platform-project", Role: value.role, RepositoryProfileID: snapshot.Repository.ProfileID,
+			SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: value.key,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		roleRequest := httptest.NewRequest(http.MethodPost, "/v1/understanding/roles", bytes.NewReader(body))
+		roleRequest.Header.Set("X-AgentBridge-Local-Auth", string(secret))
+		roleResult := httptest.NewRecorder()
+		handler.ServeHTTP(roleResult, roleRequest)
+		if roleResult.Code != http.StatusCreated {
+			t.Fatalf("%s status = %d body=%s", value.role, roleResult.Code, roleResult.Body.String())
+		}
+	}
+	for _, key := range []string{"custom-cartographer", "custom-archaeologist", "custom-quality"} {
+		if _, err := understanding.LoadOperation(context.Background(), key); err != nil {
+			t.Fatalf("load custom role operation %q: %v", key, err)
+		}
+	}
+	synthesisBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
+		ProjectID: "platform-project", Role: "Baseline Synthesizer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: "custom-synth",
+		PriorOutputs: []json.RawMessage{
+			json.RawMessage(`{"role":"Repository Cartographer","idempotency_key":"custom-cartographer"}`),
+			json.RawMessage(`{"role":"Product Archaeologist","idempotency_key":"custom-archaeologist"}`),
+			json.RawMessage(`{"role":"Quality/Operations Analyst","idempotency_key":"custom-quality"}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	synthesisRequest := httptest.NewRequest(http.MethodPost, "/v1/understanding/synthesize", bytes.NewReader(synthesisBody))
+	synthesisRequest.Header.Set("X-AgentBridge-Local-Auth", string(secret))
+	synthesisResult := httptest.NewRecorder()
+	handler.ServeHTTP(synthesisResult, synthesisRequest)
+	if synthesisResult.Code != http.StatusCreated {
+		t.Fatalf("synthesis status = %d body=%s", synthesisResult.Code, synthesisResult.Body.String())
 	}
 
 	forged := snapshot
@@ -230,9 +276,13 @@ func (roleEvidence) RetrieveEvidence(_ context.Context, _ repositorysnapshot.Con
 type roleProvider struct{}
 
 func (roleProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {
+	findings := []repositorysnapshot.Finding{}
+	if request.Role != repositorysnapshot.RoleSynthesizer {
+		findings = []repositorysnapshot.Finding{{ID: "finding-1", Statement: "fixture observation", KnowledgeState: repositorysnapshot.KnowledgeObserved, EvidencePaths: []string{"openapi.yaml"}}}
+	}
 	output, err := json.Marshal(repositorysnapshot.StructuredOutput{
 		Role:         request.Role,
-		Findings:     []repositorysnapshot.Finding{{ID: "finding-1", Statement: "fixture observation", KnowledgeState: repositorysnapshot.KnowledgeObserved, EvidencePaths: []string{"openapi.yaml"}}},
+		Findings:     findings,
 		Capabilities: []string{"fixture capability"}, Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
 	})
 	if err != nil {

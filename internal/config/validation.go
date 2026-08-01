@@ -6,9 +6,12 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
+
+var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (c Config) Validate() error {
 	if c.Mode != "standalone" && c.Mode != "managed" {
@@ -95,6 +98,9 @@ func (c Config) validateRuntime() error {
 		if err := validateProviderModels(name, provider); err != nil {
 			return err
 		}
+		if err := validateAnalysisFixture(name, provider.AnalysisFixture); err != nil {
+			return err
+		}
 	}
 	if len(c.Repositories) == 0 {
 		return errors.New("repositories must contain at least one profile")
@@ -112,6 +118,24 @@ func (c Config) validateRuntime() error {
 	}
 	if _, ok := c.Repositories[c.DefaultRepository]; !ok {
 		return errors.New("default_repository must name a configured repository")
+	}
+	return nil
+}
+
+func validateAnalysisFixture(providerName string, fixture AnalysisFixtureConfig) error {
+	environment := strings.TrimSpace(fixture.Environment)
+	digest := strings.TrimSpace(fixture.ExecutableSHA256)
+	if environment == "" && digest == "" {
+		return nil
+	}
+	if providerName != "codex" {
+		return errors.New("analysis_fixture is supported only for the Codex fixture app-server protocol")
+	}
+	if environment != "fixture" && environment != "dev" {
+		return errors.New("analysis_fixture environment must be fixture or dev")
+	}
+	if digest != fixture.ExecutableSHA256 || !sha256Pattern.MatchString(digest) {
+		return errors.New("analysis_fixture executable_sha256 must be a lowercase SHA-256 digest")
 	}
 	return nil
 }

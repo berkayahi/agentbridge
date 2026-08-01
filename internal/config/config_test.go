@@ -108,6 +108,39 @@ func TestLoadRejectsUnknownYAMLField(t *testing.T) {
 	assertLoadError(t, yml, "unknown")
 }
 
+func TestAnalysisFixtureRequiresDevEnvironmentAndPinnedDigest(t *testing.T) {
+	validDigest := strings.Repeat("a", 64)
+	for _, test := range []struct {
+		name        string
+		environment string
+		digest      string
+		wantErr     bool
+	}{
+		{name: "fixture", environment: "fixture", digest: validDigest},
+		{name: "dev", environment: "dev", digest: validDigest},
+		{name: "production rejected", environment: "production", digest: validDigest, wantErr: true},
+		{name: "missing digest", environment: "fixture", wantErr: true},
+		{name: "non canonical digest", environment: "fixture", digest: strings.Repeat("A", 64), wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := Load(writeConfig(t, validYAML))
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := value.Providers["codex"]
+			provider.AnalysisFixture = AnalysisFixtureConfig{Environment: test.environment, ExecutableSHA256: test.digest}
+			value.Providers["codex"] = provider
+			err = value.Validate()
+			if test.wantErr && err == nil {
+				t.Fatal("want fixture validation error")
+			}
+			if !test.wantErr && err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestLoadRejectsShellStringVerificationCommand(t *testing.T) {
 	yml := strings.Replace(validYAML, "argv: [\"go\", \"test\", \"./...\"]", "argv: \"go test ./...\"", 1)
 	assertLoadError(t, yml, "argv")

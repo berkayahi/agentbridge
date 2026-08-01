@@ -25,6 +25,9 @@ func (p NativeAnalysisProvider) Analyze(ctx context.Context, request ProviderReq
 	if !ok {
 		return ProviderResult{}, ErrProviderPolicy
 	}
+	if !safe.AnalysisIsolationAttestation().Valid() {
+		return ProviderResult{}, ErrProviderPolicy
+	}
 	taskID, err := provider.NewID("understanding-" + shortCommit(request.ExactCommitSHA))
 	if err != nil {
 		return ProviderResult{}, ErrInvalidRequest

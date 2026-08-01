@@ -123,7 +123,7 @@ func TestEventContractContainsOnlyObservableFields(t *testing.T) {
 
 func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t *testing.T) {
 	workspace := t.TempDir()
-	if result := provider.NewReadOnlyAnalysisPolicy(workspace).Validate(); !result.Allowed || !result.WorkspaceOnly || result.NetworkAccess || result.ApprovalAllowed || result.DeliveryAllowed || result.CredentialsAllowed || result.DestructiveActions {
+	if result := provider.NewReadOnlyAnalysisPolicy(workspace).Validate(); !result.Allowed || !result.WorkspaceOnly || result.NetworkAccess || result.ApprovalAllowed || result.DeliveryAllowed || result.HostEnvironment || result.ProductionData || result.CredentialsAllowed || result.DestructiveActions {
 		t.Fatalf("safe policy result = %#v", result)
 	}
 	unsafe := provider.NewReadOnlyAnalysisPolicy(workspace)
@@ -133,6 +133,9 @@ func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t
 	}
 	for _, policy := range []provider.RuntimeInspectionPolicy{
 		{Environment: "prod", Target: "production-host"},
+		{Environment: "dev", Target: "dev-host", NetworkAllowed: true},
+		{Environment: "dev", Target: "dev-host", HostEnvironmentAllowed: true},
+		{Environment: "fixture", Target: "fixture-host", ProductionDataAllowed: true},
 		{Environment: "dev", Target: "dev-host", CredentialsAllowed: true},
 		{Environment: "fixture", Target: "fixture-host", DestructiveActionsAllow: true},
 	} {
@@ -142,6 +145,14 @@ func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t
 	}
 	if result := provider.ValidateRuntimeInspectionPolicy(provider.RuntimeInspectionPolicy{Environment: "fixture", Target: "fixture-host"}); !result.Allowed {
 		t.Fatalf("fixture runtime policy rejected: %#v", result)
+	}
+	attestation := provider.AnalysisIsolationAttestation{Mechanism: "test", FilesystemReadsWorkspaceOnly: true, HostEnvironmentExcluded: true, NetworkDenied: true, ProductionDataDenied: true, DestructiveActionsDenied: true}
+	if !attestation.Valid() {
+		t.Fatalf("complete attestation rejected: %#v", attestation)
+	}
+	attestation.HostEnvironmentExcluded = false
+	if attestation.Valid() {
+		t.Fatalf("incomplete attestation accepted: %#v", attestation)
 	}
 }
 

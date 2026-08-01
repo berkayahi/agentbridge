@@ -882,7 +882,15 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 	var closers []io.Closer
 	sink := providerSessionSink{store: data}
 	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
-		process, err := codex.StartAppServer(ctx, value.Executable, environment)
+		analysisIsolation, err := pinnedAnalysisFixture(value)
+		if err != nil {
+			return nil, nil, closers, err
+		}
+		processEnvironment := environment
+		if analysisIsolation.Valid() {
+			processEnvironment = pinnedFixtureEnvironment(environment)
+		}
+		process, err := codex.StartAppServer(ctx, value.Executable, processEnvironment)
 		if err != nil {
 			return nil, nil, closers, err
 		}
@@ -890,9 +898,11 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },
-			// The configured Codex app-server is the only production adapter
-			// currently allowed to expose the explicit OS-isolated analysis seam.
-			AnalysisIsolation: true,
+			// Codex app-server's workspaceWrite policy alone does not attest
+			// workspace-only reads. Ordinary providers therefore receive the zero
+			// attestation; only a verified, pinned fixture/dev executable reaches
+			// this point with the explicit acceptance attestation above.
+			AnalysisIsolation: analysisIsolation,
 		})
 		providers[workmodel.CodexSubscription] = adapter
 		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
@@ -1251,9 +1261,10 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *workspaceAdapter, providers map[workmodel.Provider]provider.Provider, cfg config.Config) (*repositorysnapshot.UnderstandingService, error) {
 	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers))
 	for name, value := range providers {
-		if _, safe := value.(provider.SafeAnalysisProvider); !safe {
+		safe, ok := value.(provider.SafeAnalysisProvider)
+		if !ok || !safe.AnalysisIsolationAttestation().Valid() {
 			// Persistent task providers are not analysis providers unless they
-			// explicitly implement the non-persistent, OS-isolated capability.
+			// explicitly expose an attested non-persistent isolation boundary.
 			continue
 		}
 		configured[string(name)] = repositorysnapshot.NativeAnalysisProvider{Provider: value, DefaultModel: cfg.Providers[string(name)].Model}

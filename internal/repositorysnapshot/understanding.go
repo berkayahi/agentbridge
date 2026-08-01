@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -78,9 +79,44 @@ func (s KnowledgeState) Valid() bool {
 
 type Finding struct {
 	ID             string         `json:"id"`
+	Area           string         `json:"area"`
 	Statement      string         `json:"statement"`
 	KnowledgeState KnowledgeState `json:"knowledge_state"`
 	EvidencePaths  []string       `json:"evidence_paths,omitempty"`
+}
+
+type CapabilityImplementationStatus string
+
+const (
+	CapabilityVerified    CapabilityImplementationStatus = "verified"
+	CapabilityPartial     CapabilityImplementationStatus = "partial"
+	CapabilityAbsent      CapabilityImplementationStatus = "absent"
+	CapabilityUnknown     CapabilityImplementationStatus = "unknown"
+	CapabilityConflicting CapabilityImplementationStatus = "conflicting"
+)
+
+func (s CapabilityImplementationStatus) Valid() bool {
+	switch s {
+	case CapabilityVerified, CapabilityPartial, CapabilityAbsent, CapabilityUnknown, CapabilityConflicting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Capability is a provider conclusion, not a display label. The provider must
+// state who can perform the behavior, what repository evidence establishes,
+// and how complete that behavior is. EvidenceState keeps declared behavior
+// distinct from observed implementation and from inference.
+type Capability struct {
+	ID                   string                         `json:"id"`
+	Name                 string                         `json:"name"`
+	Actor                string                         `json:"actor"`
+	VerifiedBehavior     string                         `json:"verified_behavior"`
+	ImplementationStatus CapabilityImplementationStatus `json:"implementation_status"`
+	KnowledgeState       KnowledgeState                 `json:"knowledge_state"`
+	EvidencePaths        []string                       `json:"evidence_paths,omitempty"`
+	Confidence           *float64                       `json:"confidence,omitempty"`
 }
 
 // StructuredOutput is the only shape accepted from a provider. It deliberately
@@ -88,7 +124,7 @@ type Finding struct {
 type StructuredOutput struct {
 	Role         AnalysisRole `json:"role"`
 	Findings     []Finding    `json:"findings"`
-	Capabilities []string     `json:"capabilities"`
+	Capabilities []Capability `json:"capabilities"`
 	Assumptions  []string     `json:"assumptions"`
 	Conflicts    []string     `json:"conflicts"`
 	Unknowns     []string     `json:"unknowns"`
@@ -114,7 +150,7 @@ type AnalysisResponse struct {
 	ExactCommitSHA  string              `json:"exact_commit_sha"`
 	Evidence        []EvidenceReference `json:"evidence"`
 	Findings        []Finding           `json:"findings"`
-	Capabilities    []string            `json:"capabilities"`
+	Capabilities    []Capability        `json:"capabilities"`
 	Assumptions     []string            `json:"assumptions"`
 	Conflicts       []string            `json:"conflicts"`
 	Unknowns        []string            `json:"unknowns"`
@@ -254,7 +290,7 @@ func (s *UnderstandingService) Understand(ctx context.Context, request Understan
 	response := AnalysisResponse{
 		ContractVersion: UnderstandingContractV1, OperationID: s.newID(), Role: normalized.Role,
 		ExactCommitSHA: normalized.ExpectedCommitSHA, Evidence: []EvidenceReference{},
-		Findings: []Finding{}, Capabilities: []string{}, Assumptions: []string{},
+		Findings: []Finding{}, Capabilities: []Capability{}, Assumptions: []string{},
 		Conflicts: []string{}, Unknowns: []string{}, Status: "not_configured", ErrorCode: "provider_not_configured",
 		Provider: ProviderMetadata{ID: providerID, Status: "not_configured", ErrorCode: "provider_not_configured"},
 	}
@@ -561,22 +597,45 @@ func validateStructuredOutput(output StructuredOutput, role AnalysisRole, eviden
 	for _, ref := range evidence {
 		allowed[ref.Path] = struct{}{}
 	}
+	findingIDs := make(map[string]struct{}, len(output.Findings))
 	for _, finding := range output.Findings {
-		if finding.ID == "" || len(finding.ID) > 128 || finding.Statement == "" || len(finding.Statement) > MaxAnalysisStringBytes || !finding.KnowledgeState.Valid() {
+		if finding.ID == "" || len(finding.ID) > 128 || finding.Area == "" || len(finding.Area) > 128 || finding.Statement == "" || len(finding.Statement) > MaxAnalysisStringBytes || !finding.KnowledgeState.Valid() {
 			return ErrProviderOutput
 		}
-		if unsafeProviderString(finding.ID) || unsafeProviderString(finding.Statement) {
+		if unsafeProviderString(finding.ID) || unsafeProviderString(finding.Area) || unsafeProviderString(finding.Statement) {
 			return ErrProviderOutput
 		}
-		if evidence != nil {
-			for _, evidencePath := range finding.EvidencePaths {
-				if _, ok := allowed[evidencePath]; !ok || unsafeProviderString(evidencePath) {
-					return ErrProviderOutput
-				}
-			}
+		if _, exists := findingIDs[finding.ID]; exists {
+			return ErrProviderOutput
+		}
+		findingIDs[finding.ID] = struct{}{}
+		if err := validateEvidencePaths(finding.EvidencePaths, finding.KnowledgeState, allowed, evidence != nil); err != nil {
+			return err
 		}
 	}
-	for _, values := range [][]string{output.Capabilities, output.Assumptions, output.Conflicts, output.Unknowns} {
+	if !hasRequiredCoverage(role, output.Findings) {
+		return ErrProviderOutput
+	}
+	capabilityIDs := make(map[string]struct{}, len(output.Capabilities))
+	for _, capability := range output.Capabilities {
+		if capability.ID == "" || len(capability.ID) > 128 || capability.Name == "" || len(capability.Name) > MaxAnalysisStringBytes || capability.Actor == "" || len(capability.Actor) > MaxAnalysisStringBytes || capability.VerifiedBehavior == "" || len(capability.VerifiedBehavior) > MaxAnalysisStringBytes || !capability.ImplementationStatus.Valid() || !capability.KnowledgeState.Valid() {
+			return ErrProviderOutput
+		}
+		if unsafeProviderString(capability.ID) || unsafeProviderString(capability.Name) || unsafeProviderString(capability.Actor) || unsafeProviderString(capability.VerifiedBehavior) {
+			return ErrProviderOutput
+		}
+		if _, exists := capabilityIDs[capability.ID]; exists {
+			return ErrProviderOutput
+		}
+		capabilityIDs[capability.ID] = struct{}{}
+		if capability.Confidence != nil && (math.IsNaN(*capability.Confidence) || math.IsInf(*capability.Confidence, 0) || *capability.Confidence < 0 || *capability.Confidence > 1) {
+			return ErrProviderOutput
+		}
+		if err := validateEvidencePaths(capability.EvidencePaths, capability.KnowledgeState, allowed, evidence != nil); err != nil {
+			return err
+		}
+	}
+	for _, values := range [][]string{output.Assumptions, output.Conflicts, output.Unknowns} {
 		for _, value := range values {
 			if value == "" || len(value) > MaxAnalysisStringBytes || unsafeProviderString(value) {
 				return ErrProviderOutput
@@ -584,6 +643,61 @@ func validateStructuredOutput(output StructuredOutput, role AnalysisRole, eviden
 		}
 	}
 	return nil
+}
+
+func validateEvidencePaths(paths []string, state KnowledgeState, allowed map[string]struct{}, enforce bool) error {
+	if (state == KnowledgeObserved || state == KnowledgeDeclared) && len(paths) == 0 {
+		return ErrProviderOutput
+	}
+	if !enforce {
+		return nil
+	}
+	for _, evidencePath := range paths {
+		if _, ok := allowed[evidencePath]; !ok || unsafeProviderString(evidencePath) {
+			return ErrProviderOutput
+		}
+	}
+	return nil
+}
+
+var roleCoverage = map[AnalysisRole][]string{
+	RoleCartographer: {
+		"modules", "boundaries", "services", "applications", "frontend_backend_relationships", "data_flows",
+		"external_integrations", "api_surfaces", "deployment_structure", "architectural_risks",
+	},
+	RoleProductArchaeologist: {
+		"user_roles", "existing_capabilities", "admin_workflows", "public_workflows", "partial_functionality",
+		"missing_behavior", "contradictory_behavior", "domain_terminology",
+	},
+	RoleQualityOperations: {
+		"tests", "verification_commands", "ci_cd", "migrations", "runtime_configuration", "deployment_configuration",
+		"observability", "operational_weaknesses", "automatically_verifiable_behavior",
+	},
+	RoleSynthesizer: {
+		"m1_snapshot", "cartographer_output", "product_archaeologist_output", "quality_operations_output",
+		"knowledge_state_preservation", "business_fact_guard",
+	},
+}
+
+func RequiredCoverage(role AnalysisRole) []string {
+	return append([]string(nil), roleCoverage[role]...)
+}
+
+func hasRequiredCoverage(role AnalysisRole, findings []Finding) bool {
+	required := roleCoverage[role]
+	if len(required) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(findings))
+	for _, finding := range findings {
+		seen[finding.Area] = struct{}{}
+	}
+	for _, area := range required {
+		if _, ok := seen[area]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func providerOutputContainsUnsafeContent(contents []byte) bool {
@@ -634,7 +748,22 @@ func validateUnderstandingOperation(operation UnderstandingOperation) error {
 }
 
 func analysisPrompt(role AnalysisRole) string {
-	return fmt.Sprintf("You are the %s repository-understanding role. Use only files in the disposable evidence workspace. Return one JSON object matching the required schema. Do not use outside knowledge. Mark each statement exactly observed, declared, inferred, unknown, or conflicting and cite only supplied evidence paths.", role)
+	contract := `Use only files in the disposable evidence workspace. Return exactly one JSON object with role, findings, capabilities, assumptions, conflicts, and unknowns. Each finding requires id, area, statement, knowledge_state, and evidence_paths. Each capability requires id, name, actor, verified_behavior, implementation_status, knowledge_state, evidence_paths, and optional confidence from 0 to 1. Implementation status must be verified, partial, absent, unknown, or conflicting. Knowledge state must be observed, declared, inferred, unknown, or conflicting. Observed and declared findings and capabilities must cite at least one supplied evidence path. Keep conflicts and unknowns explicit. Do not use outside knowledge, invent business facts, expose secrets, request approval, use network access, or read outside this workspace. Emit an unknown finding for a required area when evidence is insufficient.`
+	coverage := strings.Join(roleCoverage[role], ", ")
+	var roleContract string
+	switch role {
+	case RoleCartographer:
+		roleContract = "Map the repository architecture. Required coverage areas are: " + coverage + ". Distinguish module and service boundaries, applications, frontend/backend relationships, data flows, integrations, APIs, deployment structure, and risks."
+	case RoleProductArchaeologist:
+		roleContract = "Recover only product behavior supported by repository evidence. Required coverage areas are: " + coverage + ". Identify user roles and capabilities, keep admin and public workflows separate, and report partial, missing, and contradictory behavior plus repository-native domain terms."
+	case RoleQualityOperations:
+		roleContract = "Assess quality and operations from repository evidence. Required coverage areas are: " + coverage + ". Capture tests and exact verification commands, CI/CD, migrations, runtime and deployment configuration, observability, operational weaknesses, and automatically verifiable behavior."
+	case RoleSynthesizer:
+		roleContract = "Synthesize deterministic evidence without silently resolving disagreement. Required coverage areas are: " + coverage + ". Treat m1-snapshot.json and each separate prior role file as independent inputs. Preserve observed, declared, inferred, unknown, and conflicting states; never convert inference into fact or invent a business fact."
+	default:
+		return ""
+	}
+	return fmt.Sprintf("You are the %s repository-understanding role. %s %s", role, roleContract, contract)
 }
 
 func structuredOutput(response AnalysisResponse) StructuredOutput {

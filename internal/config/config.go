@@ -104,6 +104,16 @@ type ProviderConfig struct {
 	// authoritative and prevents stale configured model/effort combinations
 	// from being advertised.
 	Models []string `yaml:"models,omitempty"`
+	// AnalysisFixture is a deliberately narrow acceptance/dev seam. It does
+	// not enable ordinary provider analysis: composition must verify the exact
+	// executable identity, ownership, mode, and digest before issuing an
+	// isolation attestation.
+	AnalysisFixture AnalysisFixtureConfig `yaml:"analysis_fixture,omitempty"`
+}
+
+type AnalysisFixtureConfig struct {
+	Environment      string `yaml:"environment,omitempty"`
+	ExecutableSHA256 string `yaml:"executable_sha256,omitempty"`
 }
 
 // Catalog reports the configured fallback models, with the default first.

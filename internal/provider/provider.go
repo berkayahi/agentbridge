@@ -133,6 +133,9 @@ type StartRequest struct {
 type RuntimeInspectionPolicy struct {
 	Environment             string
 	Target                  string
+	NetworkAllowed          bool
+	HostEnvironmentAllowed  bool
+	ProductionDataAllowed   bool
 	CredentialsAllowed      bool
 	DestructiveActionsAllow bool
 }
@@ -149,6 +152,15 @@ type RuntimeInspectionResult struct {
 func ValidateRuntimeInspectionPolicy(policy RuntimeInspectionPolicy) RuntimeInspectionResult {
 	if policy.Environment != "fixture" && policy.Environment != "dev" {
 		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection is limited to fixture/dev"}
+	}
+	if policy.NetworkAllowed {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot use unapproved network access"}
+	}
+	if policy.HostEnvironmentAllowed {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot inherit the host environment"}
+	}
+	if policy.ProductionDataAllowed {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot access production data"}
 	}
 	if policy.CredentialsAllowed {
 		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot use credentials"}
@@ -171,6 +183,8 @@ type AnalysisExecutionPolicy struct {
 	NetworkAccess           bool
 	ApprovalAllowed         bool
 	DeliveryAllowed         bool
+	HostEnvironmentAllowed  bool
+	ProductionDataAllowed   bool
 	CredentialsAllowed      bool
 	DestructiveActionsAllow bool
 	RequireOSIsolation      bool
@@ -185,6 +199,8 @@ type AnalysisPolicyResult struct {
 	NetworkAccess       bool
 	ApprovalAllowed     bool
 	DeliveryAllowed     bool
+	HostEnvironment     bool
+	ProductionData      bool
 	CredentialsAllowed  bool
 	DestructiveActions  bool
 	OSIsolationRequired bool
@@ -197,6 +213,8 @@ func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
 		NetworkAccess:       p.NetworkAccess,
 		ApprovalAllowed:     p.ApprovalAllowed,
 		DeliveryAllowed:     p.DeliveryAllowed,
+		HostEnvironment:     p.HostEnvironmentAllowed,
+		ProductionData:      p.ProductionDataAllowed,
 		CredentialsAllowed:  p.CredentialsAllowed,
 		DestructiveActions:  p.DestructiveActionsAllow,
 		OSIsolationRequired: p.RequireOSIsolation,
@@ -210,6 +228,10 @@ func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
 		result.Reason = "analysis approvals are always declined"
 	case p.DeliveryAllowed:
 		result.Reason = "analysis cannot deliver or commit"
+	case p.HostEnvironmentAllowed:
+		result.Reason = "analysis cannot inherit the host environment"
+	case p.ProductionDataAllowed:
+		result.Reason = "analysis cannot access production data"
 	case p.CredentialsAllowed:
 		result.Reason = "analysis cannot use credentials"
 	case p.DestructiveActionsAllow:
@@ -250,10 +272,31 @@ type AnalysisResult struct {
 	Output     []byte
 }
 
+// AnalysisIsolationAttestation is a host-issued capability boundary. Merely
+// sending a provider a workspaceWrite policy is not an attestation: a provider
+// protocol may restrict writes while still allowing reads of the host. The
+// analysis capability is unavailable unless a trusted launcher can attest all
+// of these independently enforced properties.
+type AnalysisIsolationAttestation struct {
+	Mechanism                    string
+	FilesystemReadsWorkspaceOnly bool
+	HostEnvironmentExcluded      bool
+	NetworkDenied                bool
+	ProductionDataDenied         bool
+	DestructiveActionsDenied     bool
+}
+
+func (a AnalysisIsolationAttestation) Valid() bool {
+	return strings.TrimSpace(a.Mechanism) != "" &&
+		a.FilesystemReadsWorkspaceOnly && a.HostEnvironmentExcluded && a.NetworkDenied &&
+		a.ProductionDataDenied && a.DestructiveActionsDenied
+}
+
 // SafeAnalysisProvider is intentionally separate from Provider.Start. A
 // normal task provider may persist sessions and permit delivery; implementing
 // this interface is an explicit promise that analysis has neither behavior.
 type SafeAnalysisProvider interface {
+	AnalysisIsolationAttestation() AnalysisIsolationAttestation
 	AnalyzeReadOnly(context.Context, AnalysisRequest) (AnalysisResult, error)
 }
 

@@ -30,7 +30,7 @@ func TestRepositoryUnderstandingHTTPIsAuthenticatedAndTyped(t *testing.T) {
 		ExactCommitSHA:  "0123456789012345678901234567890123456789",
 		Evidence:        []repositorysnapshot.EvidenceReference{},
 		Findings:        []repositorysnapshot.Finding{},
-		Capabilities:    []string{}, Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
+		Capabilities:    []repositorysnapshot.Capability{}, Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
 		Provider: repositorysnapshot.ProviderMetadata{ID: "fixture", Model: "fixture-model", Status: "completed"},
 		Status:   "completed", ResultDigest: "sha256:fixture",
 	}}
@@ -92,11 +92,16 @@ func TestRepositoryUnderstandingHTTPIsAuthenticatedAndTyped(t *testing.T) {
 		t.Fatal(err)
 	}
 	roleBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
-		ProjectID: "platform-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		ScopeID: "acceptance-scope", Role: repositorysnapshot.RoleCartographer, RepositoryProfileID: snapshot.Repository.ProfileID,
 		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, Snapshot: snapshot,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, productField := range []string{`"project_id"`, "Repository Cartographer", `"public_eligible"`, `"marketing_claim_eligible"`} {
+		if strings.Contains(string(roleBody), productField) {
+			t.Fatalf("generic engine request contains product field %q: %s", productField, roleBody)
+		}
 	}
 	for _, path := range []string{"/v1/understanding/roles", "/v1/understanding/synthesize"} {
 		unauthenticated := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(roleBody))
@@ -157,7 +162,7 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 		t.Fatal(err)
 	}
 	requestBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
-		ProjectID: "platform-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		ScopeID: "acceptance-scope", Role: repositorysnapshot.RoleCartographer, RepositoryProfileID: snapshot.Repository.ProfileID,
 		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: "custom-cartographer",
 	})
 	if err != nil {
@@ -174,25 +179,37 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 	if err := json.Unmarshal(response.Body.Bytes(), &roleResponse); err != nil {
 		t.Fatal(err)
 	}
-	if len(roleResponse.Output.Claims) != 1 || len(roleResponse.Output.Capabilities) != 1 {
+	for _, productField := range []string{`"project_id"`, "Repository Cartographer", `"review_state"`, `"public_eligible"`, `"marketing_claim_eligible"`} {
+		if strings.Contains(response.Body.String(), productField) {
+			t.Fatalf("generic engine response contains product field %q: %s", productField, response.Body.String())
+		}
+	}
+	if len(roleResponse.Output.Claims) != len(repositorysnapshot.RequiredCoverage(repositorysnapshot.RoleCartographer)) || len(roleResponse.Output.Capabilities) != 1 {
 		t.Fatalf("role output = %#v", roleResponse.Output)
 	}
 	claim := roleResponse.Output.Claims[0]
-	if claim.EvidenceDigest != snapshot.ResultDigest || len(claim.Evidence) != 1 || claim.Evidence[0].Digest != snapshot.ResultDigest {
+	if claim.EvidenceDigest != snapshot.ResultDigest || len(claim.Evidence) != 1 || claim.Evidence[0].Digest != "sha256:fixture" {
 		t.Fatalf("claim evidence digest = %#v, want %q", claim, snapshot.ResultDigest)
 	}
 	if got := roleResponse.Output.Capabilities[0].EvidenceDigest; got != snapshot.ResultDigest {
 		t.Fatalf("capability evidence digest = %q, want %q", got, snapshot.ResultDigest)
 	}
+	capability := roleResponse.Output.Capabilities[0]
+	if capability.ID != "fixture-capability" || capability.Actor != "operator" || capability.ImplementationStatus != repositorysnapshot.CapabilityPartial || capability.EvidenceState != repositorysnapshot.KnowledgeObserved || capability.Confidence == nil || *capability.Confidence != 0.75 || len(capability.Evidence) != 1 {
+		t.Fatalf("typed capability projection = %#v", capability)
+	}
+	if len(roleResponse.Output.Conflicts) != 1 || len(roleResponse.Output.Unknowns) != 1 {
+		t.Fatalf("conflicts/unknowns were dropped: %#v", roleResponse.Output)
+	}
 	for _, value := range []struct {
-		role string
+		role repositorysnapshot.AnalysisRole
 		key  string
 	}{
-		{role: "Product Archaeologist", key: "custom-archaeologist"},
-		{role: "Quality/Operations Analyst", key: "custom-quality"},
+		{role: repositorysnapshot.RoleProductArchaeologist, key: "custom-archaeologist"},
+		{role: repositorysnapshot.RoleQualityOperations, key: "custom-quality"},
 	} {
 		body, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
-			ProjectID: "platform-project", Role: value.role, RepositoryProfileID: snapshot.Repository.ProfileID,
+			ScopeID: "acceptance-scope", Role: value.role, RepositoryProfileID: snapshot.Repository.ProfileID,
 			SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: value.key,
 		})
 		if err != nil {
@@ -212,12 +229,12 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 		}
 	}
 	synthesisBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
-		ProjectID: "platform-project", Role: "Baseline Synthesizer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		ScopeID: "acceptance-scope", Role: repositorysnapshot.RoleSynthesizer, RepositoryProfileID: snapshot.Repository.ProfileID,
 		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID, IdempotencyKey: "custom-synth",
-		PriorOutputs: []json.RawMessage{
-			json.RawMessage(`{"role":"Repository Cartographer","idempotency_key":"custom-cartographer"}`),
-			json.RawMessage(`{"role":"Product Archaeologist","idempotency_key":"custom-archaeologist"}`),
-			json.RawMessage(`{"role":"Quality/Operations Analyst","idempotency_key":"custom-quality"}`),
+		PriorOutputs: []localcontrol.UnderstandingPriorOutputReference{
+			{Role: repositorysnapshot.RoleCartographer, IdempotencyKey: "custom-cartographer"},
+			{Role: repositorysnapshot.RoleProductArchaeologist, IdempotencyKey: "custom-archaeologist"},
+			{Role: repositorysnapshot.RoleQualityOperations, IdempotencyKey: "custom-quality"},
 		},
 	})
 	if err != nil {
@@ -234,7 +251,7 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 	forged := snapshot
 	forged.ExactCommitSHA = strings.Repeat("a", 40)
 	forgedRequest, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
-		ProjectID: "forged-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		ScopeID: "forged-scope", Role: repositorysnapshot.RoleCartographer, RepositoryProfileID: snapshot.Repository.ProfileID,
 		SnapshotCommit: forged.ExactCommitSHA, SnapshotDigest: forged.ResultDigest, Snapshot: forged,
 	})
 	if err != nil {
@@ -276,14 +293,34 @@ func (roleEvidence) RetrieveEvidence(_ context.Context, _ repositorysnapshot.Con
 type roleProvider struct{}
 
 func (roleProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {
-	findings := []repositorysnapshot.Finding{}
-	if request.Role != repositorysnapshot.RoleSynthesizer {
-		findings = []repositorysnapshot.Finding{{ID: "finding-1", Statement: "fixture observation", KnowledgeState: repositorysnapshot.KnowledgeObserved, EvidencePaths: []string{"openapi.yaml"}}}
+	areas := repositorysnapshot.RequiredCoverage(request.Role)
+	findings := make([]repositorysnapshot.Finding, 0, len(areas))
+	for index, area := range areas {
+		finding := repositorysnapshot.Finding{ID: "finding-" + string(rune('a'+index)), Area: area, Statement: "fixture unknown for " + area, KnowledgeState: repositorysnapshot.KnowledgeUnknown}
+		if index == 0 {
+			finding.Statement = "fixture observation"
+			finding.KnowledgeState = repositorysnapshot.KnowledgeObserved
+			if request.Role == repositorysnapshot.RoleSynthesizer {
+				finding.EvidencePaths = []string{"m1-snapshot.json"}
+			} else {
+				finding.EvidencePaths = []string{"openapi.yaml"}
+			}
+		}
+		findings = append(findings, finding)
+	}
+	confidence := 0.75
+	capabilities := []repositorysnapshot.Capability{{
+		ID: "fixture-capability", Name: "Fixture capability", Actor: "operator", VerifiedBehavior: "Fixture behavior is partially implemented.",
+		ImplementationStatus: repositorysnapshot.CapabilityPartial, KnowledgeState: repositorysnapshot.KnowledgeObserved,
+		EvidencePaths: []string{"openapi.yaml"}, Confidence: &confidence,
+	}}
+	if request.Role == repositorysnapshot.RoleSynthesizer {
+		capabilities[0].EvidencePaths = []string{"m1-snapshot.json"}
 	}
 	output, err := json.Marshal(repositorysnapshot.StructuredOutput{
 		Role:         request.Role,
 		Findings:     findings,
-		Capabilities: []string{"fixture capability"}, Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
+		Capabilities: capabilities, Assumptions: []string{}, Conflicts: []string{"fixture conflict"}, Unknowns: []string{"fixture unknown"},
 	})
 	if err != nil {
 		return repositorysnapshot.ProviderResult{}, err

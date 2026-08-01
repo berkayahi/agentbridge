@@ -48,6 +48,12 @@ providers:
   codex:
     executable: /usr/local/bin/codex
     model: gpt-5.6-terra
+    # Deterministic fixture/dev acceptance only. Ordinary Codex providers must
+    # omit this block and remain unavailable for repository analysis until a
+    # real workspace-read isolation mechanism can attest the boundary.
+    # analysis_fixture:
+    #   environment: fixture
+    #   executable_sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
   claude:
     executable: /usr/local/bin/claude
     model: opus

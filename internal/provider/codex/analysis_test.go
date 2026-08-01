@@ -36,7 +36,7 @@ func TestAnalyzeReadOnlyUsesExplicitSandboxAndDoesNotPersistSyntheticSession(t *
 		return nil
 	}
 	adapter := NewAdapter(rpc, AdapterConfig{
-		AnalysisIsolation: true,
+		AnalysisIsolation: testAnalysisIsolation(),
 		Sessions:          sessionSinkFunc(func(context.Context, provider.Session) error { return persistErr }),
 	})
 	t.Cleanup(adapter.Close)
@@ -86,7 +86,7 @@ func TestAnalyzeReadOnlyDeclinesApprovalWithoutPersistingOrEmittingApprovalEvent
 		return nil
 	}
 	adapter := NewAdapter(rpc, AdapterConfig{
-		AnalysisIsolation: true,
+		AnalysisIsolation: testAnalysisIsolation(),
 		Approvals:         approvalSinkFunc(func(context.Context, ApprovalRequest) error { approvalSaves++; return nil }),
 	})
 	t.Cleanup(adapter.Close)
@@ -128,7 +128,7 @@ func TestAnalyzeReadOnlyCancellationInterruptsAndCleansUpTurn(t *testing.T) {
 		}
 		return nil
 	}
-	adapter := NewAdapter(rpc, AdapterConfig{AnalysisIsolation: true})
+	adapter := NewAdapter(rpc, AdapterConfig{AnalysisIsolation: testAnalysisIsolation()})
 	t.Cleanup(adapter.Close)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -155,5 +155,12 @@ func TestAnalyzeReadOnlyCancellationInterruptsAndCleansUpTurn(t *testing.T) {
 	}
 	if err := adapter.Interrupt(context.Background(), provider.Session{ThreadID: "analysis-cancel-thread"}); err == nil {
 		t.Fatal("canceled analysis session was not cleaned up")
+	}
+}
+
+func testAnalysisIsolation() provider.AnalysisIsolationAttestation {
+	return provider.AnalysisIsolationAttestation{
+		Mechanism: "test-sandbox", FilesystemReadsWorkspaceOnly: true, HostEnvironmentExcluded: true,
+		NetworkDenied: true, ProductionDataDenied: true, DestructiveActionsDenied: true,
 	}
 }

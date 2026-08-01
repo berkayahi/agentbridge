@@ -58,9 +58,9 @@ type AdapterConfig struct {
 	ApprovalUser    func(provider.ID) string
 	ApprovalTimeout time.Duration
 	Now             func() time.Time
-	// AnalysisIsolation must only be enabled when the configured app server
-	// provides an OS-enforced workspace sandbox for the explicit policy below.
-	AnalysisIsolation bool
+	// AnalysisIsolation must come from the trusted process launcher that
+	// enforces the boundary, never from the provider protocol itself.
+	AnalysisIsolation provider.AnalysisIsolationAttestation
 }
 
 type sessionState struct {
@@ -84,7 +84,7 @@ type Adapter struct {
 	approvalUser      func(provider.ID) string
 	approvalTimeout   time.Duration
 	now               func() time.Time
-	analysisIsolation bool
+	analysisIsolation provider.AnalysisIsolationAttestation
 
 	mu        sync.Mutex
 	threads   map[string]*sessionState
@@ -116,6 +116,10 @@ func NewAdapter(rpc rpcTransport, cfg AdapterConfig) *Adapter {
 }
 
 func (a *Adapter) Name() workmodel.Provider { return workmodel.CodexSubscription }
+
+func (a *Adapter) AnalysisIsolationAttestation() provider.AnalysisIsolationAttestation {
+	return a.analysisIsolation
+}
 
 func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provider.Session, <-chan provider.Event, error) {
 	if err := req.Input.Validate(); err != nil {
@@ -154,7 +158,7 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 // has no task row and must never invent one.
 func (a *Adapter) AnalyzeReadOnly(ctx context.Context, request provider.AnalysisRequest) (provider.AnalysisResult, error) {
 	policy := request.Policy.Validate()
-	if !policy.Allowed || !a.analysisIsolation {
+	if !policy.Allowed || !a.analysisIsolation.Valid() {
 		return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
 	}
 	if request.WorkingDirectory != request.Policy.WorkspacePath || request.TaskID.String() == "" {

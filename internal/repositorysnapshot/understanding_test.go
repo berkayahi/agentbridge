@@ -279,7 +279,7 @@ func TestUnderstandingStrictProviderOutputApprovalAndIdempotency(t *testing.T) {
 		})
 	}
 
-	provider := &understandingProvider{output: []byte(`{"role":"cartographer","findings":[],"capabilities":[],"assumptions":[],"conflicts":[],"unknowns":[]}`)}
+	provider := &understandingProvider{output: validStructuredOutput(repositorysnapshot.RoleCartographer)}
 	service := newUnderstandingTestService(t, provider)
 	request := understandingRequest("idempotent", repositorysnapshot.RoleCartographer)
 	first, err := service.Understand(context.Background(), request)
@@ -355,7 +355,7 @@ type reportedProvider struct{}
 
 func (reportedProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {
 	output, _ := json.Marshal(repositorysnapshot.StructuredOutput{
-		Role: request.Role, Findings: []repositorysnapshot.Finding{}, Capabilities: []string{},
+		Role: request.Role, Findings: coverageFindings(request.Role), Capabilities: []repositorysnapshot.Capability{},
 		Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
 	})
 	return repositorysnapshot.ProviderResult{ProviderID: "reported", Model: "reported-model", Output: output}, nil
@@ -365,10 +365,30 @@ type roleUnderstandingProvider struct{}
 
 func (roleUnderstandingProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {
 	output, _ := json.Marshal(repositorysnapshot.StructuredOutput{
-		Role: request.Role, Findings: []repositorysnapshot.Finding{}, Capabilities: []string{},
+		Role: request.Role, Findings: coverageFindings(request.Role), Capabilities: []repositorysnapshot.Capability{},
 		Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
 	})
 	return repositorysnapshot.ProviderResult{ProviderID: "fixture", Model: "fixture-model", Output: output}, nil
+}
+
+func validStructuredOutput(role repositorysnapshot.AnalysisRole) []byte {
+	output, _ := json.Marshal(repositorysnapshot.StructuredOutput{
+		Role: role, Findings: coverageFindings(role), Capabilities: []repositorysnapshot.Capability{},
+		Assumptions: []string{}, Conflicts: []string{}, Unknowns: []string{},
+	})
+	return output
+}
+
+func coverageFindings(role repositorysnapshot.AnalysisRole) []repositorysnapshot.Finding {
+	areas := repositorysnapshot.RequiredCoverage(role)
+	findings := make([]repositorysnapshot.Finding, 0, len(areas))
+	for index, area := range areas {
+		findings = append(findings, repositorysnapshot.Finding{
+			ID: "finding-" + string(rune('a'+index)), Area: area, Statement: "No supported conclusion for " + area,
+			KnowledgeState: repositorysnapshot.KnowledgeUnknown,
+		})
+	}
+	return findings
 }
 
 func (p *understandingProvider) Analyze(_ context.Context, request repositorysnapshot.ProviderRequest) (repositorysnapshot.ProviderResult, error) {

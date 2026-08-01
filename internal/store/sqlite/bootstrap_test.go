@@ -23,7 +23,7 @@ func TestOpenV2FreshBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer check.Close()
-	for _, table := range []string{"migration_ledger", "local_projects", "local_boards", "local_task_contexts", "local_control_events", "local_command_idempotency", "local_devices", "local_pairing_challenges", "local_task_devices", "local_device_link_counters", "local_device_commands", "local_tasks", "executions", "sessions", "repository_bindings", "git_checkpoints", "git_operations", "command_inbox", "command_results", "repository_snapshot_operations"} {
+	for _, table := range []string{"migration_ledger", "local_projects", "local_boards", "local_task_contexts", "local_control_events", "local_command_idempotency", "local_devices", "local_pairing_challenges", "local_task_devices", "local_device_link_counters", "local_device_commands", "local_tasks", "executions", "sessions", "repository_bindings", "git_checkpoints", "git_operations", "command_inbox", "command_results", "repository_snapshot_operations", "repository_understanding_operations"} {
 		var count int
 		if err := check.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count); err != nil {
 			t.Fatal(err)

@@ -23,6 +23,11 @@ const (
 
 var ErrInvalidInput = errors.New("invalid provider input")
 
+var (
+	ErrAnalysisUnavailable      = errors.New("provider read-only analysis is unavailable")
+	ErrAnalysisApprovalDeclined = errors.New("provider read-only analysis approval was declined")
+)
+
 // ID is an immutable identifier. Construct it with NewID or MustID.
 type ID struct{ value string }
 
@@ -120,6 +125,125 @@ type StartRequest struct {
 	// may write to — a repository's toolchain caches, typically. Empty leaves
 	// the decision to the host's own provider policy.
 	WritablePaths []string
+}
+
+// AnalysisExecutionPolicy is the explicit provider policy for repository
+// understanding. The workspace is disposable and the only writable root;
+// all other capabilities are denied.
+type AnalysisExecutionPolicy struct {
+	WorkspacePath           string
+	WritablePaths           []string
+	NetworkAccess           bool
+	ApprovalAllowed         bool
+	DeliveryAllowed         bool
+	HostEnvironmentAllowed  bool
+	ProductionDataAllowed   bool
+	CredentialsAllowed      bool
+	DestructiveActionsAllow bool
+	RequireOSIsolation      bool
+}
+
+// AnalysisPolicyResult is returned by ValidateAnalysisExecutionPolicy so
+// callers can expose a truthful unavailable state without running a provider.
+type AnalysisPolicyResult struct {
+	Allowed             bool
+	WorkspaceOnly       bool
+	NetworkAccess       bool
+	ApprovalAllowed     bool
+	DeliveryAllowed     bool
+	HostEnvironment     bool
+	ProductionData      bool
+	CredentialsAllowed  bool
+	DestructiveActions  bool
+	OSIsolationRequired bool
+	Reason              string
+}
+
+func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
+	result := AnalysisPolicyResult{
+		WorkspaceOnly:       filepath.IsAbs(p.WorkspacePath) && len(p.WritablePaths) == 0,
+		NetworkAccess:       p.NetworkAccess,
+		ApprovalAllowed:     p.ApprovalAllowed,
+		DeliveryAllowed:     p.DeliveryAllowed,
+		HostEnvironment:     p.HostEnvironmentAllowed,
+		ProductionData:      p.ProductionDataAllowed,
+		CredentialsAllowed:  p.CredentialsAllowed,
+		DestructiveActions:  p.DestructiveActionsAllow,
+		OSIsolationRequired: p.RequireOSIsolation,
+	}
+	switch {
+	case !result.WorkspaceOnly:
+		result.Reason = "analysis requires an absolute disposable workspace and no external writable paths"
+	case p.NetworkAccess:
+		result.Reason = "analysis network access is denied"
+	case p.ApprovalAllowed:
+		result.Reason = "analysis approvals are always declined"
+	case p.DeliveryAllowed:
+		result.Reason = "analysis cannot deliver or commit"
+	case p.HostEnvironmentAllowed:
+		result.Reason = "analysis cannot inherit the host environment"
+	case p.ProductionDataAllowed:
+		result.Reason = "analysis cannot access production data"
+	case p.CredentialsAllowed:
+		result.Reason = "analysis cannot use credentials"
+	case p.DestructiveActionsAllow:
+		result.Reason = "analysis cannot perform destructive actions"
+	case !p.RequireOSIsolation:
+		result.Reason = "analysis requires OS isolation"
+	default:
+		result.Allowed = true
+	}
+	return result
+}
+
+func NewReadOnlyAnalysisPolicy(workspacePath string) AnalysisExecutionPolicy {
+	return AnalysisExecutionPolicy{
+		WorkspacePath: workspacePath, RequireOSIsolation: true,
+	}
+}
+
+// AnalysisRequest is passed only to providers that explicitly implement the
+// non-persistent, read-only analysis capability.
+type AnalysisRequest struct {
+	TaskID           ID
+	Input            Input
+	WorkingDirectory string
+	Model            string
+	Policy           AnalysisExecutionPolicy
+}
+
+type AnalysisResult struct {
+	ProviderID workmodel.Provider
+	Model      string
+	Output     []byte
+}
+
+// AnalysisIsolationAttestation is a host-issued capability boundary. Merely
+// sending a provider a workspaceWrite policy is not an attestation: a provider
+// protocol may restrict writes while still allowing reads of the host. The
+// analysis capability is unavailable unless a trusted launcher can attest all
+// of these independently enforced properties.
+type AnalysisIsolationAttestation struct {
+	Mechanism                    string
+	FilesystemReadsWorkspaceOnly bool
+	HostEnvironmentExcluded      bool
+	NetworkDenied                bool
+	ProductionDataDenied         bool
+	DestructiveActionsDenied     bool
+}
+
+func (a AnalysisIsolationAttestation) Valid() bool {
+	return strings.TrimSpace(a.Mechanism) != "" &&
+		a.FilesystemReadsWorkspaceOnly && a.HostEnvironmentExcluded && a.NetworkDenied &&
+		a.ProductionDataDenied && a.DestructiveActionsDenied
+}
+
+// SafeAnalysisProvider is intentionally separate from Provider.Start. A
+// normal task provider may persist sessions and permit delivery; implementing
+// this interface is an explicit promise that analysis has neither behavior.
+type SafeAnalysisProvider interface {
+	AnalysisIsolationAttestation() AnalysisIsolationAttestation
+	AnalyzeReadOnly(context.Context, AnalysisRequest) (AnalysisResult, error)
 }
 
 type ResumeRequest struct {

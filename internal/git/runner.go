@@ -32,7 +32,26 @@ func (r Runner) RunWithEnvironment(ctx context.Context, dir string, environment 
 	return r.run(ctx, dir, mergeEnvironment(gitEnvironment(r.Environment), environment), args...)
 }
 
+// RunWithEnvironmentUnredacted is restricted to an in-process consumer that
+// must inspect bytes before deciding whether they are safe to retain. Stdout
+// is never included in an error; stderr remains redacted.
+func (r Runner) RunWithEnvironmentUnredacted(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
+	return r.runUnredacted(ctx, dir, mergeEnvironment(gitEnvironment(r.Environment), environment), args...)
+}
+
 func (r Runner) run(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
+	return r.runWithRedaction(ctx, dir, environment, args...)
+}
+
+func (r Runner) runUnredacted(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
+	return r.runCommand(ctx, dir, environment, args, false)
+}
+
+func (r Runner) runWithRedaction(ctx context.Context, dir string, environment []string, args ...string) (RunResult, error) {
+	return r.runCommand(ctx, dir, environment, args, true)
+}
+
+func (r Runner) runCommand(ctx context.Context, dir string, environment []string, args []string, redactStdout bool) (RunResult, error) {
 	if err := ctx.Err(); err != nil {
 		return RunResult{}, err
 	}
@@ -51,7 +70,10 @@ func (r Runner) run(ctx context.Context, dir string, environment []string, args 
 	stdout.limit, stderr.limit = limit, limit
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
-	result := RunResult{Stdout: r.redact(stdout.String()), Stderr: r.redact(stderr.String()), Summary: r.summary(args)}
+	result := RunResult{Stdout: stdout.String(), Stderr: r.redact(stderr.String()), Summary: r.summary(args)}
+	if redactStdout {
+		result.Stdout = r.redact(result.Stdout)
+	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return result, ctxErr
 	}

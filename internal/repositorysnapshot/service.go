@@ -130,6 +130,23 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (Response, erro
 	return response, nil
 }
 
+// LoadOperation returns the exact persisted snapshot identified by its
+// operation ID. Higher-level adapters use this narrow lookup to bind
+// caller-provided snapshot metadata to the snapshot service's durable result.
+func (s *Service) LoadOperation(ctx context.Context, operationID string) (Operation, error) {
+	if s == nil || strings.TrimSpace(operationID) == "" {
+		return Operation{}, ErrInvalidRequest
+	}
+	operation, err := s.store.LoadRepositorySnapshotByID(ctx, operationID)
+	if err != nil {
+		return Operation{}, err
+	}
+	if err := validatePersistedOperation(operation); err != nil {
+		return Operation{}, err
+	}
+	return operation, nil
+}
+
 func normalizeRequest(request Request) (Request, error) {
 	if !safeIdentifier.MatchString(request.RepositoryProfileID) ||
 		!safeIdentifier.MatchString(request.AnalyzerVersion) ||
@@ -197,6 +214,23 @@ func digestResponse(response Response) (string, error) {
 	}
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+// VerifyResponseDigest checks that a snapshot is the exact persisted result,
+// rather than merely a response with a matching commit. It is exported so
+// downstream analysis boundaries can bind to the same canonical digest.
+func VerifyResponseDigest(response Response) error {
+	if response.ContractVersion != RepositorySnapshotV1 || response.ResultDigest == "" {
+		return ErrInvalidRequest
+	}
+	digest, err := digestResponse(response)
+	if err != nil {
+		return err
+	}
+	if digest != response.ResultDigest {
+		return ErrConflict
+	}
+	return nil
 }
 
 func validatePersistedOperation(operation Operation) error {

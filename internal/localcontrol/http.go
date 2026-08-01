@@ -59,6 +59,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/analytics/usage", a.usageAnalytics)
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
+	mux.HandleFunc("POST /v1/repository-understanding", a.createRepositoryUnderstanding)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -93,6 +94,15 @@ func (a *API) createRepositorySnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := a.service.CreateRepositorySnapshot(r.Context(), request)
+	writeResult(w, http.StatusCreated, response, err)
+}
+
+func (a *API) createRepositoryUnderstanding(w http.ResponseWriter, r *http.Request) {
+	var request RepositoryUnderstandingRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	response, err := a.service.UnderstandRepository(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
 }
 
@@ -512,10 +522,22 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, "request_failed"
 	switch {
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, repositorysnapshot.ErrInvalidRequest),
-		errors.Is(err, repositorysnapshot.ErrRefNotAllowed), errors.Is(err, repositorysnapshot.ErrScopeNotFound):
+		errors.Is(err, repositorysnapshot.ErrRefNotAllowed), errors.Is(err, repositorysnapshot.ErrScopeNotFound),
+		errors.Is(err, repositorysnapshot.ErrPathNotAllowed), errors.Is(err, repositorysnapshot.ErrPathNotFound),
+		errors.Is(err, repositorysnapshot.ErrUnknownRole):
 		status, code = http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, repositorysnapshot.ErrCommitMismatch):
+		status, code = http.StatusConflict, "exact_commit_mismatch"
 	case errors.Is(err, repositorysnapshot.ErrNotConfigured):
 		status, code = http.StatusNotFound, "repository_not_configured"
+	case errors.Is(err, repositorysnapshot.ErrProviderNotConfigured), errors.Is(err, repositorysnapshot.ErrProviderPolicy):
+		status, code = http.StatusServiceUnavailable, "provider_not_configured"
+	case errors.Is(err, repositorysnapshot.ErrProviderApproval):
+		status, code = http.StatusForbidden, "provider_approval_declined"
+	case errors.Is(err, repositorysnapshot.ErrProviderOutput), errors.Is(err, repositorysnapshot.ErrProviderOutputBounds):
+		status, code = http.StatusBadGateway, "provider_output_invalid"
+	case errors.Is(err, repositorysnapshot.ErrSecretLikeFile), errors.Is(err, repositorysnapshot.ErrBinaryEvidence), errors.Is(err, repositorysnapshot.ErrEvidenceMissing):
+		status, code = http.StatusUnprocessableEntity, "evidence_unavailable"
 	case errors.Is(err, repositorysnapshot.ErrBoundsExceeded):
 		status, code = http.StatusUnprocessableEntity, "snapshot_bounds_exceeded"
 	case errors.Is(err, repositorysnapshot.ErrConflict):

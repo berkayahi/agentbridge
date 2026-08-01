@@ -125,5 +125,6 @@ type Operation struct {
 
 type Store interface {
 	LoadRepositorySnapshot(context.Context, string) (Operation, error)
+	LoadRepositorySnapshotByID(context.Context, string) (Operation, error)
 	SaveRepositorySnapshot(context.Context, Operation) error
 }

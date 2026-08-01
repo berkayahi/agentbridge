@@ -83,6 +83,15 @@ func (c Config) validateRuntime() error {
 		if name != "codex" && name != "claude" {
 			return errors.New("provider runtime must be explicitly codex or claude")
 		}
+		if err := validateAnalysisFixture(name, provider.AnalysisFixture); err != nil {
+			return err
+		}
+		if provider.AnalysisFixture.Implementation != "" {
+			if provider.Executable != "" || provider.Model != "" || len(provider.Models) != 0 {
+				return errors.New("in-process analysis fixture must not configure an external executable or model")
+			}
+			continue
+		}
 		if !filepath.IsAbs(provider.Executable) {
 			return errors.New("provider executable must be absolute")
 		}
@@ -112,6 +121,24 @@ func (c Config) validateRuntime() error {
 	}
 	if _, ok := c.Repositories[c.DefaultRepository]; !ok {
 		return errors.New("default_repository must name a configured repository")
+	}
+	return nil
+}
+
+func validateAnalysisFixture(providerName string, fixture AnalysisFixtureConfig) error {
+	environment := strings.TrimSpace(fixture.Environment)
+	implementation := strings.TrimSpace(fixture.Implementation)
+	if environment == "" && implementation == "" {
+		return nil
+	}
+	if providerName != "codex" {
+		return errors.New("analysis_fixture is supported only on the Codex provider slot")
+	}
+	if environment != "fixture" && environment != "dev" {
+		return errors.New("analysis_fixture environment must be fixture or dev")
+	}
+	if implementation != "in_process_deterministic_v1" {
+		return errors.New("analysis_fixture implementation must be in_process_deterministic_v1")
 	}
 	return nil
 }

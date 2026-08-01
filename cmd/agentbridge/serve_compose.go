@@ -504,11 +504,16 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
+	repositoryUnderstanding, err := composeRepositoryUnderstanding(data, workspace, providers, cfg)
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots,
-		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -760,11 +765,15 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
+	repositoryUnderstanding, err := composeRepositoryUnderstanding(data, workspace, providers, cfg)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots,
-		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -872,7 +881,7 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 	adapters := make([]bridgeRuntime.Adapter, 0, 2)
 	var closers []io.Closer
 	sink := providerSessionSink{store: data}
-	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok && value.AnalysisFixture.Implementation == "" {
 		process, err := codex.StartAppServer(ctx, value.Executable, environment)
 		if err != nil {
 			return nil, nil, closers, err
@@ -881,6 +890,10 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },
+			// Codex app-server's workspaceWrite policy alone does not attest
+			// workspace-only reads. Ordinary Codex therefore always receives the
+			// zero attestation and remains ineligible for understanding analysis.
+			AnalysisIsolation: provider.AnalysisIsolationAttestation{},
 		})
 		providers[workmodel.CodexSubscription] = adapter
 		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
@@ -912,7 +925,11 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		providers[workmodel.ClaudeSubscription] = adapter
 		adapters = append(adapters, claude.NewRuntimeAdapter(adapter))
 	}
-	if len(providers) == 0 {
+	fixtureOnly := false
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
+		fixtureOnly = value.AnalysisFixture.Implementation == "in_process_deterministic_v1"
+	}
+	if len(providers) == 0 && !fixtureOnly {
 		return nil, nil, closers, errors.New("no supported provider is configured")
 	}
 	runtimes, err := bridgeRuntime.NewRegistry(adapters...)
@@ -1233,6 +1250,43 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
 			}),
 		}},
+	})
+}
+
+func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *workspaceAdapter, providers map[workmodel.Provider]provider.Provider, cfg config.Config) (*repositorysnapshot.UnderstandingService, error) {
+	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers)+1)
+	for name, value := range providers {
+		safe, ok := value.(provider.SafeAnalysisProvider)
+		if !ok || !safe.AnalysisIsolationAttestation().Valid() {
+			// Persistent task providers are not analysis providers unless they
+			// explicitly expose an attested non-persistent isolation boundary.
+			continue
+		}
+		configured[string(name)] = repositorysnapshot.NativeAnalysisProvider{Provider: value, DefaultModel: cfg.Providers[string(name)].Model}
+	}
+	if codexConfig, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok && codexConfig.AnalysisFixture.Implementation == "in_process_deterministic_v1" {
+		configured[string(workmodel.CodexSubscription)] = repositorysnapshot.NewDeterministicFixtureProvider("agentbridge-fixture", "deterministic-v1")
+	}
+	defaultProvider := ""
+	if _, ok := configured[string(workmodel.CodexSubscription)]; ok {
+		defaultProvider = string(workmodel.CodexSubscription)
+	} else if _, ok := configured[string(workmodel.ClaudeSubscription)]; ok {
+		defaultProvider = string(workmodel.ClaudeSubscription)
+	}
+	for name := range configured {
+		if defaultProvider == "" {
+			defaultProvider = name
+		}
+	}
+	return repositorysnapshot.NewUnderstandingService(repositorysnapshot.UnderstandingConfig{
+		Store: data, Catalog: repositoryCatalog{workspace: workspace},
+		Evidence: repositorysnapshot.GitEvidenceReader{Git: bridgegit.Runner{
+			MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput,
+			Redactor: security.NewRedactor(security.Config{
+				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
+			}),
+		}},
+		Providers: configured, DefaultProvider: defaultProvider,
 	})
 }
 

@@ -551,10 +551,16 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 	result := make([]localcontrol.ProviderInfo, 0, len(ids))
 	for _, id := range ids {
 		value := c.providers[id]
+		analysisFixture := value.AnalysisFixture.Implementation == "in_process_deterministic_v1"
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
 		profile := localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available}
-		if c.runtimes != nil {
+		// The deterministic analysis fixture deliberately has no task runtime:
+		// composeProviders starts no adapter or external process for it. Keep the
+		// catalog entry (and Available=false) without treating that absence as a
+		// failed runtime lookup. This lets fixture/dev clients observe a live
+		// provider catalog without advertising task execution capability.
+		if c.runtimes != nil && !analysisFixture {
 			adapter, runtimeErr := c.runtimes.Get(id)
 			if runtimeErr != nil {
 				return nil, fmt.Errorf("load %s runtime capabilities: %w", id, runtimeErr)

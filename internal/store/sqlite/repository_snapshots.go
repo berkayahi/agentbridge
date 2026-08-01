@@ -11,16 +11,24 @@ import (
 )
 
 func (s *RuntimeStore) LoadRepositorySnapshot(ctx context.Context, idempotencyKey string) (repositorysnapshot.Operation, error) {
+	return s.loadRepositorySnapshot(ctx, "idempotency_key", idempotencyKey)
+}
+
+func (s *RuntimeStore) LoadRepositorySnapshotByID(ctx context.Context, operationID string) (repositorysnapshot.Operation, error) {
+	return s.loadRepositorySnapshot(ctx, "id", operationID)
+}
+
+func (s *RuntimeStore) loadRepositorySnapshot(ctx context.Context, column, value string) (repositorysnapshot.Operation, error) {
 	var operation repositorysnapshot.Operation
 	var response []byte
 	var requestedAt, completedAt string
-	err := s.db.QueryRowContext(ctx, `
+	query := fmt.Sprintf(`
 		SELECT id, idempotency_key, repository_profile_id, requested_ref,
 		       scoped_root, analyzer_version, request_digest, exact_commit_sha,
 		       result_digest, status, response_payload, requested_at, completed_at
 		FROM repository_snapshot_operations
-		WHERE idempotency_key = ?`, idempotencyKey,
-	).Scan(
+		WHERE %s = ?`, column)
+	err := s.db.QueryRowContext(ctx, query, value).Scan(
 		&operation.ID, &operation.IdempotencyKey, &operation.RepositoryProfileID,
 		&operation.RequestedRef, &operation.ScopedRoot, &operation.AnalyzerVersion,
 		&operation.RequestDigest, &operation.ExactCommitSHA, &operation.ResultDigest,

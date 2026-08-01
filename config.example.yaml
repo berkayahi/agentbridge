@@ -48,6 +48,12 @@ providers:
   codex:
     executable: /usr/local/bin/codex
     model: gpt-5.6-terra
+    # For deterministic fixture/dev acceptance, remove executable/model and
+    # use the block below instead. Fixture mode rejects external provider
+    # settings and starts no provider process.
+    # analysis_fixture:
+    #   environment: fixture
+    #   implementation: in_process_deterministic_v1
   claude:
     executable: /usr/local/bin/claude
     model: opus

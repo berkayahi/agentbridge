@@ -121,6 +121,26 @@ func TestEventContractContainsOnlyObservableFields(t *testing.T) {
 	}
 }
 
+func TestReadOnlyAnalysisPolicyFailsClosed(t *testing.T) {
+	workspace := t.TempDir()
+	if result := provider.NewReadOnlyAnalysisPolicy(workspace).Validate(); !result.Allowed || !result.WorkspaceOnly || result.NetworkAccess || result.ApprovalAllowed || result.DeliveryAllowed || result.HostEnvironment || result.ProductionData || result.CredentialsAllowed || result.DestructiveActions {
+		t.Fatalf("safe policy result = %#v", result)
+	}
+	unsafe := provider.NewReadOnlyAnalysisPolicy(workspace)
+	unsafe.WritablePaths = []string{filepath.Join(workspace, "..", "cache")}
+	if result := unsafe.Validate(); result.Allowed || result.Reason == "" {
+		t.Fatalf("external writable path was accepted: %#v", result)
+	}
+	attestation := provider.AnalysisIsolationAttestation{Mechanism: "test", FilesystemReadsWorkspaceOnly: true, HostEnvironmentExcluded: true, NetworkDenied: true, ProductionDataDenied: true, DestructiveActionsDenied: true}
+	if !attestation.Valid() {
+		t.Fatalf("complete attestation rejected: %#v", attestation)
+	}
+	attestation.HostEnvironmentExcluded = false
+	if attestation.Valid() {
+		t.Fatalf("incomplete attestation accepted: %#v", attestation)
+	}
+}
+
 func TestIDMarshalsAsItsOpaqueString(t *testing.T) {
 	data, err := json.Marshal(provider.MustID("task-1"))
 	if err != nil || string(data) != `"task-1"` {

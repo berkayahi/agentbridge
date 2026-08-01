@@ -146,8 +146,8 @@ func TestProcessReportsCleanExitWithoutTerminalResult(t *testing.T) {
 		if event.Type != provider.EventError || !strings.Contains(event.Message, "terminal result") {
 			t.Fatalf("event = %#v", event)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("clean provider exit was not reported")
+	case <-ctx.Done():
+		t.Fatalf("clean provider exit was not reported: %v", ctx.Err())
 	}
 }
 

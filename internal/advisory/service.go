@@ -70,6 +70,9 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if err := validateSchema(schema); err != nil {
 		return SessionResponse{}, err
 	}
+	policy := effectivePolicy()
+	schemaDigest := digestBytes(schema)
+	policyDigest := digestPolicy(policy, request.WebResearch)
 
 	profiles, err := s.catalog.ProviderProfiles(ctx)
 	if err != nil {
@@ -87,16 +90,19 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if modelID == "" {
 		modelID = strings.TrimSpace(profile.ModelID)
 	}
+	if modelID == "" && len(profile.ModelIDs) > 0 {
+		modelID = strings.TrimSpace(profile.ModelIDs[0])
+	}
 	if modelID == "" {
-		modelID = "provider-default"
+		return SessionResponse{}, ErrNotConfigured
 	}
 	started := s.clock().UTC()
 	sessionID := s.newID("execution-session")
 	executionRequest := ExecutionRequest{
 		ContractVersion: ContractVersion, ExecutionSessionID: sessionID,
 		ProviderID: profile.ID, ModelID: modelID, Prompt: prompt, Context: contextBundle,
-		OutputSchema: schema, SchemaVersion: request.SchemaVersion,
-		Policy:      ExecutionPolicy{ReadOnly: true, WebResearchAllowed: request.WebResearch.Enabled},
+		OutputSchema: schema, SchemaDigest: schemaDigest, SchemaVersion: request.SchemaVersion,
+		Policy: policy, PolicyDigest: policyDigest,
 		WebResearch: request.WebResearch,
 	}
 	result, err := provider.Execute(ctx, executionRequest)
@@ -112,22 +118,26 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if len(result.Output) == 0 || len(result.Output) > MaxOutputBytes {
 		return SessionResponse{}, ErrProviderOutputBounds
 	}
-	output := s.redactor.RedactBytes(result.Output)
-	if len(output) == 0 || len(output) > MaxOutputBytes {
-		return SessionResponse{}, ErrProviderOutputBounds
+	output, err := sanitizeStructuredOutput(s.redactor, result.Output)
+	if err != nil {
+		return SessionResponse{}, err
 	}
 	value, err := decodeJSON(output)
 	if err != nil {
 		return SessionResponse{}, fmt.Errorf("%w: malformed JSON", ErrStructuredOutput)
 	}
 	if err := validateOutput(schema, value, "$", 0); err != nil {
+		if errors.Is(err, ErrPolicyViolation) {
+			return SessionResponse{}, err
+		}
 		return SessionResponse{}, fmt.Errorf("%w: %v", ErrStructuredOutput, err)
 	}
 	completed := s.clock().UTC()
 	receipt := ExecutionReceipt{
 		ReceiptID: s.newID("execution-receipt"), ExecutionSessionID: sessionID,
 		ProviderID: profile.ID, ModelID: modelID, ContextDigest: digestJSON(contextBundle),
-		PromptDigest: digestString(prompt), OutputDigest: digestBytes(output),
+		PromptDigest: digestString(prompt), SchemaDigest: schemaDigest, PolicyDigest: policyDigest,
+		OutputDigest:  digestBytes(output),
 		SchemaVersion: request.SchemaVersion, ContractVersion: ContractVersion,
 		StartedAt: started, CompletedAt: completed, Status: "completed",
 	}
@@ -138,7 +148,7 @@ func (s *Service) selectProvider(profiles []ProviderProfile, requested, model st
 	requested = strings.TrimSpace(requested)
 	model = strings.TrimSpace(model)
 	for _, profile := range profiles {
-		if !profile.Available || !capabilityEligible(profile.Capability, webResearch) || (requested != "" && profile.ID != requested) || (model != "" && profile.ModelID != "" && profile.ModelID != model) {
+		if !profile.Available || !capabilityEligible(profile.Capability, webResearch) || (requested != "" && profile.ID != requested) || (model != "" && !profileSupportsModel(profile, model)) {
 			continue
 		}
 		provider, ok := s.providers[profile.ID]
@@ -153,11 +163,38 @@ func (s *Service) selectProvider(profiles []ProviderProfile, requested, model st
 	return ProviderProfile{}, nil, ErrNotConfigured
 }
 
+func profileSupportsModel(profile ProviderProfile, model string) bool {
+	if model == "" {
+		return true
+	}
+	if profile.ModelID == model {
+		return true
+	}
+	for _, value := range profile.ModelIDs {
+		if strings.TrimSpace(value) == model {
+			return true
+		}
+	}
+	for _, value := range profile.ModelAliases {
+		if strings.TrimSpace(value) == model {
+			return true
+		}
+	}
+	return false
+}
+
 func capabilityEligible(capability ProviderCapability, webResearch bool) bool {
-	return capability.AdvisorySessions && capability.ReadOnly && capability.StructuredOutput &&
+	return !webResearch && capability.AdvisorySessions && capability.ReadOnly && capability.StructuredOutput &&
 		!capability.RepositoryWrites && !capability.BranchMutation && !capability.WorktreeMutation &&
 		!capability.GitIntegration && !capability.SecretValueAccess && !capability.DecisionMutation &&
-		!capability.HumanApproval && (!webResearch || capability.WebResearch)
+		!capability.HumanApproval
+}
+
+// CapabilityEligible reports whether a provider can be used by an advisory
+// session. Web research is intentionally not eligible because this boundary
+// has no web adapter to enforce bounded source and byte limits.
+func CapabilityEligible(capability ProviderCapability, webResearch bool) bool {
+	return capabilityEligible(capability, webResearch)
 }
 
 func validateCapability(capability ProviderCapability, webResearch bool) error {
@@ -177,8 +214,8 @@ func validateRequest(request SessionRequest) error {
 	if len(request.OutputSchema) == 0 || len(request.OutputSchema) > MaxSchemaBytes {
 		return ErrInvalidRequest
 	}
-	if request.WebResearch.MaxSources < 0 || request.WebResearch.MaxSources > 32 || request.WebResearch.MaxBytes < 0 || request.WebResearch.MaxBytes > 4<<20 {
-		return ErrInvalidRequest
+	if err := validateWebResearch(request.WebResearch); err != nil {
+		return err
 	}
 	if len(request.Context.Items) > MaxContextItems {
 		return ErrInvalidRequest
@@ -207,14 +244,94 @@ func redactContext(redactor *security.Redactor, bundle ContextBundle) ContextBun
 	return ContextBundle{Items: items}
 }
 
+// SanitizeSessionResponse applies the advisory output boundary before a
+// response is handed to a durability or transport adapter. It is deliberately
+// independent of a request schema so local-control replay cannot return a
+// secret-shaped field even when an authority implementation is misconfigured.
+func SanitizeSessionResponse(response SessionResponse) (SessionResponse, error) {
+	output, err := sanitizeStructuredOutput(nil, response.Output)
+	if err != nil {
+		return SessionResponse{}, err
+	}
+	response.Output = output
+	response.Receipt.OutputDigest = digestBytes(output)
+	return response, nil
+}
+
+func sanitizeStructuredOutput(redactor *security.Redactor, raw []byte) ([]byte, error) {
+	if len(raw) == 0 || len(raw) > MaxOutputBytes {
+		return nil, ErrProviderOutputBounds
+	}
+	value, err := decodeJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: malformed JSON", ErrStructuredOutput)
+	}
+	if err := rejectSecretKeys(value, "$"); err != nil {
+		return nil, err
+	}
+	if redactor == nil {
+		redactor = security.NewRedactor(security.Config{MaxFieldRunes: MaxContextValueBytes, MaxPayloadRunes: MaxOutputBytes})
+	}
+	output := redactor.RedactBytes(raw)
+	if len(output) == 0 || len(output) > MaxOutputBytes {
+		return nil, ErrProviderOutputBounds
+	}
+	redactedValue, err := decodeJSON(output)
+	if err != nil {
+		return nil, fmt.Errorf("%w: malformed redacted JSON", ErrStructuredOutput)
+	}
+	if err := rejectSecretKeys(redactedValue, "$"); err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), output...), nil
+}
+
 func sensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.NewReplacer("_", " ", "-", " ").Replace(strings.TrimSpace(key)))
-	for _, word := range strings.Fields(normalized) {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	for _, word := range strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == '_' || r == '-' || r == ' ' || r == '.'
+	}) {
 		if word == "secret" || word == "password" || word == "token" || word == "credential" || word == "private" || word == "authorization" || word == "cookie" || word == "apikey" || word == "key" {
 			return true
 		}
 	}
-	return false
+	compact := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return -1
+	}, normalized)
+	return strings.Contains(compact, "secret") || strings.Contains(compact, "password") ||
+		strings.Contains(compact, "token") || strings.Contains(compact, "credential") ||
+		strings.Contains(compact, "authorization") || strings.Contains(compact, "cookie") ||
+		strings.Contains(compact, "apikey") || compact == "privatekey"
+}
+
+func validateWebResearch(policy WebResearchPolicy) error {
+	if policy.MaxSources < 0 || policy.MaxSources > 32 || policy.MaxBytes < 0 || policy.MaxBytes > 4<<20 {
+		return ErrInvalidRequest
+	}
+	if !policy.Enabled {
+		if policy.MaxSources != 0 || policy.MaxBytes != 0 {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
+	if policy.MaxSources == 0 || policy.MaxBytes == 0 {
+		return ErrInvalidRequest
+	}
+	return ErrPolicyViolation
+}
+
+func effectivePolicy() ExecutionPolicy {
+	return ExecutionPolicy{ReadOnly: true}
+}
+
+func digestPolicy(policy ExecutionPolicy, web WebResearchPolicy) string {
+	return digestJSON(struct {
+		Policy      ExecutionPolicy   `json:"policy"`
+		WebResearch WebResearchPolicy `json:"web_research"`
+	}{Policy: policy, WebResearch: web})
 }
 
 func validID(value string) bool {

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/config"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
@@ -44,9 +45,14 @@ func TestComposeProvidersFixtureServesProviderCatalogWithoutTaskRuntime(t *testi
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = data.Close() })
+	authority, err := composeAdvisoryAuthority(cfg, providers, providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes})
+	if err != nil || authority == nil {
+		t.Fatalf("fixture advisory authority = %#v err=%v", authority, err)
+	}
 	service, err := localcontrol.New(localcontrol.Config{
 		Store: data, Runtimes: runtimes,
 		Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
+		Advisory:  authority,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +75,17 @@ func TestComposeProvidersFixtureServesProviderCatalogWithoutTaskRuntime(t *testi
 	}
 	if len(result.Providers) != 1 || result.Providers[0].ID != "codex" || result.Providers[0].Available {
 		t.Fatalf("fixture provider catalog = %#v", result.Providers)
+	}
+	session, err := service.ExecuteAdvisorySession(context.Background(), advisory.SessionRequest{
+		ProviderID: "codex", ModelID: "deterministic-v1", Prompt: "return the fixture",
+		OutputSchema:  json.RawMessage(`{"type":"object","properties":{"answer":{"type":"string"}},"required":["answer"],"additionalProperties":false}`),
+		SchemaVersion: "fixture-schema-v1", IdempotencyKey: "fixture-advisory-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(session.Output) != `{"answer":"deterministic-fixture"}` || session.Receipt.ProviderID != "codex" || session.Receipt.ModelID != "deterministic-v1" {
+		t.Fatalf("fixture advisory session = %#v", session)
 	}
 
 	ordinary := providerCatalog{

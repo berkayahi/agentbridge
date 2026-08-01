@@ -191,12 +191,19 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.S
 	defer s.commandMu.Unlock()
 	var cached advisory.SessionResponse
 	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
+		if done && err == nil {
+			cached, err = advisory.SanitizeSessionResponse(cached)
+		}
 		return cached, err
 	}
 	if s.advisory == nil {
 		return advisory.SessionResponse{}, ErrNotConfigured
 	}
 	response, err := s.advisory.ExecuteAdvisorySession(ctx, request)
+	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	response, err = advisory.SanitizeSessionResponse(response)
 	if err != nil {
 		return advisory.SessionResponse{}, err
 	}

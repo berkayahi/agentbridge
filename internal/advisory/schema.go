@@ -20,6 +20,9 @@ func validateSchema(data []byte) error {
 		return fmt.Errorf("%w: schema must be an object", ErrInvalidRequest)
 	}
 	if err := validateSchemaDefinition(object, "$", 0); err != nil {
+		if errors.Is(err, ErrPolicyViolation) {
+			return err
+		}
 		return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	return nil
@@ -62,6 +65,9 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 			if !ok || name == "" {
 				return fmt.Errorf("schema %s contains an invalid required property", path)
 			}
+			if sensitiveKey(name) {
+				return fmt.Errorf("%w: schema %s contains secret-shaped property %q", ErrPolicyViolation, path, name)
+			}
 			if _, exists := seen[name]; exists {
 				return fmt.Errorf("schema %s repeats required property %q", path, name)
 			}
@@ -74,6 +80,9 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 			return fmt.Errorf("schema %s properties must be an object", path)
 		}
 		for name, child := range properties {
+			if sensitiveKey(name) {
+				return fmt.Errorf("%w: schema %s contains secret-shaped property %q", ErrPolicyViolation, path, name)
+			}
 			childSchema, ok := child.(map[string]any)
 			if !ok {
 				return fmt.Errorf("schema %s property %q is invalid", path, name)
@@ -109,6 +118,27 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 			parsed, err := number.Int64()
 			if err != nil || parsed < 0 {
 				return fmt.Errorf("schema %s %s must be a non-negative integer", path, key)
+			}
+		}
+	}
+	return nil
+}
+
+func rejectSecretKeys(value any, path string) error {
+	switch value := value.(type) {
+	case map[string]any:
+		for name, child := range value {
+			if sensitiveKey(name) {
+				return fmt.Errorf("%w: structured output %s contains secret-shaped field %q", ErrPolicyViolation, path, name)
+			}
+			if err := rejectSecretKeys(child, path+"."+name); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for index, child := range value {
+			if err := rejectSecretKeys(child, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
 			}
 		}
 	}

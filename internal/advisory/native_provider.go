@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/provider"
 )
@@ -21,15 +22,26 @@ type NativeProvider struct {
 }
 
 func (p NativeProvider) Capability() ProviderCapability {
+	if p.Provider == nil || !p.Provider.AnalysisIsolationAttestation().Valid() {
+		return ProviderCapability{ID: p.ProviderID}
+	}
 	return ProviderCapability{
-		ID: p.ProviderID, AdvisorySessions: p.Provider != nil && p.Provider.AnalysisIsolationAttestation().Valid(),
+		ID: p.ProviderID, AdvisorySessions: true,
 		ReadOnly: true, StructuredOutput: true,
 	}
 }
 
+func (p NativeProvider) ConfiguredModel() string { return p.ModelID }
+
 func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (ExecutionResult, error) {
 	if p.Provider == nil || !p.Provider.AnalysisIsolationAttestation().Valid() {
 		return ExecutionResult{}, ErrPolicyViolation
+	}
+	if request.Policy != effectivePolicy() || request.WebResearch.Enabled {
+		return ExecutionResult{}, ErrPolicyViolation
+	}
+	if err := validateSchema(request.OutputSchema); err != nil {
+		return ExecutionResult{}, err
 	}
 	workspace, err := os.MkdirTemp("", "agentbridge-advisory-")
 	if err != nil {
@@ -48,9 +60,15 @@ func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (
 	if err != nil {
 		return ExecutionResult{}, ErrInvalidRequest
 	}
+	input := strings.Join([]string{
+		request.Prompt,
+		"Context bundle:", string(contextJSON),
+		"Output contract: return exactly one JSON value matching this strict schema; do not return prose, tool calls, reasoning, secrets, or approval requests:",
+		string(request.OutputSchema),
+	}, "\n")
 	result, err := p.Provider.AnalyzeReadOnly(ctx, provider.AnalysisRequest{
 		TaskID:           taskID,
-		Input:            provider.Input{Text: request.Prompt + "\nContext bundle:\n" + string(contextJSON)},
+		Input:            provider.Input{Text: input},
 		WorkingDirectory: workspace, Model: request.ModelID, Policy: policy,
 	})
 	if err != nil {
@@ -67,5 +85,9 @@ func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (
 	if modelID == "" {
 		modelID = p.ModelID
 	}
-	return ExecutionResult{ProviderID: providerID, ModelID: modelID, Output: result.Output}, nil
+	output, err := sanitizeStructuredOutput(nil, result.Output)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	return ExecutionResult{ProviderID: providerID, ModelID: modelID, Output: output}, nil
 }

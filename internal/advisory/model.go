@@ -78,8 +78,10 @@ type ExecutionRequest struct {
 	Prompt             string            `json:"prompt"`
 	Context            ContextBundle     `json:"context"`
 	OutputSchema       json.RawMessage   `json:"output_schema"`
+	SchemaDigest       string            `json:"schema_digest"`
 	SchemaVersion      string            `json:"schema_version"`
 	Policy             ExecutionPolicy   `json:"policy"`
+	PolicyDigest       string            `json:"policy_digest"`
 	WebResearch        WebResearchPolicy `json:"web_research"`
 }
 
@@ -105,10 +107,12 @@ type ProviderCapability struct {
 }
 
 type ProviderProfile struct {
-	ID         string             `json:"id"`
-	ModelID    string             `json:"model_id,omitempty"`
-	Available  bool               `json:"available"`
-	Capability ProviderCapability `json:"capability"`
+	ID           string             `json:"id"`
+	ModelID      string             `json:"model_id,omitempty"`
+	ModelIDs     []string           `json:"model_ids,omitempty"`
+	ModelAliases []string           `json:"model_aliases,omitempty"`
+	Available    bool               `json:"available"`
+	Capability   ProviderCapability `json:"capability"`
 }
 
 type ProviderCatalog interface {
@@ -127,6 +131,8 @@ type ExecutionReceipt struct {
 	ModelID            string    `json:"model_id"`
 	ContextDigest      string    `json:"context_digest"`
 	PromptDigest       string    `json:"prompt_digest"`
+	SchemaDigest       string    `json:"schema_digest"`
+	PolicyDigest       string    `json:"policy_digest"`
 	OutputDigest       string    `json:"output_digest"`
 	SchemaVersion      string    `json:"schema_version"`
 	ContractVersion    string    `json:"contract_version"`

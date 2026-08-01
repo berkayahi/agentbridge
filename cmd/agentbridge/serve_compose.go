@@ -1311,6 +1311,11 @@ func composeAdvisoryAuthority(cfg config.Config, providers map[workmodel.Provide
 			Provider: safe, ProviderID: string(name), ModelID: cfg.Providers[string(name)].Model,
 		}
 	}
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok && value.AnalysisFixture.Implementation == "in_process_deterministic_v1" {
+		configured[string(workmodel.CodexSubscription)] = advisory.DeterministicProvider{
+			ProviderID: string(workmodel.CodexSubscription), ModelID: "deterministic-v1",
+		}
+	}
 	if len(configured) == 0 {
 		return nil, nil
 	}

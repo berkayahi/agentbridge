@@ -83,8 +83,11 @@ func TestExecuteAdvisorySessionEnforcesReadOnlyPolicyAndReceiptProvenance(t *tes
 		response.Receipt.ExecutionSessionID == "" || response.Receipt.ReceiptID == "" || response.Receipt.Status != "completed" {
 		t.Fatalf("receipt = %#v", response.Receipt)
 	}
-	if response.Receipt.ContextDigest == "" || response.Receipt.PromptDigest == "" || response.Receipt.OutputDigest == "" || response.Receipt.StartedAt.IsZero() || response.Receipt.CompletedAt.IsZero() {
+	if response.Receipt.ContextDigest == "" || response.Receipt.PromptDigest == "" || response.Receipt.SchemaDigest == "" || response.Receipt.PolicyDigest == "" || response.Receipt.OutputDigest == "" || response.Receipt.StartedAt.IsZero() || response.Receipt.CompletedAt.IsZero() {
 		t.Fatalf("receipt provenance = %#v", response.Receipt)
+	}
+	if provider.request.SchemaDigest != response.Receipt.SchemaDigest || provider.request.PolicyDigest != response.Receipt.PolicyDigest {
+		t.Fatalf("execution binding/receipt mismatch = %#v/%#v", provider.request, response.Receipt)
 	}
 }
 
@@ -140,17 +143,30 @@ func TestExecuteAdvisorySessionRequiresStrictSchema(t *testing.T) {
 	}
 }
 
-func TestExecuteAdvisorySessionAllowsOnlyAttestedReadOnlyWebResearch(t *testing.T) {
+func TestExecuteAdvisorySessionRejectsSecretSchemaAndOutputFields(t *testing.T) {
+	provider := newTestProvider(`{"answer":"ok"}`)
+	service := newService(t, provider)
+	request := testRequest()
+	request.OutputSchema = json.RawMessage(`{"type":"object","properties":{"password":{"type":"string"}},"required":["password"],"additionalProperties":false}`)
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("secret schema err = %v", err)
+	}
+	provider.result.Output = []byte(`{"answer":"ok","api_key":"secret-value"}`)
+	if _, err := service.ExecuteAdvisorySession(context.Background(), testRequest()); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("secret output err = %v", err)
+	}
+}
+
+func TestExecuteAdvisorySessionFailsClosedWithoutWebAdapter(t *testing.T) {
 	provider := newTestProvider(`{"answer":"researched"}`)
 	provider.capability.WebResearch = true
 	service := newService(t, provider)
 	request := testRequest()
 	request.WebResearch = advisory.WebResearchPolicy{Enabled: true, MaxSources: 2, MaxBytes: 1024}
-	response, err := service.ExecuteAdvisorySession(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("web research err = %v", err)
 	}
-	if response.Receipt.Status != "completed" || !provider.request.Policy.WebResearchAllowed || provider.request.Policy.RepositoryWrites || provider.request.Policy.HumanApproval {
-		t.Fatalf("web research policy/receipt = %#v/%#v", provider.request.Policy, response.Receipt)
+	if provider.calls != 0 {
+		t.Fatalf("web research reached provider: %d calls", provider.calls)
 	}
 }

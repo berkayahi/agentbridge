@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -114,5 +115,28 @@ func TestAdvisorySessionRouteUsesLocalAuthAndDoesNotExposeMutationFields(t *test
 	}
 	if strings.Contains(response.Body.String(), "repository") || strings.Contains(response.Body.String(), "branch") || strings.Contains(response.Body.String(), "approval") {
 		t.Fatalf("response exposed forbidden domain fields: %s", response.Body.String())
+	}
+}
+
+func TestAdvisorySessionRejectsSecretOutputBeforePersistence(t *testing.T) {
+	data, err := sqlite.OpenV2Runtime(context.Background(), filepath.Join(t.TempDir(), "secret-output.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	authority := &advisoryAuthority{response: advisory.SessionResponse{
+		ContractVersion: advisory.ContractVersion,
+		Output:          json.RawMessage(`{"answer":"ok","token":"secret-value"}`),
+	}}
+	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := advisoryRequest()
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+		t.Fatalf("secret output err = %v", err)
+	}
+	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) || authority.calls != 2 {
+		t.Fatalf("secret output replay = err %v calls %d", err, authority.calls)
 	}
 }

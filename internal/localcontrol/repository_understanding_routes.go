@@ -197,7 +197,7 @@ func snapshotEvidencePaths(snapshot repositorysnapshot.Response) ([]string, erro
 	seen := make(map[string]struct{})
 	for _, observation := range snapshot.Observations {
 		path := strings.TrimSpace(observation.EvidencePath)
-		if path == "" {
+		if path == "" || !safeRoleEvidencePath(path) {
 			continue
 		}
 		if _, ok := seen[path]; ok {
@@ -210,6 +210,24 @@ func snapshotEvidencePaths(snapshot repositorysnapshot.Response) ([]string, erro
 		return nil, repositorysnapshot.ErrEvidenceMissing
 	}
 	return paths, nil
+}
+
+// Role analysis may use only committed paths that are safe to materialize in
+// the disposable provider workspace. M1 can observe an .env.example file for
+// architecture metadata, but that file may still contain a canary or secret-
+// shaped assignment; it must never be re-read for provider analysis.
+func safeRoleEvidencePath(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	base := lower
+	if slash := strings.LastIndexByte(base, '/'); slash >= 0 {
+		base = base[slash+1:]
+	}
+	if strings.HasPrefix(base, ".env") || strings.Contains(base, "secret") || strings.Contains(base, "credential") ||
+		base == "password" || base == "token" || base == "id_rsa" || base == "id_ed25519" ||
+		strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx") {
+		return false
+	}
+	return true
 }
 
 func platformRole(value string) (repositorysnapshot.AnalysisRole, error) {

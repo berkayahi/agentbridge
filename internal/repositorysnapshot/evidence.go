@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	bridgegit "github.com/berkayahi/agentbridge/internal/git"
@@ -65,10 +66,10 @@ type GitEvidenceReader struct {
 }
 
 var (
-	dotenvAssignment = regexp.MustCompile(`(?m)^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*)([^\r\n]*)$`)
-	privateKeyBlock  = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
-	bearerValue      = regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+`)
-	secretAssignment = regexp.MustCompile(`(?i)\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|client[_-]?secret|password|secret|token)\s*[:=]\s*)([^\s,;"']+)`)
+	privateKeyBlock     = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	bearerValue         = regexp.MustCompile(`(?i)\b(Bearer\s+)[A-Za-z0-9._~+/=-]+`)
+	secretEnvAssignment = regexp.MustCompile("(?im)(^|[[:space:]])(?:export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*(?:token|key|secret|password)[A-Za-z0-9_]*[[:space:]]*=[[:space:]]*[^[:space:]]+")
+	secretAssignment    = regexp.MustCompile(`(?im)(^|[\{\s,])["]?(?:api[_-]?key|access[_-]?token|auth[_-]?token|authorization|bearer|client[_-]?secret|password|secret|token)["]?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\r\n\}\s]+)`)
 )
 
 func (g GitEvidenceReader) RetrieveEvidence(ctx context.Context, profile ConfiguredRepository, request EvidenceRequest) (EvidencePacket, error) {
@@ -202,6 +203,11 @@ func (g GitEvidenceReader) lookupPath(ctx context.Context, checkout, commit, req
 }
 
 func (g GitEvidenceReader) run(ctx context.Context, checkout string, args ...string) (bridgegit.RunResult, error) {
+	if raw, ok := g.Git.(interface {
+		RunWithEnvironmentUnredacted(context.Context, string, []string, ...string) (bridgegit.RunResult, error)
+	}); ok {
+		return raw.RunWithEnvironmentUnredacted(ctx, checkout, snapshotGitEnvironment, args...)
+	}
 	return g.Git.RunWithEnvironment(ctx, checkout, snapshotGitEnvironment, args...)
 }
 
@@ -220,30 +226,19 @@ func redactEvidence(pathname string, input []byte) ([]byte, bool, error) {
 	if !utf8.Valid(input) {
 		return nil, false, ErrBinaryEvidence
 	}
-	value := string(input)
-	redacted := false
-	replace := func(expression *regexp.Regexp, replacement string) {
-		updated := expression.ReplaceAllString(value, replacement)
-		if updated != value {
-			redacted = true
-			value = updated
+	for _, value := range string(input) {
+		if unicode.IsControl(value) && value != '\t' && value != '\n' && value != '\r' {
+			return nil, false, ErrBinaryEvidence
 		}
 	}
-	replace(privateKeyBlock, "[REDACTED PRIVATE KEY]")
-	value = dotenvAssignment.ReplaceAllStringFunc(value, func(match string) string {
-		parts := dotenvAssignment.FindStringSubmatch(match)
-		if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" {
-			return match
-		}
-		redacted = true
-		return parts[1] + "[REDACTED]"
-	})
-	replace(bearerValue, `${1}[REDACTED]`)
-	replace(secretAssignment, `${1}[REDACTED]`)
+	value := string(input)
 	if secretLikePath(pathname) {
 		return nil, false, ErrSecretLikeFile
 	}
-	return []byte(value), redacted, nil
+	if privateKeyBlock.MatchString(value) || bearerValue.MatchString(value) || secretAssignment.MatchString(value) || secretEnvAssignment.MatchString(value) {
+		return nil, false, ErrSecretLikeFile
+	}
+	return input, strings.Contains(value, "[REDACTED:"), nil
 }
 
 func digestEvidencePacket(packet EvidencePacket) (string, error) {

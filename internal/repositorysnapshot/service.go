@@ -199,6 +199,23 @@ func digestResponse(response Response) (string, error) {
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
 }
 
+// VerifyResponseDigest checks that a snapshot is the exact persisted result,
+// rather than merely a response with a matching commit. It is exported so
+// downstream analysis boundaries can bind to the same canonical digest.
+func VerifyResponseDigest(response Response) error {
+	if response.ContractVersion != RepositorySnapshotV1 || response.ResultDigest == "" {
+		return ErrInvalidRequest
+	}
+	digest, err := digestResponse(response)
+	if err != nil {
+		return err
+	}
+	if digest != response.ResultDigest {
+		return ErrConflict
+	}
+	return nil
+}
+
 func validatePersistedOperation(operation Operation) error {
 	if operation.ID == "" || operation.Status != "completed" ||
 		operation.Response.ContractVersion != RepositorySnapshotV1 ||

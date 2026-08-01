@@ -58,6 +58,9 @@ type AdapterConfig struct {
 	ApprovalUser    func(provider.ID) string
 	ApprovalTimeout time.Duration
 	Now             func() time.Time
+	// AnalysisIsolation must only be enabled when the configured app server
+	// provides an OS-enforced workspace sandbox for the explicit policy below.
+	AnalysisIsolation bool
 }
 
 type sessionState struct {
@@ -73,12 +76,13 @@ type pendingApproval struct {
 }
 
 type Adapter struct {
-	rpc             rpcTransport
-	sessions        SessionSink
-	approvals       ApprovalSink
-	approvalUser    func(provider.ID) string
-	approvalTimeout time.Duration
-	now             func() time.Time
+	rpc               rpcTransport
+	sessions          SessionSink
+	approvals         ApprovalSink
+	approvalUser      func(provider.ID) string
+	approvalTimeout   time.Duration
+	now               func() time.Time
+	analysisIsolation bool
 
 	mu        sync.Mutex
 	threads   map[string]*sessionState
@@ -101,7 +105,8 @@ func NewAdapter(rpc rpcTransport, cfg AdapterConfig) *Adapter {
 	a := &Adapter{
 		rpc: rpc, sessions: cfg.Sessions, approvals: cfg.Approvals,
 		approvalUser: cfg.ApprovalUser, approvalTimeout: cfg.ApprovalTimeout, now: cfg.Now,
-		threads: make(map[string]*sessionState), pending: make(map[string]pendingApproval), closed: make(chan struct{}),
+		analysisIsolation: cfg.AnalysisIsolation,
+		threads:           make(map[string]*sessionState), pending: make(map[string]pendingApproval), closed: make(chan struct{}),
 	}
 	a.wg.Add(1)
 	go a.pump()
@@ -136,6 +141,79 @@ func (a *Adapter) Start(ctx context.Context, req provider.StartRequest) (provide
 	}
 	state := a.registerSession(session)
 	if err := a.startTurn(ctx, state, req.Input, profile, req.WritablePaths); err != nil {
+		return provider.Session{}, nil, err
+	}
+	return session, state.events, nil
+}
+
+// AnalyzeReadOnly executes a bounded analysis turn without persisting a
+// provider session. It is intentionally not implemented in terms of Start:
+// the normal path persists a session against a durable task, while analysis
+// has no task row and must never invent one.
+func (a *Adapter) AnalyzeReadOnly(ctx context.Context, request provider.AnalysisRequest) (provider.AnalysisResult, error) {
+	policy := request.Policy.Validate()
+	if !policy.Allowed || !a.analysisIsolation {
+		return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
+	}
+	if request.WorkingDirectory != request.Policy.WorkspacePath || request.TaskID.String() == "" {
+		return provider.AnalysisResult{}, provider.ErrInvalidInput
+	}
+	if err := request.Input.Validate(); err != nil {
+		return provider.AnalysisResult{}, err
+	}
+	profile := normalizedProfile(workmodel.ExecutionProfile{ApprovalMode: "ask_every_time"}, request.Model)
+	session, events, err := a.startAnalysis(ctx, request.TaskID, request.Input, request.WorkingDirectory, profile, request.Policy)
+	if err != nil {
+		return provider.AnalysisResult{}, err
+	}
+	defer a.discardSession(session.ThreadID)
+	var output strings.Builder
+	for {
+		select {
+		case <-ctx.Done():
+			return provider.AnalysisResult{}, ctx.Err()
+		case event, ok := <-events:
+			if !ok {
+				return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
+			}
+			switch event.Type {
+			case provider.EventAssistantMessage:
+				if output.Len()+len(event.Message) > 64<<10 {
+					return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
+				}
+				output.WriteString(event.Message)
+			case provider.EventApprovalRequired:
+				if event.RequestID.Valid() {
+					// The analysis boundary has no approval channel. Decline the
+					// provider request before returning the typed unavailable result.
+					_ = a.ResolveApproval(ctx, provider.ApprovalDecision{RequestID: event.RequestID, TaskID: request.TaskID, Allow: false})
+				}
+				return provider.AnalysisResult{}, provider.ErrAnalysisApprovalDeclined
+			case provider.EventError, provider.EventAuthRequired, provider.EventRateLimited:
+				return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
+			case provider.EventCompleted:
+				return provider.AnalysisResult{ProviderID: a.Name(), Model: profile.Model, Output: []byte(output.String())}, nil
+			}
+		}
+	}
+}
+
+func (a *Adapter) startAnalysis(ctx context.Context, taskID provider.ID, input provider.Input, workspace string, profile workmodel.ExecutionProfile, policy provider.AnalysisExecutionPolicy) (provider.Session, <-chan provider.Event, error) {
+	params := map[string]any{"experimentalRawEvents": false, "cwd": workspace}
+	if profile.Model != "" {
+		params["model"] = profile.Model
+	}
+	var response threadResponse
+	if err := a.rpc.Call(ctx, "thread/start", params, &response); err != nil {
+		return provider.Session{}, nil, mapCallError(err)
+	}
+	session, err := newSession(taskID, response.Thread.ID)
+	if err != nil {
+		return provider.Session{}, nil, err
+	}
+	state := a.registerSession(session)
+	if err := a.startTurnWithPolicy(ctx, state, input, profile, policy); err != nil {
+		a.discardSession(session.ThreadID)
 		return provider.Session{}, nil, err
 	}
 	return session, state.events, nil
@@ -275,6 +353,10 @@ func (a *Adapter) Close() {
 }
 
 func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input provider.Input, profile workmodel.ExecutionProfile, writable []string) error {
+	return a.startTurnWithPolicy(ctx, state, input, profile, provider.AnalysisExecutionPolicy{WritablePaths: writable})
+}
+
+func (a *Adapter) startTurnWithPolicy(ctx context.Context, state *sessionState, input provider.Input, profile workmodel.ExecutionProfile, policy provider.AnalysisExecutionPolicy) error {
 	var response turnResponse
 	params := map[string]any{
 		"threadId": state.session.ThreadID,
@@ -290,13 +372,23 @@ func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input prov
 	if profile.ReasoningEffort != "" {
 		params["effort"] = profile.ReasoningEffort
 	}
-	if len(writable) > 0 {
+	if policy.WorkspacePath != "" {
+		validated := policy.Validate()
+		if !validated.Allowed {
+			return provider.ErrAnalysisUnavailable
+		}
 		// networkAccess is stated rather than left out: the field defaults to
-		// denied, and a session that cannot reach a package proxy would stop at
-		// an approval door for every dependency it needs.
+		// denied. Analysis uses only its disposable workspace and never reaches
+		// a package proxy or another host resource.
 		params["sandboxPolicy"] = map[string]any{
 			"type":          "workspaceWrite",
-			"writableRoots": append([]string(nil), writable...),
+			"writableRoots": []string{policy.WorkspacePath},
+			"networkAccess": false,
+		}
+	} else if len(policy.WritablePaths) > 0 {
+		params["sandboxPolicy"] = map[string]any{
+			"type":          "workspaceWrite",
+			"writableRoots": append([]string(nil), policy.WritablePaths...),
 			"networkAccess": true,
 		}
 	}
@@ -305,6 +397,12 @@ func (a *Adapter) startTurn(ctx context.Context, state *sessionState, input prov
 	}
 	a.setTurn(state.session.ThreadID, response.Turn.ID)
 	return nil
+}
+
+func (a *Adapter) discardSession(threadID string) {
+	a.mu.Lock()
+	delete(a.threads, threadID)
+	a.mu.Unlock()
 }
 
 func normalizedProfile(profile workmodel.ExecutionProfile, legacyModel string) workmodel.ExecutionProfile {

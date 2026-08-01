@@ -30,6 +30,7 @@ const (
 var (
 	ErrUnknownRole           = errors.New("repositorysnapshot: unknown analysis role")
 	ErrProviderNotConfigured = errors.New("repositorysnapshot: analysis provider is not configured")
+	ErrProviderPolicy        = errors.New("repositorysnapshot: analysis provider does not expose the safe policy boundary")
 	ErrProviderApproval      = errors.New("repositorysnapshot: provider approval was declined")
 	ErrProviderOutput        = errors.New("repositorysnapshot: provider output is invalid")
 	ErrProviderOutputBounds  = errors.New("repositorysnapshot: provider output exceeds bounds")
@@ -56,15 +57,16 @@ func (r AnalysisRole) Valid() bool {
 type KnowledgeState string
 
 const (
-	KnowledgeObserved KnowledgeState = "observed"
-	KnowledgeInferred KnowledgeState = "inferred"
-	KnowledgeUnknown  KnowledgeState = "unknown"
-	KnowledgeConflict KnowledgeState = "conflict"
+	KnowledgeObserved    KnowledgeState = "observed"
+	KnowledgeDeclared    KnowledgeState = "declared"
+	KnowledgeInferred    KnowledgeState = "inferred"
+	KnowledgeUnknown     KnowledgeState = "unknown"
+	KnowledgeConflicting KnowledgeState = "conflicting"
 )
 
 func (s KnowledgeState) Valid() bool {
 	switch s {
-	case KnowledgeObserved, KnowledgeInferred, KnowledgeUnknown, KnowledgeConflict:
+	case KnowledgeObserved, KnowledgeDeclared, KnowledgeInferred, KnowledgeUnknown, KnowledgeConflicting:
 		return true
 	default:
 		return false
@@ -120,15 +122,22 @@ type AnalysisResponse struct {
 }
 
 type UnderstandingRequest struct {
-	RepositoryProfileID string                            `json:"repository_profile_id"`
-	ExpectedCommitSHA   string                            `json:"expected_commit_sha"`
-	Paths               []string                          `json:"paths,omitempty"`
-	Role                AnalysisRole                      `json:"role"`
-	ProviderID          string                            `json:"provider_id,omitempty"`
-	Model               string                            `json:"model,omitempty"`
-	IdempotencyKey      string                            `json:"idempotency_key"`
-	Snapshot            *Response                         `json:"snapshot,omitempty"`
-	PriorOutputs        map[AnalysisRole]StructuredOutput `json:"prior_outputs,omitempty"`
+	RepositoryProfileID string                                `json:"repository_profile_id"`
+	ExpectedCommitSHA   string                                `json:"expected_commit_sha"`
+	Paths               []string                              `json:"paths,omitempty"`
+	Role                AnalysisRole                          `json:"role"`
+	ProviderID          string                                `json:"provider_id,omitempty"`
+	Model               string                                `json:"model,omitempty"`
+	IdempotencyKey      string                                `json:"idempotency_key"`
+	Snapshot            *Response                             `json:"snapshot,omitempty"`
+	PriorOutputs        map[AnalysisRole]PriorOutputReference `json:"prior_outputs,omitempty"`
+}
+
+// PriorOutputReference binds synthesis to an already persisted role result.
+// The synthesizer never accepts caller-supplied role JSON as authoritative.
+type PriorOutputReference struct {
+	IdempotencyKey string `json:"idempotency_key"`
+	ResultDigest   string `json:"result_digest"`
 }
 
 type ProviderRequest struct {
@@ -243,7 +252,7 @@ func (s *UnderstandingService) Understand(ctx context.Context, request Understan
 		ContractVersion: UnderstandingContractV1, OperationID: s.newID(), Role: normalized.Role,
 		ExactCommitSHA: normalized.ExpectedCommitSHA, Evidence: []EvidenceReference{},
 		Findings: []Finding{}, Capabilities: []string{}, Assumptions: []string{},
-		Conflicts: []string{}, Unknowns: []string{}, Status: "not_configured",
+		Conflicts: []string{}, Unknowns: []string{}, Status: "not_configured", ErrorCode: "provider_not_configured",
 		Provider: ProviderMetadata{ID: providerID, Status: "not_configured", ErrorCode: "provider_not_configured"},
 	}
 	analysisProvider := s.providers[providerID]
@@ -277,8 +286,26 @@ func (s *UnderstandingService) Understand(ctx context.Context, request Understan
 	response.Findings, response.Capabilities, response.Assumptions = output.Findings, output.Capabilities, output.Assumptions
 	response.Conflicts, response.Unknowns = output.Conflicts, output.Unknowns
 	response.Provider = ProviderMetadata{ID: providerID, Model: providerResult.Model, Status: "completed"}
+	response.Status = "completed"
 	response.ErrorCode = ""
 	return s.persistUnderstanding(ctx, normalized, requestDigest, response)
+}
+
+// LoadOperation returns a validated durable role result for a higher-level
+// adapter. Callers receive the persisted response, never a caller-supplied
+// replacement, so synthesis can bind prior outputs by digest.
+func (s *UnderstandingService) LoadOperation(ctx context.Context, idempotencyKey string) (UnderstandingOperation, error) {
+	if s == nil || strings.TrimSpace(idempotencyKey) == "" {
+		return UnderstandingOperation{}, ErrInvalidRequest
+	}
+	operation, err := s.store.LoadRepositoryUnderstanding(ctx, idempotencyKey)
+	if err != nil {
+		return UnderstandingOperation{}, err
+	}
+	if err := validateUnderstandingOperation(operation); err != nil {
+		return UnderstandingOperation{}, err
+	}
+	return operation, nil
 }
 
 func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile ConfiguredRepository, request UnderstandingRequest) (string, []EvidenceReference, error) {
@@ -291,6 +318,9 @@ func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile Con
 		})
 		if err != nil {
 			return "", nil, err
+		}
+		if packet.RepositoryProfileID != request.RepositoryProfileID {
+			return "", nil, ErrNotConfigured
 		}
 		if packet.ExactCommitSHA != request.ExpectedCommitSHA {
 			return "", nil, ErrCommitMismatch
@@ -314,18 +344,30 @@ func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile Con
 		}
 		return workspace, evidence, nil
 	}
-	if request.Snapshot == nil || request.Snapshot.ContractVersion != RepositorySnapshotV1 || request.Snapshot.ExactCommitSHA != request.ExpectedCommitSHA {
+	if request.Snapshot == nil || request.Snapshot.ExactCommitSHA != request.ExpectedCommitSHA || request.Snapshot.Repository.ProfileID != request.RepositoryProfileID {
+		return "", nil, ErrCommitMismatch
+	}
+	if err := VerifyResponseDigest(*request.Snapshot); err != nil {
 		return "", nil, ErrCommitMismatch
 	}
 	roles := []AnalysisRole{RoleCartographer, RoleProductArchaeologist, RoleQualityOperations}
+	prior := make(map[AnalysisRole]UnderstandingOperation, len(roles))
 	for _, role := range roles {
-		output, ok := request.PriorOutputs[role]
-		if !ok || output.Role != role {
+		ref, ok := request.PriorOutputs[role]
+		if !ok || ref.IdempotencyKey == "" || ref.ResultDigest == "" {
 			return "", nil, fmt.Errorf("synthesizer input %s: %w", role, ErrInvalidRequest)
 		}
-		if err := validateStructuredOutput(output, role, nil); err != nil {
+		operation, err := s.store.LoadRepositoryUnderstanding(ctx, ref.IdempotencyKey)
+		if err != nil {
+			return "", nil, fmt.Errorf("load synthesizer input %s: %w", role, ErrInvalidRequest)
+		}
+		if operation.Role != role || operation.Status != "completed" || operation.RepositoryProfileID != request.RepositoryProfileID || operation.ExpectedCommitSHA != request.ExpectedCommitSHA || operation.ResultDigest != ref.ResultDigest {
+			return "", nil, fmt.Errorf("synthesizer input %s: %w", role, ErrConflict)
+		}
+		if err := validateUnderstandingOperation(operation); err != nil {
 			return "", nil, fmt.Errorf("synthesizer input %s: %w", role, err)
 		}
+		prior[role] = operation
 	}
 	workspace, err := os.MkdirTemp("", "agentbridge-understanding-")
 	if err != nil {
@@ -340,9 +382,10 @@ func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile Con
 		_ = os.RemoveAll(workspace)
 		return "", nil, err
 	}
-	evidence := []EvidenceReference{{Path: "m1-snapshot.json", ContentDigest: request.Snapshot.ResultDigest, Size: len(encoded)}}
+	digest := sha256.Sum256(encoded)
+	evidence := []EvidenceReference{{Path: "m1-snapshot.json", ContentDigest: "sha256:" + hex.EncodeToString(digest[:]), Size: len(encoded)}}
 	for _, role := range roles {
-		encoded, err := json.Marshal(request.PriorOutputs[role])
+		encoded, err := json.Marshal(prior[role].Response)
 		if err != nil {
 			_ = os.RemoveAll(workspace)
 			return "", nil, err
@@ -412,6 +455,12 @@ func normalizeUnderstandingRequest(request UnderstandingRequest) (UnderstandingR
 		}
 	}
 	if len(request.PriorOutputs) > 3 {
+		return UnderstandingRequest{}, ErrInvalidRequest
+	}
+	if request.Role == RoleSynthesizer && len(request.PriorOutputs) != 3 {
+		return UnderstandingRequest{}, ErrInvalidRequest
+	}
+	if request.Role != RoleSynthesizer && len(request.PriorOutputs) != 0 {
 		return UnderstandingRequest{}, ErrInvalidRequest
 	}
 	return request, nil
@@ -496,7 +545,14 @@ func validateUnderstandingOperation(operation UnderstandingOperation) error {
 }
 
 func analysisPrompt(role AnalysisRole) string {
-	return fmt.Sprintf("You are the %s repository-understanding role. Use only files in the disposable evidence workspace. Return one JSON object matching the required schema. Do not use outside knowledge. Mark each statement observed, inferred, unknown, or conflict and cite only supplied evidence paths.", role)
+	return fmt.Sprintf("You are the %s repository-understanding role. Use only files in the disposable evidence workspace. Return one JSON object matching the required schema. Do not use outside knowledge. Mark each statement exactly observed, declared, inferred, unknown, or conflicting and cite only supplied evidence paths.", role)
+}
+
+func structuredOutput(response AnalysisResponse) StructuredOutput {
+	return StructuredOutput{
+		Role: response.Role, Findings: response.Findings, Capabilities: response.Capabilities,
+		Assumptions: response.Assumptions, Conflicts: response.Conflicts, Unknowns: response.Unknowns,
+	}
 }
 
 func newUnderstandingID() string {

@@ -890,6 +890,9 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		adapter := codex.NewAdapter(process.Client, codex.AdapterConfig{
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },
+			// The configured Codex app-server is the only production adapter
+			// currently allowed to expose the explicit OS-isolated analysis seam.
+			AnalysisIsolation: true,
 		})
 		providers[workmodel.CodexSubscription] = adapter
 		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
@@ -1248,6 +1251,11 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *workspaceAdapter, providers map[workmodel.Provider]provider.Provider, cfg config.Config) (*repositorysnapshot.UnderstandingService, error) {
 	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers))
 	for name, value := range providers {
+		if _, safe := value.(provider.SafeAnalysisProvider); !safe {
+			// Persistent task providers are not analysis providers unless they
+			// explicitly implement the non-persistent, OS-isolated capability.
+			continue
+		}
 		configured[string(name)] = repositorysnapshot.NativeAnalysisProvider{Provider: value, DefaultModel: cfg.Providers[string(name)].Model}
 	}
 	defaultProvider := ""

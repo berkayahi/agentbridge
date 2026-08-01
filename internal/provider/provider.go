@@ -23,6 +23,11 @@ const (
 
 var ErrInvalidInput = errors.New("invalid provider input")
 
+var (
+	ErrAnalysisUnavailable      = errors.New("provider read-only analysis is unavailable")
+	ErrAnalysisApprovalDeclined = errors.New("provider read-only analysis approval was declined")
+)
+
 // ID is an immutable identifier. Construct it with NewID or MustID.
 type ID struct{ value string }
 
@@ -120,6 +125,136 @@ type StartRequest struct {
 	// may write to — a repository's toolchain caches, typically. Empty leaves
 	// the decision to the host's own provider policy.
 	WritablePaths []string
+}
+
+// RuntimeInspectionPolicy describes the optional runtime-inspection seam. It
+// is deliberately narrower than the normal task policy: production targets,
+// credentials, and destructive actions are never permitted here.
+type RuntimeInspectionPolicy struct {
+	Environment             string
+	Target                  string
+	CredentialsAllowed      bool
+	DestructiveActionsAllow bool
+}
+
+// RuntimeInspectionResult is the typed fail-closed result for optional
+// runtime inspection. No provider may turn an unavailable result into a live
+// production inspection by guessing at missing policy.
+type RuntimeInspectionResult struct {
+	Allowed     bool
+	Environment string
+	Reason      string
+}
+
+func ValidateRuntimeInspectionPolicy(policy RuntimeInspectionPolicy) RuntimeInspectionResult {
+	if policy.Environment != "fixture" && policy.Environment != "dev" {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection is limited to fixture/dev"}
+	}
+	if policy.CredentialsAllowed {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot use credentials"}
+	}
+	if policy.DestructiveActionsAllow {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot perform destructive actions"}
+	}
+	if strings.TrimSpace(policy.Target) == "" {
+		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection target is required"}
+	}
+	return RuntimeInspectionResult{Allowed: true, Environment: policy.Environment}
+}
+
+// AnalysisExecutionPolicy is the explicit provider policy for repository
+// understanding. The workspace is disposable and the only writable root;
+// all other capabilities are denied.
+type AnalysisExecutionPolicy struct {
+	WorkspacePath           string
+	WritablePaths           []string
+	NetworkAccess           bool
+	ApprovalAllowed         bool
+	DeliveryAllowed         bool
+	CredentialsAllowed      bool
+	DestructiveActionsAllow bool
+	RequireOSIsolation      bool
+	RuntimeInspection       RuntimeInspectionPolicy
+}
+
+// AnalysisPolicyResult is returned by ValidateAnalysisExecutionPolicy so
+// callers can expose a truthful unavailable state without running a provider.
+type AnalysisPolicyResult struct {
+	Allowed             bool
+	WorkspaceOnly       bool
+	NetworkAccess       bool
+	ApprovalAllowed     bool
+	DeliveryAllowed     bool
+	CredentialsAllowed  bool
+	DestructiveActions  bool
+	OSIsolationRequired bool
+	Reason              string
+}
+
+func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
+	result := AnalysisPolicyResult{
+		WorkspaceOnly:       filepath.IsAbs(p.WorkspacePath) && len(p.WritablePaths) == 0,
+		NetworkAccess:       p.NetworkAccess,
+		ApprovalAllowed:     p.ApprovalAllowed,
+		DeliveryAllowed:     p.DeliveryAllowed,
+		CredentialsAllowed:  p.CredentialsAllowed,
+		DestructiveActions:  p.DestructiveActionsAllow,
+		OSIsolationRequired: p.RequireOSIsolation,
+	}
+	switch {
+	case !result.WorkspaceOnly:
+		result.Reason = "analysis requires an absolute disposable workspace and no external writable paths"
+	case p.NetworkAccess:
+		result.Reason = "analysis network access is denied"
+	case p.ApprovalAllowed:
+		result.Reason = "analysis approvals are always declined"
+	case p.DeliveryAllowed:
+		result.Reason = "analysis cannot deliver or commit"
+	case p.CredentialsAllowed:
+		result.Reason = "analysis cannot use credentials"
+	case p.DestructiveActionsAllow:
+		result.Reason = "analysis cannot perform destructive actions"
+	case !p.RequireOSIsolation:
+		result.Reason = "analysis requires OS isolation"
+	default:
+		runtime := ValidateRuntimeInspectionPolicy(p.RuntimeInspection)
+		if p.RuntimeInspection.Target != "" && !runtime.Allowed {
+			result.Reason = runtime.Reason
+		} else {
+			result.Allowed = true
+		}
+	}
+	return result
+}
+
+func NewReadOnlyAnalysisPolicy(workspacePath string) AnalysisExecutionPolicy {
+	return AnalysisExecutionPolicy{
+		WorkspacePath: workspacePath, RequireOSIsolation: true,
+		RuntimeInspection: RuntimeInspectionPolicy{Environment: "fixture", Target: ""},
+	}
+}
+
+// AnalysisRequest is passed only to providers that explicitly implement the
+// non-persistent, read-only analysis capability.
+type AnalysisRequest struct {
+	TaskID           ID
+	Input            Input
+	WorkingDirectory string
+	Model            string
+	Policy           AnalysisExecutionPolicy
+}
+
+type AnalysisResult struct {
+	ProviderID workmodel.Provider
+	Model      string
+	Output     []byte
+}
+
+// SafeAnalysisProvider is intentionally separate from Provider.Start. A
+// normal task provider may persist sessions and permit delivery; implementing
+// this interface is an explicit promise that analysis has neither behavior.
+type SafeAnalysisProvider interface {
+	AnalyzeReadOnly(context.Context, AnalysisRequest) (AnalysisResult, error)
 }
 
 type ResumeRequest struct {

@@ -121,6 +121,30 @@ func TestEventContractContainsOnlyObservableFields(t *testing.T) {
 	}
 }
 
+func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t *testing.T) {
+	workspace := t.TempDir()
+	if result := provider.NewReadOnlyAnalysisPolicy(workspace).Validate(); !result.Allowed || !result.WorkspaceOnly || result.NetworkAccess || result.ApprovalAllowed || result.DeliveryAllowed || result.CredentialsAllowed || result.DestructiveActions {
+		t.Fatalf("safe policy result = %#v", result)
+	}
+	unsafe := provider.NewReadOnlyAnalysisPolicy(workspace)
+	unsafe.WritablePaths = []string{filepath.Join(workspace, "..", "cache")}
+	if result := unsafe.Validate(); result.Allowed || result.Reason == "" {
+		t.Fatalf("external writable path was accepted: %#v", result)
+	}
+	for _, policy := range []provider.RuntimeInspectionPolicy{
+		{Environment: "prod", Target: "production-host"},
+		{Environment: "dev", Target: "dev-host", CredentialsAllowed: true},
+		{Environment: "fixture", Target: "fixture-host", DestructiveActionsAllow: true},
+	} {
+		if result := provider.ValidateRuntimeInspectionPolicy(policy); result.Allowed || result.Reason == "" {
+			t.Fatalf("unsafe runtime policy accepted: %#v", result)
+		}
+	}
+	if result := provider.ValidateRuntimeInspectionPolicy(provider.RuntimeInspectionPolicy{Environment: "fixture", Target: "fixture-host"}); !result.Allowed {
+		t.Fatalf("fixture runtime policy rejected: %#v", result)
+	}
+}
+
 func TestIDMarshalsAsItsOpaqueString(t *testing.T) {
 	data, err := json.Marshal(provider.MustID("task-1"))
 	if err != nil || string(data) != `"task-1"` {

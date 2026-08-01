@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -80,6 +81,36 @@ func TestRepositoryUnderstandingHTTPIsAuthenticatedAndTyped(t *testing.T) {
 	})
 	if err != nil || typed.OperationID != "understanding-1" {
 		t.Fatalf("typed response = %#v err=%v", typed, err)
+	}
+	fixture, err := os.ReadFile("../../protocol/fixtures/v1/repository-snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot repositorysnapshot.Response
+	if err := json.Unmarshal(fixture, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	roleBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
+		ProjectID: "platform-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
+		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, Snapshot: snapshot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roleRequest := httptest.NewRequest(http.MethodPost, "/v1/understanding/roles", bytes.NewReader(roleBody))
+	roleRequest.Header.Set("X-AgentBridge-Local-Auth", string(secret))
+	roleResponse := httptest.NewRecorder()
+	handler.ServeHTTP(roleResponse, roleRequest)
+	if roleResponse.Code != http.StatusCreated || !strings.Contains(roleResponse.Body.String(), `"role":"Repository Cartographer"`) {
+		t.Fatalf("role route status/body = %d/%s", roleResponse.Code, roleResponse.Body.String())
+	}
+	for _, path := range []string{"/v1/understanding/roles", "/v1/understanding/synthesize"} {
+		unauthenticated := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(roleBody))
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, unauthenticated)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("%s unauthenticated status = %d", path, response.Code)
+		}
 	}
 }
 

@@ -252,18 +252,19 @@ func platformUnderstandingKey(projectID, commit, digest string, role repositorys
 }
 
 func projectUnderstandingRole(response repositorysnapshot.AnalysisResponse, snapshotDigest string) UnderstandingRoleOutput {
-	output := UnderstandingRoleOutput{ProviderAgent: response.Provider.ID, Role: platformRoleName(response.Role), Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{}}
+	roleName := platformRoleName(response.Role)
+	output := UnderstandingRoleOutput{ProviderAgent: response.Provider.ID, Role: roleName, Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{}}
 	for index, finding := range response.Findings {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:finding:%d:%s", response.ResultDigest, index, finding.ID)))
 		refs := make([]UnderstandingEvidenceReference, 0, len(finding.EvidencePaths))
 		for _, path := range finding.EvidencePaths {
 			refs = append(refs, UnderstandingEvidenceReference{Kind: "file", Source: path, Observation: finding.Statement, Digest: snapshotDigest})
 		}
-		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: roleName, Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	for index, capability := range response.Capabilities {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:capability:%d", response.ResultDigest, index)))
-		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: roleName, Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	return output
 }

@@ -504,11 +504,16 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 		control.Close()
 		return fail(err, providerClosers...)
 	}
+	repositoryUnderstanding, err := composeRepositoryUnderstanding(data, workspace, providers, cfg)
+	if err != nil {
+		control.Close()
+		return fail(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots,
-		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -760,11 +765,15 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	if err != nil {
 		return closeOnError(err, providerClosers...)
 	}
+	repositoryUnderstanding, err := composeRepositoryUnderstanding(data, workspace, providers, cfg)
+	if err != nil {
+		return closeOnError(err, providerClosers...)
+	}
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots,
-		Verifier:            localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
+		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding,
+		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
 	})
@@ -1233,6 +1242,34 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
 			}),
 		}},
+	})
+}
+
+func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *workspaceAdapter, providers map[workmodel.Provider]provider.Provider, cfg config.Config) (*repositorysnapshot.UnderstandingService, error) {
+	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers))
+	for name, value := range providers {
+		configured[string(name)] = repositorysnapshot.NativeAnalysisProvider{Provider: value, DefaultModel: cfg.Providers[string(name)].Model}
+	}
+	defaultProvider := ""
+	if _, ok := configured[string(workmodel.CodexSubscription)]; ok {
+		defaultProvider = string(workmodel.CodexSubscription)
+	} else if _, ok := configured[string(workmodel.ClaudeSubscription)]; ok {
+		defaultProvider = string(workmodel.ClaudeSubscription)
+	}
+	for name := range configured {
+		if defaultProvider == "" {
+			defaultProvider = name
+		}
+	}
+	return repositorysnapshot.NewUnderstandingService(repositorysnapshot.UnderstandingConfig{
+		Store: data, Catalog: repositoryCatalog{workspace: workspace},
+		Evidence: repositorysnapshot.GitEvidenceReader{Git: bridgegit.Runner{
+			MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput,
+			Redactor: security.NewRedactor(security.Config{
+				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
+			}),
+		}},
+		Providers: configured, DefaultProvider: defaultProvider,
 	})
 }
 

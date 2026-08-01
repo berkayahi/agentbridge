@@ -140,6 +140,12 @@ func (c *Client) CreateRepositorySnapshot(ctx context.Context, request Repositor
 	return response, err
 }
 
+func (c *Client) UnderstandRepository(ctx context.Context, request RepositoryUnderstandingRequest) (RepositoryUnderstandingResponse, error) {
+	var response RepositoryUnderstandingResponse
+	err := c.do(ctx, http.MethodPost, "/v1/repository-understanding", request, &response)
+	return response, err
+}
+
 func (c *Client) CreateBoard(ctx context.Context, request CreateBoardRequest) (BoardResponse, error) {
 	var response BoardResponse
 	err := c.do(ctx, http.MethodPost, "/v1/boards", request, &response)

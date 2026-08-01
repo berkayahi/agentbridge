@@ -67,6 +67,13 @@ type RepositorySnapshotAuthority interface {
 	Snapshot(context.Context, repositorysnapshot.Request) (repositorysnapshot.Response, error)
 }
 
+type RepositoryUnderstandingRequest = repositorysnapshot.UnderstandingRequest
+type RepositoryUnderstandingResponse = repositorysnapshot.AnalysisResponse
+
+type RepositoryUnderstandingAuthority interface {
+	Understand(context.Context, repositorysnapshot.UnderstandingRequest) (repositorysnapshot.AnalysisResponse, error)
+}
+
 // ProviderInfo describes a runtime this host can actually dispatch to. Available
 // is reported rather than filtered so a client can explain why a runtime cannot
 // be chosen instead of silently omitting it.
@@ -633,19 +640,20 @@ type DeviceRuntime interface {
 type RemoteDeviceFactory func(context.Context, TaskView) (DeviceRuntime, error)
 
 type Config struct {
-	Store               AuthorityStore
-	Identity            deviceidentity.Key
-	Runtimes            RuntimeCatalog
-	Repositories        RepositoryCatalog
-	RepositorySnapshots RepositorySnapshotAuthority
-	Providers           ProviderCatalog
-	Controller          CommandController
-	Executor            Executor
-	Verifier            Verifier
-	Committer           Committer
-	Integrator          RepositoryIntegrator
-	RemoteDevices       map[string]DeviceRuntime
-	RemoteDeviceFactory RemoteDeviceFactory
-	Clock               func() time.Time
-	NewID               func(string) string
+	Store                   AuthorityStore
+	Identity                deviceidentity.Key
+	Runtimes                RuntimeCatalog
+	Repositories            RepositoryCatalog
+	RepositorySnapshots     RepositorySnapshotAuthority
+	RepositoryUnderstanding RepositoryUnderstandingAuthority
+	Providers               ProviderCatalog
+	Controller              CommandController
+	Executor                Executor
+	Verifier                Verifier
+	Committer               Committer
+	Integrator              RepositoryIntegrator
+	RemoteDevices           map[string]DeviceRuntime
+	RemoteDeviceFactory     RemoteDeviceFactory
+	Clock                   func() time.Time
+	NewID                   func(string) string
 }

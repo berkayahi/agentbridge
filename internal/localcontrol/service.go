@@ -30,19 +30,20 @@ type Service struct {
 	progressMu   sync.Mutex
 	decisions    chan localDecision
 
-	store      AuthorityStore
-	identity   deviceidentity.Key
-	runtimes   RuntimeCatalog
-	catalog    RepositoryCatalog
-	providers  ProviderCatalog
-	controller CommandController
-	executor   Executor
-	verifier   Verifier
-	committer  Committer
-	integrator RepositoryIntegrator
-	snapshots  RepositorySnapshotAuthority
-	clock      func() time.Time
-	newID      func(string) string
+	store         AuthorityStore
+	identity      deviceidentity.Key
+	runtimes      RuntimeCatalog
+	catalog       RepositoryCatalog
+	providers     ProviderCatalog
+	controller    CommandController
+	executor      Executor
+	verifier      Verifier
+	committer     Committer
+	integrator    RepositoryIntegrator
+	snapshots     RepositorySnapshotAuthority
+	understanding RepositoryUnderstandingAuthority
+	clock         func() time.Time
+	newID         func(string) string
 
 	usage        UsageSource
 	configurator RepositoryConfigurator
@@ -174,7 +175,7 @@ func New(config Config) (*Service, error) {
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
-		integrator: config.Integrator, snapshots: config.RepositorySnapshots,
+		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
 }

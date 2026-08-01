@@ -10,32 +10,34 @@ import (
 	"time"
 )
 
-//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql schema/019_task_model.sql schema/020_task_execution_profile.sql schema/021_repository_snapshots.sql
+//go:embed schema/011_local_control.sql schema/012_device_routing.sql schema/013_device_link_sequences.sql schema/014_local_control_backfill.sql schema/015_device_command_queue.sql schema/016_task_event_cursors.sql schema/017_remote_observation_cursors.sql schema/018_controller_ownership.sql schema/019_task_model.sql schema/020_task_execution_profile.sql schema/021_repository_snapshots.sql schema/022_repository_understanding.sql
 var localControlSchemaFS embed.FS
 
 const (
-	localControlVersion         = 11
-	localControlName            = "011_local_control.sql"
-	deviceRoutingVersion        = 12
-	deviceRoutingName           = "012_device_routing.sql"
-	deviceLinkVersion           = 13
-	deviceLinkName              = "013_device_link_sequences.sql"
-	localBackfillVersion        = 14
-	localBackfillName           = "014_local_control_backfill.sql"
-	deviceCommandVersion        = 15
-	deviceCommandName           = "015_device_command_queue.sql"
-	taskCursorVersion           = 16
-	taskCursorName              = "016_task_event_cursors.sql"
-	remoteCursorVersion         = 17
-	remoteCursorName            = "017_remote_observation_cursors.sql"
-	controllerOwnerVersion      = 18
-	controllerOwnerName         = "018_controller_ownership.sql"
-	taskModelVersion            = 19
-	taskModelName               = "019_task_model.sql"
-	taskExecutionProfileVersion = 20
-	taskExecutionProfileName    = "020_task_execution_profile.sql"
-	repositorySnapshotVersion   = 21
-	repositorySnapshotName      = "021_repository_snapshots.sql"
+	localControlVersion            = 11
+	localControlName               = "011_local_control.sql"
+	deviceRoutingVersion           = 12
+	deviceRoutingName              = "012_device_routing.sql"
+	deviceLinkVersion              = 13
+	deviceLinkName                 = "013_device_link_sequences.sql"
+	localBackfillVersion           = 14
+	localBackfillName              = "014_local_control_backfill.sql"
+	deviceCommandVersion           = 15
+	deviceCommandName              = "015_device_command_queue.sql"
+	taskCursorVersion              = 16
+	taskCursorName                 = "016_task_event_cursors.sql"
+	remoteCursorVersion            = 17
+	remoteCursorName               = "017_remote_observation_cursors.sql"
+	controllerOwnerVersion         = 18
+	controllerOwnerName            = "018_controller_ownership.sql"
+	taskModelVersion               = 19
+	taskModelName                  = "019_task_model.sql"
+	taskExecutionProfileVersion    = 20
+	taskExecutionProfileName       = "020_task_execution_profile.sql"
+	repositorySnapshotVersion      = 21
+	repositorySnapshotName         = "021_repository_snapshots.sql"
+	repositoryUnderstandingVersion = 22
+	repositoryUnderstandingName    = "022_repository_understanding.sql"
 )
 
 type v2Migration struct {
@@ -56,6 +58,7 @@ func v2MigrationDefinitions() []v2Migration {
 		{version: taskModelVersion, name: taskModelName},
 		{version: taskExecutionProfileVersion, name: taskExecutionProfileName},
 		{version: repositorySnapshotVersion, name: repositorySnapshotName},
+		{version: repositoryUnderstandingVersion, name: repositoryUnderstandingName},
 	}
 }
 
@@ -213,6 +216,22 @@ func repositorySnapshotSchema() (string, error) {
 
 func repositorySnapshotChecksum() (string, error) {
 	contents, err := repositorySnapshotSchema()
+	if err != nil {
+		return "", err
+	}
+	return checksum(contents), nil
+}
+
+func repositoryUnderstandingSchema() (string, error) {
+	contents, err := localControlSchemaFS.ReadFile("schema/022_repository_understanding.sql")
+	if err != nil {
+		return "", fmt.Errorf("read repository understanding schema: %w", err)
+	}
+	return string(contents), nil
+}
+
+func repositoryUnderstandingChecksum() (string, error) {
+	contents, err := repositoryUnderstandingSchema()
 	if err != nil {
 		return "", err
 	}

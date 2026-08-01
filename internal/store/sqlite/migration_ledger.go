@@ -106,22 +106,27 @@ func validateMigrationLedgerQueryer(ctx context.Context, db migrationLedgerQuery
 	if err != nil {
 		return err
 	}
+	repositoryUnderstandingSchemaChecksum, err := repositoryUnderstandingChecksum()
+	if err != nil {
+		return err
+	}
 	expected := map[int]struct {
 		name     string
 		checksum string
 	}{
-		executionKernelVersion:      {name: executionKernelName, checksum: executionChecksum},
-		localControlVersion:         {name: localControlName, checksum: localChecksum},
-		deviceRoutingVersion:        {name: deviceRoutingName, checksum: deviceChecksum},
-		deviceLinkVersion:           {name: deviceLinkName, checksum: linkChecksum},
-		localBackfillVersion:        {name: localBackfillName, checksum: backfillChecksum},
-		deviceCommandVersion:        {name: deviceCommandName, checksum: deviceCommandSchemaChecksum},
-		taskCursorVersion:           {name: taskCursorName, checksum: taskCursorSchemaChecksum},
-		remoteCursorVersion:         {name: remoteCursorName, checksum: remoteCursorSchemaChecksum},
-		controllerOwnerVersion:      {name: controllerOwnerName, checksum: controllerOwnerSchemaChecksum},
-		taskModelVersion:            {name: taskModelName, checksum: taskModelSchemaChecksum},
-		taskExecutionProfileVersion: {name: taskExecutionProfileName, checksum: taskExecutionProfileSchemaChecksum},
-		repositorySnapshotVersion:   {name: repositorySnapshotName, checksum: repositorySnapshotSchemaChecksum},
+		executionKernelVersion:         {name: executionKernelName, checksum: executionChecksum},
+		localControlVersion:            {name: localControlName, checksum: localChecksum},
+		deviceRoutingVersion:           {name: deviceRoutingName, checksum: deviceChecksum},
+		deviceLinkVersion:              {name: deviceLinkName, checksum: linkChecksum},
+		localBackfillVersion:           {name: localBackfillName, checksum: backfillChecksum},
+		deviceCommandVersion:           {name: deviceCommandName, checksum: deviceCommandSchemaChecksum},
+		taskCursorVersion:              {name: taskCursorName, checksum: taskCursorSchemaChecksum},
+		remoteCursorVersion:            {name: remoteCursorName, checksum: remoteCursorSchemaChecksum},
+		controllerOwnerVersion:         {name: controllerOwnerName, checksum: controllerOwnerSchemaChecksum},
+		taskModelVersion:               {name: taskModelName, checksum: taskModelSchemaChecksum},
+		taskExecutionProfileVersion:    {name: taskExecutionProfileName, checksum: taskExecutionProfileSchemaChecksum},
+		repositorySnapshotVersion:      {name: repositorySnapshotName, checksum: repositorySnapshotSchemaChecksum},
+		repositoryUnderstandingVersion: {name: repositoryUnderstandingName, checksum: repositoryUnderstandingSchemaChecksum},
 	}
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum, structural_fingerprint, applied_at FROM migration_ledger ORDER BY version`)
 	if err != nil {

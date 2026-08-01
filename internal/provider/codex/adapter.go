@@ -64,9 +64,11 @@ type AdapterConfig struct {
 }
 
 type sessionState struct {
-	session provider.Session
-	events  chan provider.Event
-	turnID  string
+	session          provider.Session
+	events           chan provider.Event
+	turnID           string
+	analysis         bool
+	approvalDeclined chan struct{}
 }
 
 type pendingApproval struct {
@@ -162,17 +164,26 @@ func (a *Adapter) AnalyzeReadOnly(ctx context.Context, request provider.Analysis
 		return provider.AnalysisResult{}, err
 	}
 	profile := normalizedProfile(workmodel.ExecutionProfile{ApprovalMode: "ask_every_time"}, request.Model)
-	session, events, err := a.startAnalysis(ctx, request.TaskID, request.Input, request.WorkingDirectory, profile, request.Policy)
+	session, state, err := a.startAnalysis(ctx, request.TaskID, request.Input, request.WorkingDirectory, profile, request.Policy)
 	if err != nil {
 		return provider.AnalysisResult{}, err
 	}
-	defer a.discardSession(session.ThreadID)
+	completed := false
+	defer func() {
+		if !completed {
+			a.interruptAndDiscard(state)
+			return
+		}
+		a.discardSession(session.ThreadID)
+	}()
 	var output strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
 			return provider.AnalysisResult{}, ctx.Err()
-		case event, ok := <-events:
+		case <-state.approvalDeclined:
+			return provider.AnalysisResult{}, provider.ErrAnalysisApprovalDeclined
+		case event, ok := <-state.events:
 			if !ok {
 				return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
 			}
@@ -182,23 +193,17 @@ func (a *Adapter) AnalyzeReadOnly(ctx context.Context, request provider.Analysis
 					return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
 				}
 				output.WriteString(event.Message)
-			case provider.EventApprovalRequired:
-				if event.RequestID.Valid() {
-					// The analysis boundary has no approval channel. Decline the
-					// provider request before returning the typed unavailable result.
-					_ = a.ResolveApproval(ctx, provider.ApprovalDecision{RequestID: event.RequestID, TaskID: request.TaskID, Allow: false})
-				}
-				return provider.AnalysisResult{}, provider.ErrAnalysisApprovalDeclined
 			case provider.EventError, provider.EventAuthRequired, provider.EventRateLimited:
 				return provider.AnalysisResult{}, provider.ErrAnalysisUnavailable
 			case provider.EventCompleted:
+				completed = true
 				return provider.AnalysisResult{ProviderID: a.Name(), Model: profile.Model, Output: []byte(output.String())}, nil
 			}
 		}
 	}
 }
 
-func (a *Adapter) startAnalysis(ctx context.Context, taskID provider.ID, input provider.Input, workspace string, profile workmodel.ExecutionProfile, policy provider.AnalysisExecutionPolicy) (provider.Session, <-chan provider.Event, error) {
+func (a *Adapter) startAnalysis(ctx context.Context, taskID provider.ID, input provider.Input, workspace string, profile workmodel.ExecutionProfile, policy provider.AnalysisExecutionPolicy) (provider.Session, *sessionState, error) {
 	params := map[string]any{"experimentalRawEvents": false, "cwd": workspace}
 	if profile.Model != "" {
 		params["model"] = profile.Model
@@ -211,12 +216,12 @@ func (a *Adapter) startAnalysis(ctx context.Context, taskID provider.ID, input p
 	if err != nil {
 		return provider.Session{}, nil, err
 	}
-	state := a.registerSession(session)
+	state := a.registerAnalysisSession(session)
 	if err := a.startTurnWithPolicy(ctx, state, input, profile, policy); err != nil {
 		a.discardSession(session.ThreadID)
 		return provider.Session{}, nil, err
 	}
-	return session, state.events, nil
+	return session, state, nil
 }
 
 func (a *Adapter) Resume(ctx context.Context, req provider.ResumeRequest) (provider.Session, <-chan provider.Event, error) {
@@ -455,6 +460,27 @@ func (a *Adapter) registerSession(session provider.Session) *sessionState {
 	return state
 }
 
+func (a *Adapter) registerAnalysisSession(session provider.Session) *sessionState {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	state := &sessionState{
+		session: session, events: make(chan provider.Event, defaultEventBuffer), analysis: true,
+		approvalDeclined: make(chan struct{}, 1),
+	}
+	a.threads[session.ThreadID] = state
+	return state
+}
+
+func (a *Adapter) interruptAndDiscard(state *sessionState) {
+	if state == nil {
+		return
+	}
+	interruptCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = a.Interrupt(interruptCtx, state.session)
+	a.discardSession(state.session.ThreadID)
+}
+
 func (a *Adapter) eventsFor(threadID string) <-chan provider.Event {
 	state, err := a.state(threadID)
 	if err != nil {
@@ -550,6 +576,14 @@ func (a *Adapter) handleRequest(message ServerMessage) {
 	state, err := a.state(params.ThreadID)
 	if err != nil {
 		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
+		return
+	}
+	if state.analysis {
+		_ = a.rpc.RespondResult(context.Background(), responseID(message), map[string]any{"decision": "decline"})
+		select {
+		case state.approvalDeclined <- struct{}{}:
+		default:
+		}
 		return
 	}
 	now := a.now().UTC()

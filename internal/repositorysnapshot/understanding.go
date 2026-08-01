@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,8 @@ const (
 	MaxAnalysisStrings      = 128
 	MaxAnalysisStringBytes  = 4 << 10
 )
+
+var providerSecretAssignment = regexp.MustCompile(`(?im)(^|[\s\{,])["']?[A-Za-z_][A-Za-z0-9_-]*(?:token|key|secret|password|credential|authorization)[A-Za-z0-9_-]*["']?\s*[:=]\s*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\r\n\}\s]+)`)
 
 var (
 	ErrUnknownRole           = errors.New("repositorysnapshot: unknown analysis role")
@@ -487,6 +490,9 @@ func decodeStructuredOutput(contents []byte, role AnalysisRole) (StructuredOutpu
 	if len(contents) == 0 || len(contents) > MaxProviderOutputBytes {
 		return StructuredOutput{}, ErrProviderOutputBounds
 	}
+	if providerOutputContainsUnsafeContent(contents) {
+		return StructuredOutput{}, ErrProviderOutput
+	}
 	decoder := json.NewDecoder(strings.NewReader(string(contents)))
 	decoder.DisallowUnknownFields()
 	var output StructuredOutput
@@ -515,9 +521,12 @@ func validateStructuredOutput(output StructuredOutput, role AnalysisRole, eviden
 		if finding.ID == "" || len(finding.ID) > 128 || finding.Statement == "" || len(finding.Statement) > MaxAnalysisStringBytes || !finding.KnowledgeState.Valid() {
 			return ErrProviderOutput
 		}
+		if unsafeProviderString(finding.ID) || unsafeProviderString(finding.Statement) {
+			return ErrProviderOutput
+		}
 		if evidence != nil {
 			for _, evidencePath := range finding.EvidencePaths {
-				if _, ok := allowed[evidencePath]; !ok {
+				if _, ok := allowed[evidencePath]; !ok || unsafeProviderString(evidencePath) {
 					return ErrProviderOutput
 				}
 			}
@@ -525,12 +534,48 @@ func validateStructuredOutput(output StructuredOutput, role AnalysisRole, eviden
 	}
 	for _, values := range [][]string{output.Capabilities, output.Assumptions, output.Conflicts, output.Unknowns} {
 		for _, value := range values {
-			if value == "" || len(value) > MaxAnalysisStringBytes {
+			if value == "" || len(value) > MaxAnalysisStringBytes || unsafeProviderString(value) {
 				return ErrProviderOutput
 			}
 		}
 	}
 	return nil
+}
+
+func providerOutputContainsUnsafeContent(contents []byte) bool {
+	for _, value := range contents {
+		if value < 0x20 && value != '\t' && value != '\n' && value != '\r' {
+			return true
+		}
+	}
+	for index := 0; index+1 < len(contents); index++ {
+		if contents[index] != '\\' {
+			continue
+		}
+		next := contents[index+1]
+		if strings.ContainsRune("btnfr", rune(next)) {
+			return true
+		}
+		if next != 'u' || index+5 >= len(contents) || contents[index+2] != '0' || contents[index+3] != '0' || (contents[index+4] != '0' && contents[index+4] != '1') || !strings.ContainsRune("0123456789abcdefABCDEF", rune(contents[index+5])) {
+			continue
+		}
+		return true
+	}
+	return privateKeyLike(string(contents)) || bearerValue.Match(contents) || secretAssignment.Match(contents) || secretEnvAssignment.Match(contents) || providerSecretAssignment.Match(contents)
+}
+
+func unsafeProviderString(value string) bool {
+	for _, character := range value {
+		if character < 0x20 {
+			return true
+		}
+	}
+	return privateKeyLike(value) || bearerValue.MatchString(value) || secretAssignment.MatchString(value) || secretEnvAssignment.MatchString(value) || providerSecretAssignment.MatchString(value)
+}
+
+func privateKeyLike(value string) bool {
+	upper := strings.ToUpper(value)
+	return strings.Contains(upper, "-----BEGIN ") && strings.Contains(upper, "PRIVATE KEY-----")
 }
 
 func validateUnderstandingOperation(operation UnderstandingOperation) error {

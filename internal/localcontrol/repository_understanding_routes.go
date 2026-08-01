@@ -93,25 +93,23 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 	if s == nil || s.understanding == nil || strings.TrimSpace(request.ProjectID) == "" || len(request.ProjectID) > 128 {
 		return UnderstandingRoleResponse{}, ErrNotConfigured
 	}
-	if request.Snapshot.Repository.ProfileID != request.RepositoryProfileID || request.Snapshot.ExactCommitSHA != request.SnapshotCommit || request.Snapshot.ResultDigest != request.SnapshotDigest {
-		return UnderstandingRoleResponse{}, repositorysnapshot.ErrCommitMismatch
-	}
-	if err := repositorysnapshot.VerifyResponseDigest(request.Snapshot); err != nil {
-		return UnderstandingRoleResponse{}, repositorysnapshot.ErrCommitMismatch
+	snapshot, err := s.loadVerifiedSnapshot(ctx, request)
+	if err != nil {
+		return UnderstandingRoleResponse{}, err
 	}
 	role, err := platformRole(request.Role)
 	if err != nil {
 		return UnderstandingRoleResponse{}, err
 	}
-	commit := request.Snapshot.ExactCommitSHA
-	digest := request.Snapshot.ResultDigest
+	commit := snapshot.ExactCommitSHA
+	digest := snapshot.ResultDigest
 	analysis := repositorysnapshot.UnderstandingRequest{
 		RepositoryProfileID: request.RepositoryProfileID, ExpectedCommitSHA: commit, Role: role,
 		ProviderID: "", IdempotencyKey: platformUnderstandingKey(request.ProjectID, commit, digest, role),
 		Snapshot: nil,
 	}
 	if synthesize {
-		analysis.Snapshot = &request.Snapshot
+		analysis.Snapshot = &snapshot
 		analysis.PriorOutputs = make(map[repositorysnapshot.AnalysisRole]repositorysnapshot.PriorOutputReference, 3)
 		for _, priorRole := range []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations} {
 			priorKey := platformUnderstandingKey(request.ProjectID, commit, digest, priorRole)
@@ -122,7 +120,7 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 			analysis.PriorOutputs[priorRole] = repositorysnapshot.PriorOutputReference{IdempotencyKey: priorKey, ResultDigest: prior.ResultDigest}
 		}
 	} else {
-		analysis.Paths, err = snapshotEvidencePaths(request.Snapshot)
+		analysis.Paths, err = snapshotEvidencePaths(snapshot)
 		if err != nil {
 			return UnderstandingRoleResponse{}, err
 		}
@@ -134,7 +132,38 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 	if result.Status != "completed" {
 		return UnderstandingRoleResponse{}, repositorysnapshot.ErrProviderNotConfigured
 	}
-	return UnderstandingRoleResponse{Output: projectUnderstandingRole(result)}, nil
+	return UnderstandingRoleResponse{Output: projectUnderstandingRole(result, digest)}, nil
+}
+
+func (s *Service) loadVerifiedSnapshot(ctx context.Context, request UnderstandingRoleRequest) (repositorysnapshot.Response, error) {
+	reader, ok := s.snapshots.(RepositorySnapshotOperationReader)
+	if !ok || strings.TrimSpace(request.Snapshot.OperationID) == "" {
+		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+	}
+	operation, err := reader.LoadOperation(ctx, request.Snapshot.OperationID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return repositorysnapshot.Response{}, ctx.Err()
+		}
+		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+	}
+	if operation.ID != request.Snapshot.OperationID ||
+		operation.RepositoryProfileID != request.RepositoryProfileID ||
+		operation.ExactCommitSHA != request.SnapshotCommit ||
+		operation.ResultDigest != request.SnapshotDigest ||
+		request.Snapshot.Repository.ProfileID != request.RepositoryProfileID ||
+		request.Snapshot.ExactCommitSHA != request.SnapshotCommit ||
+		request.Snapshot.ResultDigest != request.SnapshotDigest ||
+		operation.Response.OperationID != request.Snapshot.OperationID ||
+		operation.Response.Repository.ProfileID != request.RepositoryProfileID ||
+		operation.Response.ExactCommitSHA != request.SnapshotCommit ||
+		operation.Response.ResultDigest != request.SnapshotDigest {
+		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+	}
+	if err := repositorysnapshot.VerifyResponseDigest(request.Snapshot); err != nil {
+		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+	}
+	return operation.Response, nil
 }
 
 func (s *Service) understandingResult(ctx context.Context, key string) (repositorysnapshot.UnderstandingOperation, error) {
@@ -189,19 +218,19 @@ func platformUnderstandingKey(projectID, commit, digest string, role repositorys
 	return "platform-understanding-" + hex.EncodeToString(sum[:16])
 }
 
-func projectUnderstandingRole(response repositorysnapshot.AnalysisResponse) UnderstandingRoleOutput {
+func projectUnderstandingRole(response repositorysnapshot.AnalysisResponse, snapshotDigest string) UnderstandingRoleOutput {
 	output := UnderstandingRoleOutput{Role: platformRoleName(response.Role), Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{}}
 	for index, finding := range response.Findings {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:finding:%d:%s", response.ResultDigest, index, finding.ID)))
 		refs := make([]UnderstandingEvidenceReference, 0, len(finding.EvidencePaths))
 		for _, path := range finding.EvidencePaths {
-			refs = append(refs, UnderstandingEvidenceReference{Kind: "file", Source: path, Observation: finding.Statement, Digest: response.ResultDigest})
+			refs = append(refs, UnderstandingEvidenceReference{Kind: "file", Source: path, Observation: finding.Statement, Digest: snapshotDigest})
 		}
-		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: []string{}, EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: response.ResultDigest})
+		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: []string{}, EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	for index, capability := range response.Capabilities {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:capability:%d", response.ResultDigest, index)))
-		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: response.ResultDigest})
+		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	return output
 }

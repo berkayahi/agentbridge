@@ -130,6 +130,23 @@ func (s *Service) Snapshot(ctx context.Context, request Request) (Response, erro
 	return response, nil
 }
 
+// LoadOperation returns the exact persisted snapshot identified by its
+// operation ID. Higher-level adapters use this narrow lookup to bind
+// caller-provided snapshot metadata to the snapshot service's durable result.
+func (s *Service) LoadOperation(ctx context.Context, operationID string) (Operation, error) {
+	if s == nil || strings.TrimSpace(operationID) == "" {
+		return Operation{}, ErrInvalidRequest
+	}
+	operation, err := s.store.LoadRepositorySnapshotByID(ctx, operationID)
+	if err != nil {
+		return Operation{}, err
+	}
+	if err := validatePersistedOperation(operation); err != nil {
+		return Operation{}, err
+	}
+	return operation, nil
+}
+
 func normalizeRequest(request Request) (Request, error) {
 	if !safeIdentifier.MatchString(request.RepositoryProfileID) ||
 		!safeIdentifier.MatchString(request.AnalyzerVersion) ||

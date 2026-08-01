@@ -67,6 +67,13 @@ type RepositorySnapshotAuthority interface {
 	Snapshot(context.Context, repositorysnapshot.Request) (repositorysnapshot.Response, error)
 }
 
+// RepositorySnapshotOperationReader is deliberately narrower than the
+// snapshot writer. Role adapters use it to bind a supplied snapshot to the
+// durable operation created by the real snapshot service.
+type RepositorySnapshotOperationReader interface {
+	LoadOperation(context.Context, string) (repositorysnapshot.Operation, error)
+}
+
 type RepositoryUnderstandingRequest = repositorysnapshot.UnderstandingRequest
 type RepositoryUnderstandingResponse = repositorysnapshot.AnalysisResponse
 

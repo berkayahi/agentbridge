@@ -266,6 +266,32 @@ func TestUnderstandingStrictProviderOutputApprovalAndIdempotency(t *testing.T) {
 	}
 }
 
+func TestUnderstandingRejectsSecretLikeAndControlProviderOutputBeforePersistence(t *testing.T) {
+	outputs := []struct {
+		name   string
+		output string
+	}{
+		{name: "json quoted assignment", output: `{"role":"cartographer","findings":[{"id":"f1","statement":"API_TOKEN: \"quoted-value\"","knowledge_state":"observed"}]}`},
+		{name: "yaml quoted assignment", output: `{"role":"cartographer","findings":[{"id":"f1","statement":"password: 'quoted-value'","knowledge_state":"observed"}]}`},
+		{name: "bearer value", output: `{"role":"cartographer","findings":[{"id":"f1","statement":"Authorization: Bearer short-value","knowledge_state":"observed"}]}`},
+		{name: "private key", output: `{"role":"cartographer","findings":[{"id":"f1","statement":"-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----","knowledge_state":"observed"}]}`},
+		{name: "escaped control", output: `{"role":"cartographer","findings":[{"id":"f1","statement":"unsafe\u0000value","knowledge_state":"observed"}]}`},
+	}
+	for _, test := range outputs {
+		t.Run(test.name, func(t *testing.T) {
+			provider := &understandingProvider{output: []byte(test.output)}
+			service, persisted := newUnderstandingTestServiceAndStore(t, provider)
+			_, err := service.Understand(context.Background(), understandingRequest("unsafe-"+strings.ReplaceAll(test.name, " ", "-"), repositorysnapshot.RoleCartographer))
+			if !errors.Is(err, repositorysnapshot.ErrProviderOutput) {
+				t.Fatalf("error = %v, want provider output rejection", err)
+			}
+			if len(persisted.operations) != 0 {
+				t.Fatal("unsafe provider output was persisted")
+			}
+		})
+	}
+}
+
 type understandingProvider struct {
 	output    []byte
 	approval  bool
@@ -322,15 +348,21 @@ func (understandingEvidence) RetrieveEvidence(_ context.Context, _ repositorysna
 }
 
 func newUnderstandingTestService(t *testing.T, provider repositorysnapshot.AnalysisProvider) *repositorysnapshot.UnderstandingService {
+	service, _ := newUnderstandingTestServiceAndStore(t, provider)
+	return service
+}
+
+func newUnderstandingTestServiceAndStore(t *testing.T, provider repositorysnapshot.AnalysisProvider) (*repositorysnapshot.UnderstandingService, *understandingStore) {
 	t.Helper()
+	persisted := &understandingStore{operations: make(map[string]repositorysnapshot.UnderstandingOperation)}
 	service, err := repositorysnapshot.NewUnderstandingService(repositorysnapshot.UnderstandingConfig{
-		Store:   &understandingStore{operations: make(map[string]repositorysnapshot.UnderstandingOperation)},
+		Store:   persisted,
 		Catalog: understandingCatalog{}, Evidence: understandingEvidence{}, Providers: map[string]repositorysnapshot.AnalysisProvider{"fixture": provider}, DefaultProvider: "fixture",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service
+	return service, persisted
 }
 
 func understandingRequest(key string, role repositorysnapshot.AnalysisRole) repositorysnapshot.UnderstandingRequest {

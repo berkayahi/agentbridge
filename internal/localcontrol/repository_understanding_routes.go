@@ -33,10 +33,11 @@ type UnderstandingRoleResponse struct {
 // of the Platform role DTO. The authoritative AgentBridge result remains the
 // persisted AnalysisResponse and its exact result digest.
 type UnderstandingRoleOutput struct {
-	Role         string                        `json:"role"`
-	Claims       []UnderstandingRoleClaim      `json:"claims"`
-	Capabilities []UnderstandingRoleCapability `json:"capabilities"`
-	Summary      string                        `json:"summary"`
+	ProviderAgent string                        `json:"provider_agent,omitempty"`
+	Role          string                        `json:"role"`
+	Claims        []UnderstandingRoleClaim      `json:"claims"`
+	Capabilities  []UnderstandingRoleCapability `json:"capabilities"`
+	Summary       string                        `json:"summary"`
 }
 
 type UnderstandingRoleClaim struct {
@@ -63,6 +64,7 @@ type UnderstandingRoleCapability struct {
 	ImplementationStatus   string                            `json:"implementation_status"`
 	Summary                string                            `json:"summary"`
 	Evidence               []UnderstandingEvidenceReference  `json:"evidence"`
+	Assumptions            []string                          `json:"assumptions"`
 	Confidence             float64                           `json:"confidence"`
 	PublicEligible         bool                              `json:"public_eligible"`
 	MarketingClaimEligible bool                              `json:"marketing_claim_eligible"`
@@ -219,18 +221,18 @@ func platformUnderstandingKey(projectID, commit, digest string, role repositorys
 }
 
 func projectUnderstandingRole(response repositorysnapshot.AnalysisResponse, snapshotDigest string) UnderstandingRoleOutput {
-	output := UnderstandingRoleOutput{Role: platformRoleName(response.Role), Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{}}
+	output := UnderstandingRoleOutput{ProviderAgent: response.Provider.ID, Role: platformRoleName(response.Role), Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{}}
 	for index, finding := range response.Findings {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:finding:%d:%s", response.ResultDigest, index, finding.ID)))
 		refs := make([]UnderstandingEvidenceReference, 0, len(finding.EvidencePaths))
 		for _, path := range finding.EvidencePaths {
 			refs = append(refs, UnderstandingEvidenceReference{Kind: "file", Source: path, Observation: finding.Statement, Digest: snapshotDigest})
 		}
-		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: []string{}, EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: id, Key: "finding-" + fmt.Sprint(index), Summary: finding.Statement, Evidence: refs, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: finding.KnowledgeState, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	for index, capability := range response.Capabilities {
 		id := uuid.NewSHA1(uuid.NameSpaceURL, []byte(fmt.Sprintf("%s:capability:%d", response.ResultDigest, index)))
-		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: id, Key: "capability-" + fmt.Sprint(index), Name: capability, Actor: "unknown", VerifiedBehavior: capability, ImplementationStatus: "unknown", Summary: capability, Evidence: []UnderstandingEvidenceReference{}, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: repositorysnapshot.KnowledgeUnknown, ReviewState: "pending", RepositoryCommit: response.ExactCommitSHA, Role: string(response.Role), Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
 	}
 	return output
 }

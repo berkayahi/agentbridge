@@ -61,15 +61,12 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if s == nil || s.catalog == nil {
 		return SessionResponse{}, ErrNotConfigured
 	}
-	if err := validateRequest(request); err != nil {
+	if err := ValidateSessionRequest(request); err != nil {
 		return SessionResponse{}, err
 	}
 	contextBundle := redactContext(s.redactor, request.Context)
 	prompt := s.redactor.RedactString(request.Prompt)
 	schema := append([]byte(nil), request.OutputSchema...)
-	if err := validateSchema(schema); err != nil {
-		return SessionResponse{}, err
-	}
 	policy := effectivePolicy()
 	schemaDigest := digestBytes(schema)
 	policyDigest := digestPolicy(policy, request.WebResearch)
@@ -204,6 +201,17 @@ func validateCapability(capability ProviderCapability, webResearch bool) error {
 	return nil
 }
 
+// ValidateSessionRequest checks the complete request boundary without
+// redacting or invoking a provider. Local-control uses this same preflight so
+// an invalid request cannot be replayed, persisted, or handed to an authority
+// implementation that omits its own validation.
+func ValidateSessionRequest(request SessionRequest) error {
+	if err := validateRequest(request); err != nil {
+		return err
+	}
+	return validateSchema(request.OutputSchema)
+}
+
 func validateRequest(request SessionRequest) error {
 	if !validID(request.IdempotencyKey) || strings.TrimSpace(request.Prompt) == "" || len(request.Prompt) > MaxPromptBytes || !utf8.ValidString(request.Prompt) {
 		return ErrInvalidRequest
@@ -221,7 +229,7 @@ func validateRequest(request SessionRequest) error {
 		return ErrInvalidRequest
 	}
 	total := 0
-	for _, item := range request.Context.Items {
+	for index, item := range request.Context.Items {
 		if strings.TrimSpace(item.Key) == "" || len(item.Key) > MaxContextKeyBytes || len(item.Value) > MaxContextValueBytes || !utf8.ValidString(item.Key) || !utf8.ValidString(item.Value) {
 			return ErrInvalidRequest
 		}
@@ -232,8 +240,26 @@ func validateRequest(request SessionRequest) error {
 		if total > MaxContextTotalBytes {
 			return ErrInvalidRequest
 		}
+		if err := validateContextValue(item.Value, fmt.Sprintf("$.context.items[%d].value", index)); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func validateContextValue(value, path string) error {
+	decoded, err := decodeJSON([]byte(value))
+	if err != nil {
+		return nil
+	}
+	switch decoded.(type) {
+	case map[string]any, []any:
+		// Structured context is still allowed when it is generic and safe, but
+		// sensitive nested fields are rejected rather than redacted and sent on.
+		return rejectSecretKeys(decoded, path)
+	default:
+		return nil
+	}
 }
 
 func redactContext(redactor *security.Redactor, bundle ContextBundle) ContextBundle {

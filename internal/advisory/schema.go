@@ -19,6 +19,13 @@ func validateSchema(data []byte) error {
 	if !ok {
 		return fmt.Errorf("%w: schema must be an object", ErrInvalidRequest)
 	}
+	// JSON Schema carries caller-controlled JSON in more places than the
+	// structural property tree. Scan the decoded document before any provider
+	// can receive it so enum/const objects and arrays cannot hide sensitive
+	// fields at an arbitrary depth.
+	if err := rejectSecretKeys(object, "$"); err != nil {
+		return err
+	}
 	if err := validateSchemaDefinition(object, "$", 0); err != nil {
 		if errors.Is(err, ErrPolicyViolation) {
 			return err
@@ -129,7 +136,7 @@ func rejectSecretKeys(value any, path string) error {
 	case map[string]any:
 		for name, child := range value {
 			if sensitiveKey(name) {
-				return fmt.Errorf("%w: structured output %s contains secret-shaped field %q", ErrPolicyViolation, path, name)
+				return fmt.Errorf("%w: JSON %s contains secret-shaped key %q", ErrPolicyViolation, path, name)
 			}
 			if err := rejectSecretKeys(child, path+"."+name); err != nil {
 				return err

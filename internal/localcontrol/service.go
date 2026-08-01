@@ -189,6 +189,9 @@ func New(config Config) (*Service, error) {
 func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
+	if err := advisory.ValidateSessionRequest(request); err != nil {
+		return advisory.SessionResponse{}, err
+	}
 	var cached advisory.SessionResponse
 	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
 		if done && err == nil {

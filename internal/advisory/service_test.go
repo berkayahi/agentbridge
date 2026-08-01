@@ -157,6 +157,47 @@ func TestExecuteAdvisorySessionRejectsSecretSchemaAndOutputFields(t *testing.T) 
 	}
 }
 
+func TestExecuteAdvisorySessionRejectsNestedSecretsInSchemaValuesAndContextBeforeProvider(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*advisory.SessionRequest)
+	}{
+		{
+			name: "enum",
+			mutate: func(request *advisory.SessionRequest) {
+				request.OutputSchema = json.RawMessage(`{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["safe",{"nested":[{"token":"enum-secret"}]}]}},"required":["kind"],"additionalProperties":false}}},"required":["items"],"additionalProperties":false}`)
+			},
+		},
+		{
+			name: "const",
+			mutate: func(request *advisory.SessionRequest) {
+				request.OutputSchema = json.RawMessage(`{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"payload":{"type":"object","const":{"nested":[{"password":"const-secret"}]} }},"required":["payload"],"additionalProperties":false}}},"required":["items"],"additionalProperties":false}`)
+			},
+		},
+		{
+			name: "context",
+			mutate: func(request *advisory.SessionRequest) {
+				request.Context.Items[0].Value = `{"nested":[{"password":"context-secret"}]}`
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			provider := newTestProvider(`{"answer":"ok"}`)
+			service := newService(t, provider)
+			request := testRequest()
+			test.mutate(&request)
+			if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
+				t.Fatalf("nested secret err = %v", err)
+			}
+			if provider.calls != 0 {
+				t.Fatalf("nested secret reached provider: calls=%d request=%#v", provider.calls, provider.request)
+			}
+		})
+	}
+}
+
 func TestExecuteAdvisorySessionFailsClosedWithoutWebAdapter(t *testing.T) {
 	provider := newTestProvider(`{"answer":"researched"}`)
 	provider.capability.WebResearch = true

@@ -14,6 +14,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
+	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 )
 
@@ -138,5 +139,63 @@ func TestAdvisorySessionRejectsSecretOutputBeforePersistence(t *testing.T) {
 	}
 	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) || authority.calls != 2 {
 		t.Fatalf("secret output replay = err %v calls %d", err, authority.calls)
+	}
+}
+
+func TestAdvisorySessionRejectsNestedSecretsBeforeAuthorityOrPersistence(t *testing.T) {
+	data, err := sqlite.OpenV2Runtime(context.Background(), filepath.Join(t.TempDir(), "nested-secrets.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	authority := &advisoryAuthority{response: advisory.SessionResponse{
+		ContractVersion: advisory.ContractVersion,
+		Output:          json.RawMessage(`{"answer":"ok"}`),
+	}}
+	service, err := localcontrol.New(localcontrol.Config{Store: data, Runtimes: fakeCatalog{}, Advisory: authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		key    string
+		mutate func(*advisory.SessionRequest)
+	}{
+		{
+			key: "nested-enum",
+			mutate: func(request *advisory.SessionRequest) {
+				request.OutputSchema = json.RawMessage(`{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":[{"nested":{"token":"enum-secret"}}]}},"required":["kind"],"additionalProperties":false}}},"required":["items"],"additionalProperties":false}`)
+			},
+		},
+		{
+			key: "nested-const",
+			mutate: func(request *advisory.SessionRequest) {
+				request.OutputSchema = json.RawMessage(`{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"payload":{"type":"object","const":{"nested":{"password":"const-secret"}}}},"required":["payload"],"additionalProperties":false}}},"required":["items"],"additionalProperties":false}`)
+			},
+		},
+		{
+			key: "nested-context",
+			mutate: func(request *advisory.SessionRequest) {
+				request.Context.Items[0].Value = `{"nested":[{"password":"context-secret"}]}`
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.key, func(t *testing.T) {
+			request := advisoryRequest()
+			request.IdempotencyKey = test.key
+			test.mutate(&request)
+			response, err := service.ExecuteAdvisorySession(context.Background(), request)
+			if !errors.Is(err, advisory.ErrPolicyViolation) {
+				t.Fatalf("nested secret err = %v", err)
+			}
+			if authority.calls != 0 || len(response.Output) != 0 || strings.Contains(string(response.Output), "secret") {
+				t.Fatalf("nested secret crossed local boundary: calls=%d response=%#v", authority.calls, response)
+			}
+			if _, loadErr := data.LoadIdempotency(context.Background(), test.key); !errors.Is(loadErr, store.ErrNotFound) {
+				t.Fatalf("nested secret was persisted: %v", loadErr)
+			}
+		})
 	}
 }

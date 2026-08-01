@@ -21,6 +21,7 @@ type UnderstandingRoleRequest struct {
 	RepositoryProfileID string                      `json:"repository_profile_id"`
 	SnapshotCommit      string                      `json:"snapshot_commit"`
 	SnapshotDigest      string                      `json:"snapshot_digest"`
+	SnapshotOperationID string                      `json:"snapshot_operation_id,omitempty"`
 	Snapshot            repositorysnapshot.Response `json:"snapshot"`
 	PriorOutputs        []json.RawMessage           `json:"prior_outputs,omitempty"`
 }
@@ -139,30 +140,42 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 
 func (s *Service) loadVerifiedSnapshot(ctx context.Context, request UnderstandingRoleRequest) (repositorysnapshot.Response, error) {
 	reader, ok := s.snapshots.(RepositorySnapshotOperationReader)
-	if !ok || strings.TrimSpace(request.Snapshot.OperationID) == "" {
+	operationID := strings.TrimSpace(request.SnapshotOperationID)
+	if operationID == "" {
+		operationID = strings.TrimSpace(request.Snapshot.OperationID)
+	}
+	if !ok || operationID == "" {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
-	operation, err := reader.LoadOperation(ctx, request.Snapshot.OperationID)
+	operation, err := reader.LoadOperation(ctx, operationID)
 	if err != nil {
 		if ctx.Err() != nil {
 			return repositorysnapshot.Response{}, ctx.Err()
 		}
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
-	if operation.ID != request.Snapshot.OperationID ||
+	if operation.ID != operationID ||
 		operation.RepositoryProfileID != request.RepositoryProfileID ||
 		operation.ExactCommitSHA != request.SnapshotCommit ||
 		operation.ResultDigest != request.SnapshotDigest ||
-		request.Snapshot.Repository.ProfileID != request.RepositoryProfileID ||
-		request.Snapshot.ExactCommitSHA != request.SnapshotCommit ||
-		request.Snapshot.ResultDigest != request.SnapshotDigest ||
-		operation.Response.OperationID != request.Snapshot.OperationID ||
+		operation.Response.OperationID != operationID ||
 		operation.Response.Repository.ProfileID != request.RepositoryProfileID ||
 		operation.Response.ExactCommitSHA != request.SnapshotCommit ||
 		operation.Response.ResultDigest != request.SnapshotDigest {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
-	if err := repositorysnapshot.VerifyResponseDigest(request.Snapshot); err != nil {
+	if request.Snapshot.OperationID != "" {
+		if request.Snapshot.OperationID != operationID ||
+			request.Snapshot.Repository.ProfileID != request.RepositoryProfileID ||
+			request.Snapshot.ExactCommitSHA != request.SnapshotCommit ||
+			request.Snapshot.ResultDigest != request.SnapshotDigest {
+			return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+		}
+		if err := repositorysnapshot.VerifyResponseDigest(request.Snapshot); err != nil {
+			return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
+		}
+	}
+	if err := repositorysnapshot.VerifyResponseDigest(operation.Response); err != nil {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
 	return operation.Response, nil

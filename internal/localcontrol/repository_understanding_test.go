@@ -158,7 +158,7 @@ func TestUnderstandingRoleBindsPersistedSnapshotAndUsesSnapshotDigest(t *testing
 	}
 	requestBody, err := json.Marshal(localcontrol.UnderstandingRoleRequest{
 		ProjectID: "platform-project", Role: "Repository Cartographer", RepositoryProfileID: snapshot.Repository.ProfileID,
-		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, Snapshot: snapshot,
+		SnapshotCommit: snapshot.ExactCommitSHA, SnapshotDigest: snapshot.ResultDigest, SnapshotOperationID: snapshot.OperationID,
 	})
 	if err != nil {
 		t.Fatal(err)

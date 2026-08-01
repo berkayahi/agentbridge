@@ -316,9 +316,10 @@ func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile Con
 		if s.evidence == nil {
 			return "", nil, ErrNotConfigured
 		}
-		packet, err := s.evidence.RetrieveEvidence(ctx, profile, EvidenceRequest{
+		evidenceRequest := EvidenceRequest{
 			RepositoryProfileID: request.RepositoryProfileID, ExpectedCommitSHA: request.ExpectedCommitSHA, Paths: request.Paths,
-		})
+		}
+		packet, err := retrieveRoleEvidence(ctx, s.evidence, profile, evidenceRequest)
 		if err != nil {
 			return "", nil, err
 		}
@@ -402,6 +403,42 @@ func (s *UnderstandingService) prepareWorkspace(ctx context.Context, profile Con
 		evidence = append(evidence, EvidenceReference{Path: name, ContentDigest: "sha256:" + hex.EncodeToString(digest[:]), Size: len(encoded)})
 	}
 	return workspace, evidence, nil
+}
+
+// M1 detector observations can name a committed directory (for example
+// "migrations") while the provider workspace accepts only bounded file
+// evidence. Retry one path at a time after a directory/missing-path result so
+// safe files remain usable; secret-like or malformed evidence errors are still
+// fatal and never get silently dropped.
+func retrieveRoleEvidence(ctx context.Context, reader EvidenceReader, profile ConfiguredRepository, request EvidenceRequest) (EvidencePacket, error) {
+	packet, err := reader.RetrieveEvidence(ctx, profile, request)
+	if err == nil || !errors.Is(err, ErrPathNotFound) {
+		return packet, err
+	}
+	files := make([]EvidenceFile, 0, len(request.Paths))
+	totalBytes := 0
+	for _, value := range request.Paths {
+		one := request
+		one.Paths = []string{value}
+		part, partErr := reader.RetrieveEvidence(ctx, profile, one)
+		if errors.Is(partErr, ErrPathNotFound) {
+			continue
+		}
+		if partErr != nil {
+			return EvidencePacket{}, partErr
+		}
+		files = append(files, part.Files...)
+		totalBytes += part.TotalBytes
+	}
+	if len(files) == 0 {
+		return EvidencePacket{}, ErrEvidenceMissing
+	}
+	packet = EvidencePacket{
+		ContractVersion: EvidenceContractV1, RepositoryProfileID: request.RepositoryProfileID,
+		ExactCommitSHA: request.ExpectedCommitSHA, Files: files, TotalBytes: totalBytes,
+	}
+	packet.ResultDigest, err = digestEvidencePacket(packet)
+	return packet, err
 }
 
 func (s *UnderstandingService) persistUnderstanding(ctx context.Context, request UnderstandingRequest, requestDigest string, response AnalysisResponse) (AnalysisResponse, error) {

@@ -556,7 +556,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status, code = http.StatusForbidden, "provider_approval_declined"
 	case errors.Is(err, repositorysnapshot.ErrProviderOutput), errors.Is(err, repositorysnapshot.ErrProviderOutputBounds):
 		status, code = http.StatusBadGateway, "provider_output_invalid"
-	case errors.Is(err, repositorysnapshot.ErrSecretLikeFile), errors.Is(err, repositorysnapshot.ErrBinaryEvidence):
+	case errors.Is(err, repositorysnapshot.ErrSecretLikeFile), errors.Is(err, repositorysnapshot.ErrBinaryEvidence), errors.Is(err, repositorysnapshot.ErrEvidenceMissing):
 		status, code = http.StatusUnprocessableEntity, "evidence_unavailable"
 	case errors.Is(err, repositorysnapshot.ErrBoundsExceeded):
 		status, code = http.StatusUnprocessableEntity, "snapshot_bounds_exceeded"

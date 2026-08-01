@@ -22,6 +22,7 @@ type UnderstandingRoleRequest struct {
 	SnapshotCommit      string                      `json:"snapshot_commit"`
 	SnapshotDigest      string                      `json:"snapshot_digest"`
 	SnapshotOperationID string                      `json:"snapshot_operation_id,omitempty"`
+	IdempotencyKey      string                      `json:"idempotency_key,omitempty"`
 	Snapshot            repositorysnapshot.Response `json:"snapshot"`
 	PriorOutputs        []json.RawMessage           `json:"prior_outputs,omitempty"`
 }
@@ -106,9 +107,16 @@ func (s *Service) understandPlatformRole(ctx context.Context, request Understand
 	}
 	commit := snapshot.ExactCommitSHA
 	digest := snapshot.ResultDigest
+	operationKey := strings.TrimSpace(request.IdempotencyKey)
+	if operationKey == "" {
+		operationKey = platformUnderstandingKey(request.ProjectID, commit, digest, role)
+	}
+	if !validID(operationKey) {
+		return UnderstandingRoleResponse{}, repositorysnapshot.ErrInvalidRequest
+	}
 	analysis := repositorysnapshot.UnderstandingRequest{
 		RepositoryProfileID: request.RepositoryProfileID, ExpectedCommitSHA: commit, Role: role,
-		ProviderID: "", IdempotencyKey: platformUnderstandingKey(request.ProjectID, commit, digest, role),
+		ProviderID: "", IdempotencyKey: operationKey,
 		Snapshot: nil,
 	}
 	if synthesize {
@@ -218,14 +226,15 @@ func snapshotEvidencePaths(snapshot repositorysnapshot.Response) ([]string, erro
 // shaped assignment; it must never be re-read for provider analysis.
 func safeRoleEvidencePath(value string) bool {
 	lower := strings.ToLower(strings.TrimSpace(value))
-	base := lower
-	if slash := strings.LastIndexByte(base, '/'); slash >= 0 {
-		base = base[slash+1:]
-	}
-	if strings.HasPrefix(base, ".env") || strings.Contains(base, "secret") || strings.Contains(base, "credential") ||
-		base == "password" || base == "token" || base == "id_rsa" || base == "id_ed25519" ||
-		strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx") {
-		return false
+	for _, component := range strings.Split(lower, "/") {
+		if component == "" {
+			continue
+		}
+		if strings.HasPrefix(component, ".env") || strings.Contains(component, "secret") || strings.Contains(component, "credential") ||
+			component == "password" || component == "token" || component == "private" || component == "keys" || component == "id_rsa" || component == "id_ed25519" ||
+			strings.HasSuffix(component, ".pem") || strings.HasSuffix(component, ".key") || strings.HasSuffix(component, ".p12") || strings.HasSuffix(component, ".pfx") {
+			return false
+		}
 	}
 	return true
 }

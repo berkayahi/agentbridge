@@ -164,6 +164,8 @@ func TestEvidenceReaderRejectsUnsafePathsCommitMismatchSecretFilesAndBounds(t *t
 	writeEvidenceFile(t, root, "private.pem", "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n")
 	writeEvidenceFile(t, root, "secret.json", `{"api_key":"secret-value"}`)
 	writeEvidenceFile(t, root, "secret.yaml", "password: 'secret-value'\n")
+	writeEvidenceFile(t, root, "secrets/runtime.yaml", "value: 'secret-value'\n")
+	writeEvidenceFile(t, root, "config/credentials/prod.yaml", "value: 'secret-value'\n")
 	if err := os.WriteFile(filepath.Join(root, "control.txt"), []byte("safe\x00content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +200,7 @@ func TestEvidenceReaderRejectsUnsafePathsCommitMismatchSecretFilesAndBounds(t *t
 	if !errors.Is(err, repositorysnapshot.ErrBoundsExceeded) {
 		t.Fatalf("large file = %v", err)
 	}
-	for _, name := range []string{"secret.json", "secret.yaml"} {
+	for _, name := range []string{"secret.json", "secret.yaml", "secrets/runtime.yaml", "config/credentials/prod.yaml"} {
 		_, err := reader.RetrieveEvidence(context.Background(), profile, repositorysnapshot.EvidenceRequest{
 			RepositoryProfileID: "fixture", ExpectedCommitSHA: commit, Paths: []string{name},
 		})
@@ -221,6 +223,35 @@ func TestEvidenceReaderRejectsUnsafePathsCommitMismatchSecretFilesAndBounds(t *t
 	})
 	if !errors.Is(err, repositorysnapshot.ErrInvalidRequest) {
 		t.Fatalf("path count = %v", err)
+	}
+}
+
+func TestUnderstandingEvidenceFallbackKeepsAggregateBoundsAndMissingState(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		paths     []string
+		partBytes int
+		want      error
+	}{
+		{name: "aggregate bounds", paths: []string{"first.txt", "second.txt"}, partBytes: repositorysnapshot.MaxEvidenceBytes/2 + 1, want: repositorysnapshot.ErrBoundsExceeded},
+		{name: "all missing", paths: []string{"missing.txt", "also-missing.txt"}, want: repositorysnapshot.ErrEvidenceMissing},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			persisted := &understandingStore{operations: make(map[string]repositorysnapshot.UnderstandingOperation)}
+			service, err := repositorysnapshot.NewUnderstandingService(repositorysnapshot.UnderstandingConfig{
+				Store: persisted, Catalog: understandingCatalog{}, Evidence: fallbackEvidence{partBytes: test.partBytes},
+				Providers: map[string]repositorysnapshot.AnalysisProvider{"fixture": &understandingProvider{output: []byte(`{"role":"cartographer","findings":[]}`)}}, DefaultProvider: "fixture",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := understandingRequest("fallback-"+strings.ReplaceAll(test.name, " ", "-"), repositorysnapshot.RoleCartographer)
+			request.Paths = test.paths
+			_, err = service.Understand(context.Background(), request)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
 	}
 }
 
@@ -342,6 +373,21 @@ func (understandingCatalog) ResolveRepositoryProfile(_ context.Context, id strin
 }
 
 type understandingEvidence struct{}
+
+type fallbackEvidence struct{ partBytes int }
+
+func (f fallbackEvidence) RetrieveEvidence(_ context.Context, _ repositorysnapshot.ConfiguredRepository, request repositorysnapshot.EvidenceRequest) (repositorysnapshot.EvidencePacket, error) {
+	if len(request.Paths) != 1 {
+		return repositorysnapshot.EvidencePacket{}, repositorysnapshot.ErrPathNotFound
+	}
+	if strings.Contains(request.Paths[0], "missing") {
+		return repositorysnapshot.EvidencePacket{}, repositorysnapshot.ErrPathNotFound
+	}
+	return repositorysnapshot.EvidencePacket{
+		ContractVersion: repositorysnapshot.EvidenceContractV1, RepositoryProfileID: request.RepositoryProfileID,
+		ExactCommitSHA: request.ExpectedCommitSHA, Files: []repositorysnapshot.EvidenceFile{{Path: request.Paths[0], Content: strings.Repeat("x", f.partBytes), ContentDigest: "sha256:fixture", Size: f.partBytes}}, TotalBytes: f.partBytes,
+	}, nil
+}
 
 func (understandingEvidence) RetrieveEvidence(_ context.Context, _ repositorysnapshot.ConfiguredRepository, request repositorysnapshot.EvidenceRequest) (repositorysnapshot.EvidencePacket, error) {
 	return repositorysnapshot.EvidencePacket{ContractVersion: repositorysnapshot.EvidenceContractV1, RepositoryProfileID: request.RepositoryProfileID, ExactCommitSHA: request.ExpectedCommitSHA, Files: []repositorysnapshot.EvidenceFile{{Path: "README.md", Content: "evidence", ContentDigest: "sha256:evidence", Size: 8}}}, nil

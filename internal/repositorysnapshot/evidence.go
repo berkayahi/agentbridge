@@ -212,14 +212,24 @@ func (g GitEvidenceReader) run(ctx context.Context, checkout string, args ...str
 }
 
 func secretLikePath(value string) bool {
-	base := strings.ToLower(path.Base(value))
-	if base == ".env" || base == "credentials" || base == "credentials.json" || base == "secrets" || base == "secrets.json" || base == "id_rsa" || base == "id_ed25519" {
-		return true
+	for _, component := range strings.Split(strings.ToLower(path.Clean(value)), "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".env" || component == "credentials" || component == "credentials.json" || component == "secrets" || component == "secrets.json" || component == "private" || component == "keys" || component == "id_rsa" || component == "id_ed25519" {
+			return true
+		}
+		if strings.HasSuffix(component, ".pem") || strings.HasSuffix(component, ".key") || strings.HasSuffix(component, ".p12") || strings.HasSuffix(component, ".pfx") {
+			return true
+		}
+		if strings.Contains(component, "secret") && !strings.Contains(component, "example") && !strings.Contains(component, "sample") {
+			return true
+		}
+		if strings.Contains(component, "credential") && !strings.Contains(component, "example") && !strings.Contains(component, "sample") {
+			return true
+		}
 	}
-	if strings.HasSuffix(base, ".pem") || strings.HasSuffix(base, ".key") || strings.HasSuffix(base, ".p12") || strings.HasSuffix(base, ".pfx") {
-		return true
-	}
-	return strings.Contains(base, "secret") && !strings.Contains(base, "example") && !strings.Contains(base, "sample")
+	return false
 }
 
 func redactEvidence(pathname string, input []byte) ([]byte, bool, error) {

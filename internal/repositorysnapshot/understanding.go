@@ -427,6 +427,9 @@ func retrieveRoleEvidence(ctx context.Context, reader EvidenceReader, profile Co
 		if partErr != nil {
 			return EvidencePacket{}, partErr
 		}
+		if part.TotalBytes < 0 || part.TotalBytes > MaxEvidenceBytes || totalBytes > MaxEvidenceBytes-part.TotalBytes {
+			return EvidencePacket{}, ErrBoundsExceeded
+		}
 		files = append(files, part.Files...)
 		totalBytes += part.TotalBytes
 	}

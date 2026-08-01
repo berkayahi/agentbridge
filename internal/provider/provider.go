@@ -127,53 +127,6 @@ type StartRequest struct {
 	WritablePaths []string
 }
 
-// RuntimeInspectionPolicy describes the optional runtime-inspection seam. It
-// is deliberately narrower than the normal task policy: production targets,
-// credentials, and destructive actions are never permitted here.
-type RuntimeInspectionPolicy struct {
-	Environment             string
-	Target                  string
-	NetworkAllowed          bool
-	HostEnvironmentAllowed  bool
-	ProductionDataAllowed   bool
-	CredentialsAllowed      bool
-	DestructiveActionsAllow bool
-}
-
-// RuntimeInspectionResult is the typed fail-closed result for optional
-// runtime inspection. No provider may turn an unavailable result into a live
-// production inspection by guessing at missing policy.
-type RuntimeInspectionResult struct {
-	Allowed     bool
-	Environment string
-	Reason      string
-}
-
-func ValidateRuntimeInspectionPolicy(policy RuntimeInspectionPolicy) RuntimeInspectionResult {
-	if policy.Environment != "fixture" && policy.Environment != "dev" {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection is limited to fixture/dev"}
-	}
-	if policy.NetworkAllowed {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot use unapproved network access"}
-	}
-	if policy.HostEnvironmentAllowed {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot inherit the host environment"}
-	}
-	if policy.ProductionDataAllowed {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot access production data"}
-	}
-	if policy.CredentialsAllowed {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot use credentials"}
-	}
-	if policy.DestructiveActionsAllow {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection cannot perform destructive actions"}
-	}
-	if strings.TrimSpace(policy.Target) == "" {
-		return RuntimeInspectionResult{Environment: policy.Environment, Reason: "runtime inspection target is required"}
-	}
-	return RuntimeInspectionResult{Allowed: true, Environment: policy.Environment}
-}
-
 // AnalysisExecutionPolicy is the explicit provider policy for repository
 // understanding. The workspace is disposable and the only writable root;
 // all other capabilities are denied.
@@ -188,7 +141,6 @@ type AnalysisExecutionPolicy struct {
 	CredentialsAllowed      bool
 	DestructiveActionsAllow bool
 	RequireOSIsolation      bool
-	RuntimeInspection       RuntimeInspectionPolicy
 }
 
 // AnalysisPolicyResult is returned by ValidateAnalysisExecutionPolicy so
@@ -239,12 +191,7 @@ func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
 	case !p.RequireOSIsolation:
 		result.Reason = "analysis requires OS isolation"
 	default:
-		runtime := ValidateRuntimeInspectionPolicy(p.RuntimeInspection)
-		if p.RuntimeInspection.Target != "" && !runtime.Allowed {
-			result.Reason = runtime.Reason
-		} else {
-			result.Allowed = true
-		}
+		result.Allowed = true
 	}
 	return result
 }
@@ -252,7 +199,6 @@ func (p AnalysisExecutionPolicy) Validate() AnalysisPolicyResult {
 func NewReadOnlyAnalysisPolicy(workspacePath string) AnalysisExecutionPolicy {
 	return AnalysisExecutionPolicy{
 		WorkspacePath: workspacePath, RequireOSIsolation: true,
-		RuntimeInspection: RuntimeInspectionPolicy{Environment: "fixture", Target: ""},
 	}
 }
 

@@ -9,58 +9,55 @@ import (
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 )
 
-// UnderstandingRoleRequest is the product-neutral engine wire contract.
-// PriorOutputs contain only references to durable role operations; the
-// service never uses caller-supplied role JSON as authoritative input.
-type UnderstandingRoleRequest struct {
-	ScopeID             string                              `json:"scope_id"`
-	Role                repositorysnapshot.AnalysisRole     `json:"role"`
-	RepositoryProfileID string                              `json:"repository_profile_id"`
-	SnapshotCommit      string                              `json:"snapshot_commit"`
-	SnapshotDigest      string                              `json:"snapshot_digest"`
-	SnapshotOperationID string                              `json:"snapshot_operation_id,omitempty"`
-	IdempotencyKey      string                              `json:"idempotency_key,omitempty"`
-	Snapshot            repositorysnapshot.Response         `json:"snapshot"`
-	PriorOutputs        []UnderstandingPriorOutputReference `json:"prior_outputs,omitempty"`
+// RepositoryUnderstandingRequest is the canonical product-neutral engine
+// contract. ScopeID is opaque. Snapshot and prior-output references bind every
+// role to durable operations; caller-supplied analysis JSON is never trusted.
+type RepositoryUnderstandingRequest struct {
+	ScopeID             string                                   `json:"scope_id"`
+	Role                repositorysnapshot.AnalysisRole          `json:"role"`
+	RepositoryProfileID string                                   `json:"repository_profile_id"`
+	SnapshotCommit      string                                   `json:"snapshot_commit"`
+	SnapshotDigest      string                                   `json:"snapshot_digest"`
+	SnapshotOperationID string                                   `json:"snapshot_operation_id"`
+	IdempotencyKey      string                                   `json:"idempotency_key"`
+	PriorOutputs        []RepositoryUnderstandingOutputReference `json:"prior_outputs,omitempty"`
 }
 
-type UnderstandingRoleResponse struct {
-	Output UnderstandingRoleOutput `json:"output"`
+type RepositoryUnderstandingOutputReference struct {
+	Role         repositorysnapshot.AnalysisRole `json:"role"`
+	OperationID  string                          `json:"operation_id"`
+	ResultDigest string                          `json:"result_digest"`
 }
 
-type UnderstandingPriorOutputReference struct {
-	Role           repositorysnapshot.AnalysisRole `json:"role"`
-	IdempotencyKey string                          `json:"idempotency_key,omitempty"`
+// RepositoryUnderstandingResponse is deliberately flat so consumers can use
+// one endpoint and one DTO for investigator and synthesizer roles.
+type RepositoryUnderstandingResponse struct {
+	ContractVersion string                              `json:"contract_version"`
+	OperationID     string                              `json:"operation_id"`
+	ScopeID         string                              `json:"scope_id"`
+	Role            repositorysnapshot.AnalysisRole     `json:"role"`
+	ExactCommitSHA  string                              `json:"exact_commit_sha"`
+	Provider        repositorysnapshot.ProviderMetadata `json:"provider"`
+	Findings        []RepositoryUnderstandingFinding    `json:"findings"`
+	Capabilities    []RepositoryUnderstandingCapability `json:"capabilities"`
+	Assumptions     []string                            `json:"assumptions"`
+	Conflicts       []string                            `json:"conflicts"`
+	Unknowns        []string                            `json:"unknowns"`
+	Status          string                              `json:"status"`
+	ErrorCode       string                              `json:"error_code,omitempty"`
+	ResultDigest    string                              `json:"result_digest"`
 }
 
-// UnderstandingRoleOutput is a generic projection of the authoritative,
-// persisted AnalysisResponse. Review and publication decisions belong to the
-// product consuming this engine contract.
-type UnderstandingRoleOutput struct {
-	ProviderAgent string                          `json:"provider_agent,omitempty"`
-	Role          repositorysnapshot.AnalysisRole `json:"role"`
-	Claims        []UnderstandingRoleClaim        `json:"claims"`
-	Capabilities  []UnderstandingRoleCapability   `json:"capabilities"`
-	Summary       string                          `json:"summary"`
-	Conflicts     []string                        `json:"conflicts"`
-	Unknowns      []string                        `json:"unknowns"`
+type RepositoryUnderstandingFinding struct {
+	ID            string                            `json:"id"`
+	Key           string                            `json:"key"`
+	Summary       string                            `json:"summary"`
+	Evidence      []UnderstandingEvidenceReference  `json:"evidence"`
+	Assumptions   []string                          `json:"assumptions"`
+	EvidenceState repositorysnapshot.KnowledgeState `json:"evidence_state"`
 }
 
-type UnderstandingRoleClaim struct {
-	ID               string                            `json:"id"`
-	Key              string                            `json:"key"`
-	Summary          string                            `json:"summary"`
-	Evidence         []UnderstandingEvidenceReference  `json:"evidence"`
-	Assumptions      []string                          `json:"assumptions"`
-	Confidence       *float64                          `json:"confidence,omitempty"`
-	EvidenceState    repositorysnapshot.KnowledgeState `json:"evidence_state"`
-	RepositoryCommit string                            `json:"repository_commit"`
-	Role             repositorysnapshot.AnalysisRole   `json:"role"`
-	Agent            string                            `json:"agent"`
-	EvidenceDigest   string                            `json:"evidence_digest"`
-}
-
-type UnderstandingRoleCapability struct {
+type RepositoryUnderstandingCapability struct {
 	ID                   string                                            `json:"id"`
 	Key                  string                                            `json:"key"`
 	Name                 string                                            `json:"name"`
@@ -72,10 +69,6 @@ type UnderstandingRoleCapability struct {
 	Assumptions          []string                                          `json:"assumptions"`
 	Confidence           *float64                                          `json:"confidence,omitempty"`
 	EvidenceState        repositorysnapshot.KnowledgeState                 `json:"evidence_state"`
-	RepositoryCommit     string                                            `json:"repository_commit"`
-	Role                 repositorysnapshot.AnalysisRole                   `json:"role"`
-	Agent                string                                            `json:"agent"`
-	EvidenceDigest       string                                            `json:"evidence_digest"`
 }
 
 type UnderstandingEvidenceReference struct {
@@ -85,77 +78,52 @@ type UnderstandingEvidenceReference struct {
 	Digest      string `json:"digest,omitempty"`
 }
 
-func (s *Service) UnderstandRepositoryRole(ctx context.Context, request UnderstandingRoleRequest) (UnderstandingRoleResponse, error) {
-	return s.understandRole(ctx, request, false)
-}
-
-func (s *Service) SynthesizeRepositoryUnderstanding(ctx context.Context, request UnderstandingRoleRequest) (UnderstandingRoleResponse, error) {
-	return s.understandRole(ctx, request, true)
-}
-
-func (s *Service) understandRole(ctx context.Context, request UnderstandingRoleRequest, synthesize bool) (UnderstandingRoleResponse, error) {
+func (s *Service) UnderstandRepository(ctx context.Context, request RepositoryUnderstandingRequest) (RepositoryUnderstandingResponse, error) {
 	if s == nil || s.understanding == nil || strings.TrimSpace(request.ScopeID) == "" || len(request.ScopeID) > 128 || !request.Role.Valid() {
-		return UnderstandingRoleResponse{}, ErrNotConfigured
+		return RepositoryUnderstandingResponse{}, ErrNotConfigured
 	}
 	snapshot, err := s.loadVerifiedSnapshot(ctx, request)
 	if err != nil {
-		return UnderstandingRoleResponse{}, err
-	}
-	role := request.Role
-	if synthesize != (role == repositorysnapshot.RoleSynthesizer) {
-		return UnderstandingRoleResponse{}, repositorysnapshot.ErrUnknownRole
+		return RepositoryUnderstandingResponse{}, err
 	}
 	commit := snapshot.ExactCommitSHA
 	digest := snapshot.ResultDigest
 	operationKey := strings.TrimSpace(request.IdempotencyKey)
 	if operationKey == "" {
-		operationKey = understandingKey(request.ScopeID, commit, digest, role)
+		operationKey = understandingKey(request.ScopeID, commit, digest, request.Role)
 	}
 	if !validID(operationKey) {
-		return UnderstandingRoleResponse{}, repositorysnapshot.ErrInvalidRequest
+		return RepositoryUnderstandingResponse{}, repositorysnapshot.ErrInvalidRequest
 	}
 	analysis := repositorysnapshot.UnderstandingRequest{
-		RepositoryProfileID: request.RepositoryProfileID, ExpectedCommitSHA: commit, Role: role,
+		RepositoryProfileID: request.RepositoryProfileID, ExpectedCommitSHA: commit, Role: request.Role,
 		ProviderID: "", IdempotencyKey: operationKey,
-		Snapshot: nil,
 	}
-	if synthesize {
+	if request.Role == repositorysnapshot.RoleSynthesizer {
 		analysis.Snapshot = &snapshot
-		analysis.PriorOutputs = make(map[repositorysnapshot.AnalysisRole]repositorysnapshot.PriorOutputReference, 3)
-		priorKeys, err := priorUnderstandingKeys(request.ScopeID, commit, digest, request.PriorOutputs)
+		analysis.PriorOutputs, err = s.verifiedPriorOutputs(ctx, request, commit)
 		if err != nil {
-			return UnderstandingRoleResponse{}, err
-		}
-		for _, priorRole := range []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations} {
-			priorKey := priorKeys[priorRole]
-			prior, err := s.understandingResult(ctx, priorKey)
-			if err != nil {
-				return UnderstandingRoleResponse{}, err
-			}
-			analysis.PriorOutputs[priorRole] = repositorysnapshot.PriorOutputReference{IdempotencyKey: priorKey, ResultDigest: prior.ResultDigest}
+			return RepositoryUnderstandingResponse{}, err
 		}
 	} else {
+		if len(request.PriorOutputs) != 0 {
+			return RepositoryUnderstandingResponse{}, repositorysnapshot.ErrInvalidRequest
+		}
 		analysis.Paths, err = snapshotEvidencePaths(snapshot)
 		if err != nil {
-			return UnderstandingRoleResponse{}, err
+			return RepositoryUnderstandingResponse{}, err
 		}
 	}
 	result, err := s.understanding.Understand(ctx, analysis)
 	if err != nil {
-		return UnderstandingRoleResponse{}, err
+		return RepositoryUnderstandingResponse{}, err
 	}
-	if result.Status != "completed" {
-		return UnderstandingRoleResponse{}, repositorysnapshot.ErrProviderNotConfigured
-	}
-	return UnderstandingRoleResponse{Output: repositoryUnderstandingRole(result, digest)}, nil
+	return repositoryUnderstandingResponse(request.ScopeID, result), nil
 }
 
-func (s *Service) loadVerifiedSnapshot(ctx context.Context, request UnderstandingRoleRequest) (repositorysnapshot.Response, error) {
+func (s *Service) loadVerifiedSnapshot(ctx context.Context, request RepositoryUnderstandingRequest) (repositorysnapshot.Response, error) {
 	reader, ok := s.snapshots.(RepositorySnapshotOperationReader)
 	operationID := strings.TrimSpace(request.SnapshotOperationID)
-	if operationID == "" {
-		operationID = strings.TrimSpace(request.Snapshot.OperationID)
-	}
 	if !ok || operationID == "" {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
@@ -166,26 +134,11 @@ func (s *Service) loadVerifiedSnapshot(ctx context.Context, request Understandin
 		}
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
 	}
-	if operation.ID != operationID ||
-		operation.RepositoryProfileID != request.RepositoryProfileID ||
-		operation.ExactCommitSHA != request.SnapshotCommit ||
-		operation.ResultDigest != request.SnapshotDigest ||
-		operation.Response.OperationID != operationID ||
-		operation.Response.Repository.ProfileID != request.RepositoryProfileID ||
-		operation.Response.ExactCommitSHA != request.SnapshotCommit ||
-		operation.Response.ResultDigest != request.SnapshotDigest {
+	if operation.ID != operationID || operation.RepositoryProfileID != request.RepositoryProfileID ||
+		operation.ExactCommitSHA != request.SnapshotCommit || operation.ResultDigest != request.SnapshotDigest ||
+		operation.Response.OperationID != operationID || operation.Response.Repository.ProfileID != request.RepositoryProfileID ||
+		operation.Response.ExactCommitSHA != request.SnapshotCommit || operation.Response.ResultDigest != request.SnapshotDigest {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
-	}
-	if request.Snapshot.OperationID != "" {
-		if request.Snapshot.OperationID != operationID ||
-			request.Snapshot.Repository.ProfileID != request.RepositoryProfileID ||
-			request.Snapshot.ExactCommitSHA != request.SnapshotCommit ||
-			request.Snapshot.ResultDigest != request.SnapshotDigest {
-			return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
-		}
-		if err := repositorysnapshot.VerifyResponseDigest(request.Snapshot); err != nil {
-			return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
-		}
 	}
 	if err := repositorysnapshot.VerifyResponseDigest(operation.Response); err != nil {
 		return repositorysnapshot.Response{}, repositorysnapshot.ErrCommitMismatch
@@ -193,13 +146,42 @@ func (s *Service) loadVerifiedSnapshot(ctx context.Context, request Understandin
 	return operation.Response, nil
 }
 
-func (s *Service) understandingResult(ctx context.Context, key string) (repositorysnapshot.UnderstandingOperation, error) {
-	// The service boundary intentionally exposes only Understand. Prior results
-	// are loaded by the underlying durable operation store through this narrow
-	// helper when the configured authority is the repository understanding
-	// service.
+func (s *Service) verifiedPriorOutputs(ctx context.Context, request RepositoryUnderstandingRequest, commit string) (map[repositorysnapshot.AnalysisRole]repositorysnapshot.PriorOutputReference, error) {
+	roles := []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations}
+	if len(request.PriorOutputs) != len(roles) {
+		return nil, repositorysnapshot.ErrInvalidRequest
+	}
+	provided := make(map[repositorysnapshot.AnalysisRole]RepositoryUnderstandingOutputReference, len(request.PriorOutputs))
+	for _, reference := range request.PriorOutputs {
+		if !reference.Role.Valid() || reference.Role == repositorysnapshot.RoleSynthesizer || strings.TrimSpace(reference.OperationID) == "" || strings.TrimSpace(reference.ResultDigest) == "" {
+			return nil, repositorysnapshot.ErrInvalidRequest
+		}
+		if _, exists := provided[reference.Role]; exists {
+			return nil, repositorysnapshot.ErrConflict
+		}
+		provided[reference.Role] = reference
+	}
+	result := make(map[repositorysnapshot.AnalysisRole]repositorysnapshot.PriorOutputReference, len(roles))
+	for _, role := range roles {
+		reference, ok := provided[role]
+		if !ok {
+			return nil, repositorysnapshot.ErrInvalidRequest
+		}
+		operation, err := s.understandingResultByID(ctx, reference.OperationID)
+		if err != nil {
+			return nil, err
+		}
+		if operation.Role != role || operation.RepositoryProfileID != request.RepositoryProfileID || operation.ExpectedCommitSHA != commit || operation.ResultDigest != reference.ResultDigest {
+			return nil, repositorysnapshot.ErrConflict
+		}
+		result[role] = repositorysnapshot.PriorOutputReference{IdempotencyKey: operation.IdempotencyKey, ResultDigest: operation.ResultDigest}
+	}
+	return result, nil
+}
+
+func (s *Service) understandingResultByID(ctx context.Context, operationID string) (repositorysnapshot.UnderstandingOperation, error) {
 	if value, ok := s.understanding.(*repositorysnapshot.UnderstandingService); ok {
-		return value.LoadOperation(ctx, key)
+		return value.LoadOperationByID(ctx, operationID)
 	}
 	return repositorysnapshot.UnderstandingOperation{}, ErrNotConfigured
 }
@@ -224,10 +206,6 @@ func snapshotEvidencePaths(snapshot repositorysnapshot.Response) ([]string, erro
 	return paths, nil
 }
 
-// Role analysis may use only committed paths that are safe to materialize in
-// the disposable provider workspace. M1 can observe an .env.example file for
-// architecture metadata, but that file may still contain a canary or secret-
-// shaped assignment; it must never be re-read for provider analysis.
 func safeRoleEvidencePath(value string) bool {
 	lower := strings.ToLower(strings.TrimSpace(value))
 	for _, component := range strings.Split(lower, "/") {
@@ -249,54 +227,33 @@ func understandingKey(scopeID, commit, digest string, role repositorysnapshot.An
 	return "repository-understanding-" + hex.EncodeToString(sum[:16])
 }
 
-func priorUnderstandingKeys(scopeID, commit, digest string, raw []UnderstandingPriorOutputReference) (map[repositorysnapshot.AnalysisRole]string, error) {
-	roles := []repositorysnapshot.AnalysisRole{repositorysnapshot.RoleCartographer, repositorysnapshot.RoleProductArchaeologist, repositorysnapshot.RoleQualityOperations}
-	keys := make(map[repositorysnapshot.AnalysisRole]string, len(roles))
-	for _, role := range roles {
-		keys[role] = understandingKey(scopeID, commit, digest, role)
-	}
-	if len(raw) == 0 {
-		return keys, nil
-	}
-	if len(raw) != len(roles) {
-		return nil, repositorysnapshot.ErrInvalidRequest
-	}
-	seen := make(map[repositorysnapshot.AnalysisRole]struct{}, len(raw))
-	for _, reference := range raw {
-		role := reference.Role
-		if !role.Valid() || role == repositorysnapshot.RoleSynthesizer {
-			return nil, repositorysnapshot.ErrInvalidRequest
-		}
-		if _, ok := seen[role]; ok {
-			return nil, repositorysnapshot.ErrConflict
-		}
-		seen[role] = struct{}{}
-		key := strings.TrimSpace(reference.IdempotencyKey)
-		if key == "" {
-			key = keys[role]
-		}
-		if !validID(key) {
-			return nil, repositorysnapshot.ErrInvalidRequest
-		}
-		keys[role] = key
-	}
-	return keys, nil
-}
-
-func repositoryUnderstandingRole(response repositorysnapshot.AnalysisResponse, snapshotDigest string) UnderstandingRoleOutput {
-	output := UnderstandingRoleOutput{
-		ProviderAgent: response.Provider.ID, Role: response.Role, Claims: []UnderstandingRoleClaim{}, Capabilities: []UnderstandingRoleCapability{},
-		Conflicts: append([]string(nil), response.Conflicts...), Unknowns: append([]string(nil), response.Unknowns...),
+func repositoryUnderstandingResponse(scopeID string, response repositorysnapshot.AnalysisResponse) RepositoryUnderstandingResponse {
+	result := RepositoryUnderstandingResponse{
+		ContractVersion: response.ContractVersion, OperationID: response.OperationID, ScopeID: scopeID,
+		Role: response.Role, ExactCommitSHA: response.ExactCommitSHA, Provider: response.Provider,
+		Findings: []RepositoryUnderstandingFinding{}, Capabilities: []RepositoryUnderstandingCapability{},
+		Assumptions: append([]string(nil), response.Assumptions...), Conflicts: append([]string(nil), response.Conflicts...),
+		Unknowns: append([]string(nil), response.Unknowns...), Status: response.Status, ErrorCode: response.ErrorCode,
+		ResultDigest: response.ResultDigest,
 	}
 	for _, finding := range response.Findings {
-		refs := understandingEvidenceReferences(response.Evidence, finding.EvidencePaths, finding.Statement)
-		output.Claims = append(output.Claims, UnderstandingRoleClaim{ID: finding.ID, Key: finding.Area, Summary: finding.Statement, Evidence: refs, Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: finding.KnowledgeState, RepositoryCommit: response.ExactCommitSHA, Role: response.Role, Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		result.Findings = append(result.Findings, RepositoryUnderstandingFinding{
+			ID: finding.ID, Key: finding.Area, Summary: finding.Statement,
+			Evidence:    understandingEvidenceReferences(response.Evidence, finding.EvidencePaths, finding.Statement),
+			Assumptions: append([]string(nil), response.Assumptions...), EvidenceState: finding.KnowledgeState,
+		})
 	}
 	for _, capability := range response.Capabilities {
-		refs := understandingEvidenceReferences(response.Evidence, capability.EvidencePaths, capability.VerifiedBehavior)
-		output.Capabilities = append(output.Capabilities, UnderstandingRoleCapability{ID: capability.ID, Key: capability.ID, Name: capability.Name, Actor: capability.Actor, VerifiedBehavior: capability.VerifiedBehavior, ImplementationStatus: capability.ImplementationStatus, Summary: capability.VerifiedBehavior, Evidence: refs, Assumptions: append([]string(nil), response.Assumptions...), Confidence: capability.Confidence, EvidenceState: capability.KnowledgeState, RepositoryCommit: response.ExactCommitSHA, Role: response.Role, Agent: response.Provider.ID, EvidenceDigest: snapshotDigest})
+		result.Capabilities = append(result.Capabilities, RepositoryUnderstandingCapability{
+			ID: capability.ID, Key: capability.ID, Name: capability.Name, Actor: capability.Actor,
+			VerifiedBehavior: capability.VerifiedBehavior, ImplementationStatus: capability.ImplementationStatus,
+			Summary:     capability.VerifiedBehavior,
+			Evidence:    understandingEvidenceReferences(response.Evidence, capability.EvidencePaths, capability.VerifiedBehavior),
+			Assumptions: append([]string(nil), response.Assumptions...), Confidence: capability.Confidence,
+			EvidenceState: capability.KnowledgeState,
+		})
 	}
-	return output
+	return result
 }
 
 func understandingEvidenceReferences(evidence []repositorysnapshot.EvidenceReference, paths []string, observation string) []UnderstandingEvidenceReference {

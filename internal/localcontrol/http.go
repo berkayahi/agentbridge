@@ -60,8 +60,6 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
 	mux.HandleFunc("POST /v1/repository-understanding", a.createRepositoryUnderstanding)
-	mux.HandleFunc("POST /v1/understanding/roles", a.createUnderstandingRole)
-	mux.HandleFunc("POST /v1/understanding/synthesize", a.createUnderstandingSynthesis)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -105,24 +103,6 @@ func (a *API) createRepositoryUnderstanding(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	response, err := a.service.UnderstandRepository(r.Context(), request)
-	writeResult(w, http.StatusCreated, response, err)
-}
-
-func (a *API) createUnderstandingRole(w http.ResponseWriter, r *http.Request) {
-	var request UnderstandingRoleRequest
-	if !decodeJSON(w, r, &request) {
-		return
-	}
-	response, err := a.service.UnderstandRepositoryRole(r.Context(), request)
-	writeResult(w, http.StatusCreated, response, err)
-}
-
-func (a *API) createUnderstandingSynthesis(w http.ResponseWriter, r *http.Request) {
-	var request UnderstandingRoleRequest
-	if !decodeJSON(w, r, &request) {
-		return
-	}
-	response, err := a.service.SynthesizeRepositoryUnderstanding(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
 }
 

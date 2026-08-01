@@ -185,6 +185,9 @@ type ProviderRequest struct {
 	WorkspacePath  string
 	Prompt         string
 	Model          string
+	// Evidence contains the already bounded metadata for files materialized by
+	// the service. In-process providers can use it without opening the workspace.
+	Evidence []EvidenceReference
 }
 
 type ProviderResult struct {
@@ -214,6 +217,7 @@ type UnderstandingOperation struct {
 
 type UnderstandingStore interface {
 	LoadRepositoryUnderstanding(context.Context, string) (UnderstandingOperation, error)
+	LoadRepositoryUnderstandingByID(context.Context, string) (UnderstandingOperation, error)
 	SaveRepositoryUnderstanding(context.Context, UnderstandingOperation) error
 }
 
@@ -308,6 +312,7 @@ func (s *UnderstandingService) Understand(ctx context.Context, request Understan
 	providerResult, err := analysisProvider.Analyze(ctx, ProviderRequest{
 		Role: normalized.Role, ExactCommitSHA: normalized.ExpectedCommitSHA,
 		WorkspacePath: workspace, Prompt: analysisPrompt(normalized.Role), Model: normalized.Model,
+		Evidence: append([]EvidenceReference(nil), evidence...),
 	})
 	if err != nil {
 		return AnalysisResponse{}, err
@@ -342,6 +347,23 @@ func (s *UnderstandingService) LoadOperation(ctx context.Context, idempotencyKey
 		return UnderstandingOperation{}, ErrInvalidRequest
 	}
 	operation, err := s.store.LoadRepositoryUnderstanding(ctx, idempotencyKey)
+	if err != nil {
+		return UnderstandingOperation{}, err
+	}
+	if err := validateUnderstandingOperation(operation); err != nil {
+		return UnderstandingOperation{}, err
+	}
+	return operation, nil
+}
+
+// LoadOperationByID resolves the opaque operation ID returned on the wire.
+// It binds synthesis to exact prior outputs without exposing the server's
+// internal idempotency-key convention to clients.
+func (s *UnderstandingService) LoadOperationByID(ctx context.Context, operationID string) (UnderstandingOperation, error) {
+	if s == nil || strings.TrimSpace(operationID) == "" {
+		return UnderstandingOperation{}, ErrInvalidRequest
+	}
+	operation, err := s.store.LoadRepositoryUnderstandingByID(ctx, operationID)
 	if err != nil {
 		return UnderstandingOperation{}, err
 	}

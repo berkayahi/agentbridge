@@ -881,16 +881,8 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 	adapters := make([]bridgeRuntime.Adapter, 0, 2)
 	var closers []io.Closer
 	sink := providerSessionSink{store: data}
-	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
-		analysisIsolation, err := pinnedAnalysisFixture(value)
-		if err != nil {
-			return nil, nil, closers, err
-		}
-		processEnvironment := environment
-		if analysisIsolation.Valid() {
-			processEnvironment = pinnedFixtureEnvironment(environment)
-		}
-		process, err := codex.StartAppServer(ctx, value.Executable, processEnvironment)
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok && value.AnalysisFixture.Implementation == "" {
+		process, err := codex.StartAppServer(ctx, value.Executable, environment)
 		if err != nil {
 			return nil, nil, closers, err
 		}
@@ -899,10 +891,9 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 			Sessions: sink, Approvals: approvalSink{store: data, redactor: redactor},
 			ApprovalUser: func(provider.ID) string { return configuredApprovalUser(cfg) },
 			// Codex app-server's workspaceWrite policy alone does not attest
-			// workspace-only reads. Ordinary providers therefore receive the zero
-			// attestation; only a verified, pinned fixture/dev executable reaches
-			// this point with the explicit acceptance attestation above.
-			AnalysisIsolation: analysisIsolation,
+			// workspace-only reads. Ordinary Codex therefore always receives the
+			// zero attestation and remains ineligible for understanding analysis.
+			AnalysisIsolation: provider.AnalysisIsolationAttestation{},
 		})
 		providers[workmodel.CodexSubscription] = adapter
 		adapters = append(adapters, codex.NewRuntimeAdapter(adapter))
@@ -934,7 +925,11 @@ func composeProviders(ctx context.Context, cfg config.Config, paths runtimePaths
 		providers[workmodel.ClaudeSubscription] = adapter
 		adapters = append(adapters, claude.NewRuntimeAdapter(adapter))
 	}
-	if len(providers) == 0 {
+	fixtureOnly := false
+	if value, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok {
+		fixtureOnly = value.AnalysisFixture.Implementation == "in_process_deterministic_v1"
+	}
+	if len(providers) == 0 && !fixtureOnly {
 		return nil, nil, closers, errors.New("no supported provider is configured")
 	}
 	runtimes, err := bridgeRuntime.NewRegistry(adapters...)
@@ -1259,7 +1254,7 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 }
 
 func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *workspaceAdapter, providers map[workmodel.Provider]provider.Provider, cfg config.Config) (*repositorysnapshot.UnderstandingService, error) {
-	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers))
+	configured := make(map[string]repositorysnapshot.AnalysisProvider, len(providers)+1)
 	for name, value := range providers {
 		safe, ok := value.(provider.SafeAnalysisProvider)
 		if !ok || !safe.AnalysisIsolationAttestation().Valid() {
@@ -1268,6 +1263,9 @@ func composeRepositoryUnderstanding(data *sqlite.RuntimeStore, workspace *worksp
 			continue
 		}
 		configured[string(name)] = repositorysnapshot.NativeAnalysisProvider{Provider: value, DefaultModel: cfg.Providers[string(name)].Model}
+	}
+	if codexConfig, ok := cfg.Providers[string(workmodel.CodexSubscription)]; ok && codexConfig.AnalysisFixture.Implementation == "in_process_deterministic_v1" {
+		configured[string(workmodel.CodexSubscription)] = repositorysnapshot.NewDeterministicFixtureProvider("agentbridge-fixture", "deterministic-v1")
 	}
 	defaultProvider := ""
 	if _, ok := configured[string(workmodel.CodexSubscription)]; ok {

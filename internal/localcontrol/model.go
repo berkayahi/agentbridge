@@ -74,9 +74,6 @@ type RepositorySnapshotOperationReader interface {
 	LoadOperation(context.Context, string) (repositorysnapshot.Operation, error)
 }
 
-type RepositoryUnderstandingRequest = repositorysnapshot.UnderstandingRequest
-type RepositoryUnderstandingResponse = repositorysnapshot.AnalysisResponse
-
 type RepositoryUnderstandingAuthority interface {
 	Understand(context.Context, repositorysnapshot.UnderstandingRequest) (repositorysnapshot.AnalysisResponse, error)
 }

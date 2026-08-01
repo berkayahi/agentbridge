@@ -19,15 +19,19 @@ and denied destructive actions. A provider protocol's workspace-write setting
 does not establish workspace-only reads, so the normal Codex app-server
 composition does not receive this attestation.
 
-Deterministic fixture/dev acceptance can opt into a narrow pinned executable
-seam. The owner configuration must set `analysis_fixture.environment` to
-`fixture` or `dev` and pin `analysis_fixture.executable_sha256`. Before launch,
-AgentBridge requires that `providers.codex.executable` be a regular non-symlink
-file owned by the daemon user, not group/world writable, bounded in size, and
-an exact digest match. The pinned process receives only `PATH`; host credentials,
-home, daemon, and repository environment variables are excluded. A mismatch
-fails daemon composition before the fixture is started.
+Deterministic fixture/dev acceptance can explicitly select
+`analysis_fixture.implementation: in_process_deterministic_v1`. This provider
+is compiled into AgentBridge and receives only typed commit, role, prompt, and
+evidence-reference metadata. It cannot start a process, access a network
+client, or open the filesystem. Fixture mode rejects executable/model settings
+and starts no external provider process. Outside fixture mode, configured
+Codex remains a normal task provider and never receives repository-analysis
+eligibility.
 
-Optional runtime inspection uses the same fail-closed policy vocabulary and is
-limited to fixture/dev targets without host environment, credentials, network,
-production data, or destructive actions.
+Runtime inspection is unavailable. AgentBridge will continue to fail closed
+until an executor exists that actually enforces target, filesystem, network,
+credential, production-data, and destructive-operation restrictions.
+M2 therefore exposes no runtime-inspection config, API, or executor capability;
+unknown configuration fields are rejected. The compiled fixture has no process,
+filesystem, network, database, credential, host-secret, or mutation dependency,
+so it cannot inspect a runtime or reach production state.

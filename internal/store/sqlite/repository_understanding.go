@@ -11,16 +11,24 @@ import (
 )
 
 func (s *RuntimeStore) LoadRepositoryUnderstanding(ctx context.Context, idempotencyKey string) (repositorysnapshot.UnderstandingOperation, error) {
+	return s.loadRepositoryUnderstanding(ctx, "idempotency_key", idempotencyKey)
+}
+
+func (s *RuntimeStore) LoadRepositoryUnderstandingByID(ctx context.Context, operationID string) (repositorysnapshot.UnderstandingOperation, error) {
+	return s.loadRepositoryUnderstanding(ctx, "id", operationID)
+}
+
+func (s *RuntimeStore) loadRepositoryUnderstanding(ctx context.Context, column, value string) (repositorysnapshot.UnderstandingOperation, error) {
 	var operation repositorysnapshot.UnderstandingOperation
 	var response []byte
 	var requestedAt, completedAt string
-	err := s.db.QueryRowContext(ctx, `
+	query := `
 		SELECT id, idempotency_key, repository_profile_id, expected_commit_sha,
 		       role, request_digest, result_digest, status, response_payload,
 		       requested_at, completed_at
 		FROM repository_understanding_operations
-		WHERE idempotency_key = ?`, idempotencyKey,
-	).Scan(
+		WHERE ` + column + ` = ?`
+	err := s.db.QueryRowContext(ctx, query, value).Scan(
 		&operation.ID, &operation.IdempotencyKey, &operation.RepositoryProfileID,
 		&operation.ExpectedCommitSHA, &operation.Role, &operation.RequestDigest,
 		&operation.ResultDigest, &operation.Status, &response, &requestedAt, &completedAt,

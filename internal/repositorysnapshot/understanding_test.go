@@ -409,6 +409,15 @@ func (s *understandingStore) LoadRepositoryUnderstanding(_ context.Context, key 
 	return operation, nil
 }
 
+func (s *understandingStore) LoadRepositoryUnderstandingByID(_ context.Context, id string) (repositorysnapshot.UnderstandingOperation, error) {
+	for _, operation := range s.operations {
+		if operation.ID == id {
+			return operation, nil
+		}
+	}
+	return repositorysnapshot.UnderstandingOperation{}, store.ErrNotFound
+}
+
 func (s *understandingStore) SaveRepositoryUnderstanding(_ context.Context, operation repositorysnapshot.UnderstandingOperation) error {
 	if _, exists := s.operations[operation.IdempotencyKey]; exists {
 		return store.ErrConflict

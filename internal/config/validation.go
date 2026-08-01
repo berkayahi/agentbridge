@@ -6,12 +6,9 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 )
-
-var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (c Config) Validate() error {
 	if c.Mode != "standalone" && c.Mode != "managed" {
@@ -86,6 +83,15 @@ func (c Config) validateRuntime() error {
 		if name != "codex" && name != "claude" {
 			return errors.New("provider runtime must be explicitly codex or claude")
 		}
+		if err := validateAnalysisFixture(name, provider.AnalysisFixture); err != nil {
+			return err
+		}
+		if provider.AnalysisFixture.Implementation != "" {
+			if provider.Executable != "" || provider.Model != "" || len(provider.Models) != 0 {
+				return errors.New("in-process analysis fixture must not configure an external executable or model")
+			}
+			continue
+		}
 		if !filepath.IsAbs(provider.Executable) {
 			return errors.New("provider executable must be absolute")
 		}
@@ -96,9 +102,6 @@ func (c Config) validateRuntime() error {
 			return errors.New("Codex model must be GPT-5.6 Luna, Terra, Sol, or a higher named model")
 		}
 		if err := validateProviderModels(name, provider); err != nil {
-			return err
-		}
-		if err := validateAnalysisFixture(name, provider.AnalysisFixture); err != nil {
 			return err
 		}
 	}
@@ -124,18 +127,18 @@ func (c Config) validateRuntime() error {
 
 func validateAnalysisFixture(providerName string, fixture AnalysisFixtureConfig) error {
 	environment := strings.TrimSpace(fixture.Environment)
-	digest := strings.TrimSpace(fixture.ExecutableSHA256)
-	if environment == "" && digest == "" {
+	implementation := strings.TrimSpace(fixture.Implementation)
+	if environment == "" && implementation == "" {
 		return nil
 	}
 	if providerName != "codex" {
-		return errors.New("analysis_fixture is supported only for the Codex fixture app-server protocol")
+		return errors.New("analysis_fixture is supported only on the Codex provider slot")
 	}
 	if environment != "fixture" && environment != "dev" {
 		return errors.New("analysis_fixture environment must be fixture or dev")
 	}
-	if digest != fixture.ExecutableSHA256 || !sha256Pattern.MatchString(digest) {
-		return errors.New("analysis_fixture executable_sha256 must be a lowercase SHA-256 digest")
+	if implementation != "in_process_deterministic_v1" {
+		return errors.New("analysis_fixture implementation must be in_process_deterministic_v1")
 	}
 	return nil
 }

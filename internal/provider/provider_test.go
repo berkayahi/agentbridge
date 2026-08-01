@@ -121,7 +121,7 @@ func TestEventContractContainsOnlyObservableFields(t *testing.T) {
 	}
 }
 
-func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t *testing.T) {
+func TestReadOnlyAnalysisPolicyFailsClosed(t *testing.T) {
 	workspace := t.TempDir()
 	if result := provider.NewReadOnlyAnalysisPolicy(workspace).Validate(); !result.Allowed || !result.WorkspaceOnly || result.NetworkAccess || result.ApprovalAllowed || result.DeliveryAllowed || result.HostEnvironment || result.ProductionData || result.CredentialsAllowed || result.DestructiveActions {
 		t.Fatalf("safe policy result = %#v", result)
@@ -130,21 +130,6 @@ func TestReadOnlyAnalysisPolicyFailsClosedAndRuntimeInspectionIsFixtureDevOnly(t
 	unsafe.WritablePaths = []string{filepath.Join(workspace, "..", "cache")}
 	if result := unsafe.Validate(); result.Allowed || result.Reason == "" {
 		t.Fatalf("external writable path was accepted: %#v", result)
-	}
-	for _, policy := range []provider.RuntimeInspectionPolicy{
-		{Environment: "prod", Target: "production-host"},
-		{Environment: "dev", Target: "dev-host", NetworkAllowed: true},
-		{Environment: "dev", Target: "dev-host", HostEnvironmentAllowed: true},
-		{Environment: "fixture", Target: "fixture-host", ProductionDataAllowed: true},
-		{Environment: "dev", Target: "dev-host", CredentialsAllowed: true},
-		{Environment: "fixture", Target: "fixture-host", DestructiveActionsAllow: true},
-	} {
-		if result := provider.ValidateRuntimeInspectionPolicy(policy); result.Allowed || result.Reason == "" {
-			t.Fatalf("unsafe runtime policy accepted: %#v", result)
-		}
-	}
-	if result := provider.ValidateRuntimeInspectionPolicy(provider.RuntimeInspectionPolicy{Environment: "fixture", Target: "fixture-host"}); !result.Allowed {
-		t.Fatalf("fixture runtime policy rejected: %#v", result)
 	}
 	attestation := provider.AnalysisIsolationAttestation{Mechanism: "test", FilesystemReadsWorkspaceOnly: true, HostEnvironmentExcluded: true, NetworkDenied: true, ProductionDataDenied: true, DestructiveActionsDenied: true}
 	if !attestation.Valid() {

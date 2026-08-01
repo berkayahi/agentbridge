@@ -108,19 +108,18 @@ func TestLoadRejectsUnknownYAMLField(t *testing.T) {
 	assertLoadError(t, yml, "unknown")
 }
 
-func TestAnalysisFixtureRequiresDevEnvironmentAndPinnedDigest(t *testing.T) {
-	validDigest := strings.Repeat("a", 64)
+func TestAnalysisFixtureRequiresExplicitInProcessImplementation(t *testing.T) {
 	for _, test := range []struct {
-		name        string
-		environment string
-		digest      string
-		wantErr     bool
+		name           string
+		environment    string
+		implementation string
+		wantErr        bool
 	}{
-		{name: "fixture", environment: "fixture", digest: validDigest},
-		{name: "dev", environment: "dev", digest: validDigest},
-		{name: "production rejected", environment: "production", digest: validDigest, wantErr: true},
-		{name: "missing digest", environment: "fixture", wantErr: true},
-		{name: "non canonical digest", environment: "fixture", digest: strings.Repeat("A", 64), wantErr: true},
+		{name: "fixture", environment: "fixture", implementation: "in_process_deterministic_v1"},
+		{name: "dev", environment: "dev", implementation: "in_process_deterministic_v1"},
+		{name: "production rejected", environment: "production", implementation: "in_process_deterministic_v1", wantErr: true},
+		{name: "missing implementation", environment: "fixture", wantErr: true},
+		{name: "external implementation rejected", environment: "fixture", implementation: "/tmp/provider", wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			value, err := Load(writeConfig(t, validYAML))
@@ -128,7 +127,9 @@ func TestAnalysisFixtureRequiresDevEnvironmentAndPinnedDigest(t *testing.T) {
 				t.Fatal(err)
 			}
 			provider := value.Providers["codex"]
-			provider.AnalysisFixture = AnalysisFixtureConfig{Environment: test.environment, ExecutableSHA256: test.digest}
+			provider.AnalysisFixture = AnalysisFixtureConfig{Environment: test.environment, Implementation: test.implementation}
+			provider.Executable = ""
+			provider.Model = ""
 			value.Providers["codex"] = provider
 			err = value.Validate()
 			if test.wantErr && err == nil {
@@ -139,6 +140,37 @@ func TestAnalysisFixtureRequiresDevEnvironmentAndPinnedDigest(t *testing.T) {
 			}
 		})
 	}
+
+	value, err := Load(writeConfig(t, validYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := value.Providers["codex"]
+	provider.AnalysisFixture = AnalysisFixtureConfig{Environment: "fixture", Implementation: "in_process_deterministic_v1"}
+	value.Providers["codex"] = provider
+	if err := value.Validate(); err == nil {
+		t.Fatal("in-process fixture accepted an external executable/model")
+	}
+}
+
+func TestLoadAcceptsFixtureWithoutExternalProviderAndRejectsRuntimeInspection(t *testing.T) {
+	fixtureBlock := `codex:
+    analysis_fixture:
+      environment: fixture
+      implementation: in_process_deterministic_v1`
+	yml := strings.Replace(validYAML, `codex:
+    executable: /usr/local/bin/codex
+    model: gpt-5.6-terra`, fixtureBlock, 1)
+	value, err := Load(writeConfig(t, yml))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider := value.Providers["codex"]; provider.Executable != "" || provider.Model != "" || provider.AnalysisFixture.Implementation != "in_process_deterministic_v1" {
+		t.Fatalf("fixture config = %#v", provider)
+	}
+
+	withRuntimeInspection := strings.Replace(yml, "      implementation: in_process_deterministic_v1", "      implementation: in_process_deterministic_v1\n      runtime_inspection: fixture-host", 1)
+	assertLoadError(t, withRuntimeInspection, "unknown")
 }
 
 func TestLoadRejectsShellStringVerificationCommand(t *testing.T) {

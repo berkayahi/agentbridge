@@ -238,6 +238,14 @@ func ValidateSessionRequestWithRedactor(request SessionRequest, redactor *securi
 	return validateSessionRequest(request, NewSafetyPipeline(redactor, SafetyConfig{MaxInputBytes: MaxContextTotalBytes}))
 }
 
+// SanitizeSessionRequestWithRedactor returns the provider-safe request copy.
+// Prompt and context values may be redacted in memory; schema and structural
+// violations are rejected. Callers that persist or dispatch a request must use
+// this returned copy rather than retaining the caller-owned original.
+func SanitizeSessionRequestWithRedactor(request SessionRequest, redactor *security.Redactor) (SessionRequest, error) {
+	return prepareSessionRequest(request, NewSafetyPipeline(redactor, SafetyConfig{MaxInputBytes: MaxContextTotalBytes}))
+}
+
 func validateSessionRequest(request SessionRequest, safety *SafetyPipeline) error {
 	_, err := prepareSessionRequest(request, safety)
 	return err

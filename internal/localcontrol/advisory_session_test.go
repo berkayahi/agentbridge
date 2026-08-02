@@ -16,17 +16,24 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
+	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 )
 
 type advisoryAuthority struct {
-	calls    int
-	response advisory.SessionResponse
+	calls           int
+	response        advisory.SessionResponse
+	request         advisory.SessionRequest
+	responseFactory func(advisory.SessionRequest) advisory.SessionResponse
 }
 
-func (a *advisoryAuthority) ExecuteAdvisorySession(context.Context, advisory.SessionRequest) (advisory.SessionResponse, error) {
+func (a *advisoryAuthority) ExecuteAdvisorySession(_ context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
 	a.calls++
+	a.request = request
+	if a.responseFactory != nil {
+		return a.responseFactory(request), nil
+	}
 	return a.response, nil
 }
 
@@ -242,6 +249,43 @@ func TestAdvisorySessionRejectsSecretOutputBeforePersistence(t *testing.T) {
 	}
 	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) || authority.calls != 2 {
 		t.Fatalf("secret output replay = err %v calls %d", err, authority.calls)
+	}
+}
+
+func TestAdvisorySessionSanitizesRequestBeforeAuthorityAndReplayHash(t *testing.T) {
+	ctx := context.Background()
+	data, err := sqlite.OpenV2Runtime(ctx, filepath.Join(t.TempDir(), "sanitized-request.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	const secret = "configured-request-secret"
+	now := time.Unix(1_700_000_000, 0).UTC()
+	request := advisoryRequest()
+	request.Context.Items[0].Value = `{"nested":{"message":"configured-request-secret"}}`
+	authority := &advisoryAuthority{responseFactory: func(request advisory.SessionRequest) advisory.SessionResponse {
+		return validAdvisoryResponse(request, now)
+	}}
+	service, err := localcontrol.New(localcontrol.Config{
+		Store: data, Runtimes: fakeCatalog{}, Advisory: authority,
+		Redactor: security.NewRedactor(security.Config{Secrets: []string{secret}}),
+		Clock:    func() time.Time { return now }, NewID: deterministicIDs(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ExecuteAdvisorySession(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(authority.request.Context.Items[0].Value, secret) || !strings.Contains(authority.request.Context.Items[0].Value, "[REDACTED:configured]") {
+		t.Fatalf("unsafe request reached authority: %#v", authority.request.Context)
+	}
+	record, err := data.LoadIdempotency(ctx, request.IdempotencyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(record.ResponseBytes), secret) {
+		t.Fatal("configured request secret reached idempotency response")
 	}
 }
 

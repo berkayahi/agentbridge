@@ -191,9 +191,11 @@ func New(config Config) (*Service, error) {
 func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
-	if err := advisory.ValidateSessionRequestWithRedactor(request, s.redactor); err != nil {
+	prepared, err := advisory.SanitizeSessionRequestWithRedactor(request, s.redactor)
+	if err != nil {
 		return advisory.SessionResponse{}, err
 	}
+	request = prepared
 	var cached advisory.SessionResponse
 	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
 		if err != nil {

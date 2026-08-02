@@ -175,10 +175,17 @@ func IneligibleCapability(providerID, reasonCode, reason string) ProviderCapabil
 }
 
 func (c ProviderCapability) Valid() bool {
-	return c.ContractVersion == CapabilityContractVersion && c.ProviderID != "" &&
-		c.Protocol.ProtocolVersion == ContractVersion && c.Protocol.SchemaVersion == StructuredOutputSchemaVersion &&
-		((c.AdvisoryExecution && c.Eligible && c.StructuredOutput.Supported && c.StructuredOutput.Mode == StructuredOutputMode && c.StructuredOutput.SchemaVersion == StructuredOutputSchemaVersion) ||
-			(!c.AdvisoryExecution && !c.Eligible && c.ReasonCode != "" && c.Reason != ""))
+	if c.ContractVersion != CapabilityContractVersion || c.ProviderID == "" {
+		return false
+	}
+	if c.Protocol.ProtocolVersion != ContractVersion || c.Protocol.SchemaVersion != StructuredOutputSchemaVersion {
+		return false
+	}
+	if c.AdvisoryExecution {
+		return c.Eligible && c.StructuredOutput.Supported && c.StructuredOutput.Mode == StructuredOutputMode && c.StructuredOutput.SchemaVersion == StructuredOutputSchemaVersion &&
+			!c.EffectivePolicy.RepositoryWrite && !c.EffectivePolicy.GitMutation && !c.EffectivePolicy.NetworkAccess && !c.EffectivePolicy.SecretValueAccess && !c.EffectivePolicy.ExternalStateMutation && !c.EffectivePolicy.ApprovalRequests
+	}
+	return !c.Eligible && c.ReasonCode != "" && c.Reason != ""
 }
 
 func (c ProviderCapability) AdvisoryEligible(webResearch bool) bool {

@@ -69,6 +69,9 @@ func (r *Redactor) RedactString(value string) string {
 // payload before truncating it; RedactString is intentionally not suitable for
 // that ordering guarantee.
 func (r *Redactor) RedactComplete(value string) string {
+	if r == nil {
+		return value
+	}
 	return r.redact(value)
 }
 
@@ -78,6 +81,9 @@ func (r *Redactor) RedactComplete(value string) string {
 // value is safe to publish; the configured literal values never leave this
 // method except as a replacement marker.
 func (r *Redactor) RedactKnown(value string) string {
+	if r == nil {
+		return value
+	}
 	value = privateKeyPattern.ReplaceAllString(value, "[REDACTED:private-key]")
 	value = authorizationPattern.ReplaceAllString(value, "${1}[REDACTED:authorization]")
 	value = setCookiePattern.ReplaceAllString(value, "${1}[REDACTED:set-cookie]")

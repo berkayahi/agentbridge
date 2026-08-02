@@ -2,8 +2,10 @@ package localcontrol_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,5 +73,27 @@ func TestListProvidersRequiresACatalog(t *testing.T) {
 	service := newProviderService(t, nil)
 	if _, err := service.ListProviders(context.Background()); !errors.Is(err, localcontrol.ErrNotConfigured) {
 		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+}
+
+func TestListProvidersSerializesCanonicalCapabilityContract(t *testing.T) {
+	service := newProviderService(t, fakeProviderCatalog{providers: []localcontrol.ProviderInfo{
+		{ID: "codex", DefaultModel: "deterministic-v1", Available: false, Capabilities: advisory.ReadOnlyCapability("codex")},
+	}})
+	response, err := service.ListProviders(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"contract_version":"`+advisory.CapabilityContractVersion+`"`) || !strings.Contains(string(encoded), `"provider_id":"codex"`) {
+		t.Fatalf("serialized capability contract = %s", encoded)
+	}
+	for _, legacy := range []string{"advisory_sessions", "decision_mutation", `"capability"`} {
+		if strings.Contains(string(encoded), legacy) {
+			t.Fatalf("legacy capability field %q crossed the wire: %s", legacy, encoded)
+		}
 	}
 }

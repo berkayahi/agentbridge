@@ -36,7 +36,7 @@ var (
 
 var (
 	privateKeySafetyPattern = regexp.MustCompile(`(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----`)
-	credentialSafetyPattern = regexp.MustCompile(`(?i)(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|passwd|secret|credential|authorization|cookie|private[_ -]?key)\s*[:=]\s*(?:"[^"]+"|'[^']+'|[^\s,}\]\[]{8,})`)
+	credentialSafetyPattern = regexp.MustCompile(`(?i)(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|passwd|secret|credential|authorization|cookie|private[_ -]?key)\s*[:=]\s*(?:"[^"]+"|'[^']+'|[^\s,}\]\[]{1,})`)
 	bearerSafetyPattern     = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}`)
 	knownTokenSafetyPattern = regexp.MustCompile(`\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|[0-9]{8,12}:[A-Za-z0-9_-]{30,})\b`)
 	opaqueSecretPattern     = regexp.MustCompile(`(?i)\bsecret[-_ ]?(?:value|material|data)\b`)
@@ -400,7 +400,11 @@ func safetyKey(value string) bool {
 	if strings.HasSuffix(compact, "secret") || strings.HasSuffix(compact, "password") || strings.HasSuffix(compact, "credential") {
 		return true
 	}
-	if strings.HasSuffix(compact, "token") && !strings.Contains(compact, "budget") && !strings.Contains(compact, "count") && !strings.Contains(compact, "limit") {
+	switch compact {
+	case "tokenbudget", "tokencount", "tokenlimit", "inputtokens", "outputtokens", "totaltokens", "reasoningtokens":
+		return false
+	}
+	if strings.HasSuffix(compact, "token") {
 		return true
 	}
 	return false

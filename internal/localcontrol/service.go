@@ -15,9 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repository"
+	"github.com/berkayahi/agentbridge/internal/security"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
 )
@@ -42,6 +44,8 @@ type Service struct {
 	integrator    RepositoryIntegrator
 	snapshots     RepositorySnapshotAuthority
 	understanding RepositoryUnderstandingAuthority
+	advisory      AdvisorySessionAuthority
+	redactor      *security.Redactor
 	clock         func() time.Time
 	newID         func(string) string
 
@@ -176,8 +180,50 @@ func New(config Config) (*Service, error) {
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
+		advisory: config.Advisory, redactor: config.Redactor,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
+}
+
+// ExecuteAdvisorySession authenticates and durably replays a generic advisory
+// execution. The existing idempotency record is the durable receipt envelope;
+// no product-specific persistence is introduced here.
+func (s *Service) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
+	s.commandMu.Lock()
+	defer s.commandMu.Unlock()
+	prepared, err := advisory.SanitizeSessionRequestWithRedactor(request, s.redactor)
+	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	request = prepared
+	var cached advisory.SessionResponse
+	if done, err := s.replay(ctx, request.IdempotencyKey, "advisory_session", request, &cached); done || err != nil {
+		if err != nil {
+			return advisory.SessionResponse{}, err
+		}
+		if err := advisory.ValidateSessionResponseWithRedactor(request, cached, s.redactor); err != nil {
+			return advisory.SessionResponse{}, err
+		}
+		return cached, nil
+	}
+	if s.advisory == nil {
+		return advisory.SessionResponse{}, ErrNotConfigured
+	}
+	response, err := s.advisory.ExecuteAdvisorySession(ctx, request)
+	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	response, err = advisory.SanitizeSessionResponse(response)
+	if err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	if err := advisory.ValidateSessionResponseWithRedactor(request, response, s.redactor); err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	if err := s.remember(ctx, request.IdempotencyKey, "advisory_session", request, response); err != nil {
+		return advisory.SessionResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) IntegrateRepository(ctx context.Context, request IntegrateRepositoryRequest) (IntegrationResponse, error) {
@@ -362,7 +408,12 @@ func (s *Service) ListProviders(ctx context.Context) (ProvidersResponse, error) 
 	if providers == nil {
 		providers = []ProviderInfo{}
 	}
-	return ProvidersResponse{Providers: providers}, nil
+	for _, provider := range providers {
+		if provider.Capabilities.ProviderID != provider.ID || !provider.Capabilities.Valid() {
+			return ProvidersResponse{}, ErrUnsupportedCapabilityContract
+		}
+	}
+	return ProvidersResponse{ContractVersion: advisory.CapabilityContractVersion, Providers: providers}, nil
 }
 
 func (s *Service) resolveRepositoryProfile(ctx context.Context, remote string) (RepositoryProfile, error) {

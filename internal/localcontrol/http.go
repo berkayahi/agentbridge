@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
@@ -60,6 +61,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
 	mux.HandleFunc("POST /v1/repository-understanding", a.createRepositoryUnderstanding)
+	mux.HandleFunc("POST /v1/advisory-sessions", a.createAdvisorySession)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -103,6 +105,15 @@ func (a *API) createRepositoryUnderstanding(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	response, err := a.service.UnderstandRepository(r.Context(), request)
+	writeResult(w, http.StatusCreated, response, err)
+}
+
+func (a *API) createAdvisorySession(w http.ResponseWriter, r *http.Request) {
+	var request advisory.SessionRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	response, err := a.service.ExecuteAdvisorySession(r.Context(), request)
 	writeResult(w, http.StatusCreated, response, err)
 }
 
@@ -521,6 +532,16 @@ func writeResult(w http.ResponseWriter, successStatus int, value any, err error)
 func writeServiceError(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, "request_failed"
 	switch {
+	case errors.Is(err, advisory.ErrInvalidRequest):
+		status, code = http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, advisory.ErrPolicyViolation):
+		status, code = http.StatusForbidden, "policy_violation"
+	case errors.Is(err, advisory.ErrStructuredOutput), errors.Is(err, advisory.ErrProviderOutputBounds), errors.Is(err, advisory.ErrProviderIdentity), errors.Is(err, advisory.ErrProviderExecution), errors.Is(err, advisory.ErrReceiptIntegrity):
+		status, code = http.StatusBadGateway, "provider_output_invalid"
+	case errors.Is(err, ErrUnsupportedCapabilityContract):
+		status, code = http.StatusServiceUnavailable, "provider_capability_unsupported"
+	case errors.Is(err, advisory.ErrNotConfigured):
+		status, code = http.StatusServiceUnavailable, "provider_not_configured"
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, repositorysnapshot.ErrInvalidRequest),
 		errors.Is(err, repositorysnapshot.ErrRefNotAllowed), errors.Is(err, repositorysnapshot.ErrScopeNotFound),
 		errors.Is(err, repositorysnapshot.ErrPathNotAllowed), errors.Is(err, repositorysnapshot.ErrPathNotFound),

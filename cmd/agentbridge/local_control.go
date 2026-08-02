@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/approval"
 	"github.com/berkayahi/agentbridge/internal/config"
 	bridgeapp "github.com/berkayahi/agentbridge/internal/controller/standalone"
@@ -554,7 +555,17 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 		analysisFixture := value.AnalysisFixture.Implementation == "in_process_deterministic_v1"
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
-		profile := localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available}
+		capability := advisory.IneligibleCapability(id, "analysis_unavailable", "provider does not expose an attested read-only advisory execution boundary")
+		if analysisFixture {
+			capability = advisory.ReadOnlyCapability(id)
+		} else if native := c.live[workmodel.Provider(id)]; native != nil {
+			if safe, ok := native.(provider.SafeAnalysisProvider); ok && safe.AnalysisIsolationAttestation().Valid() {
+				capability = advisory.ReadOnlyCapability(id)
+			} else {
+				capability = advisory.IneligibleCapability(id, "isolation_unattested", "provider lacks the required read-only isolation attestation")
+			}
+		}
+		profile := localcontrol.ProviderInfo{ID: id, DefaultModel: value.Model, Models: value.Catalog(), Available: available, Capabilities: capability}
 		// The deterministic analysis fixture deliberately has no task runtime:
 		// composeProviders starts no adapter or external process for it. Keep the
 		// catalog entry (and Available=false) without treating that absence as a

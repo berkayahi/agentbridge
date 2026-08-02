@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/berkayahi/agentbridge/internal/advisory"
 )
 
 // APIError is the stable error envelope returned by the authenticated local
@@ -143,6 +145,12 @@ func (c *Client) CreateRepositorySnapshot(ctx context.Context, request Repositor
 func (c *Client) UnderstandRepository(ctx context.Context, request RepositoryUnderstandingRequest) (RepositoryUnderstandingResponse, error) {
 	var response RepositoryUnderstandingResponse
 	err := c.do(ctx, http.MethodPost, "/v1/repository-understanding", request, &response)
+	return response, err
+}
+
+func (c *Client) ExecuteAdvisorySession(ctx context.Context, request advisory.SessionRequest) (advisory.SessionResponse, error) {
+	var response advisory.SessionResponse
+	err := c.do(ctx, http.MethodPost, "/v1/advisory-sessions", request, &response)
 	return response, err
 }
 

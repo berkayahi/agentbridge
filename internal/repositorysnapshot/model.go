@@ -100,6 +100,7 @@ type Response struct {
 type ConfiguredRepository struct {
 	ProfileID    string `json:"profile_id"`
 	CheckoutPath string `json:"-"`
+	Remote       string `json:"-"`
 	AllowedRef   string `json:"-"`
 }
 

@@ -306,7 +306,7 @@ func TestRepositoryCatalogResolvesSnapshotsThroughActiveWorkspaceProfiles(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved.ProfileID != "platform" || resolved.CheckoutPath == "" || resolved.AllowedRef != "refs/heads/hive/landing" {
+	if resolved.ProfileID != "platform" || resolved.CheckoutPath == "" || resolved.Remote != "origin" || resolved.AllowedRef != "refs/heads/hive/landing" {
 		t.Fatalf("resolved profile = %#v", resolved)
 	}
 	encoded, err := json.Marshal(resolved)

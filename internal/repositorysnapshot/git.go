@@ -14,6 +14,7 @@ import (
 )
 
 var treeLine = regexp.MustCompile(`^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})\t(.*)$`)
+var safeRemoteName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type GitRunner interface {
 	RunWithEnvironment(context.Context, string, []string, ...string) (bridgegit.RunResult, error)
@@ -39,7 +40,23 @@ func (g GitInspector) Inspect(ctx context.Context, profile ConfiguredRepository,
 	if g.Git == nil {
 		return Response{}, ErrInvalidRequest
 	}
-	resolved, err := g.run(ctx, profile.CheckoutPath, "rev-parse", "--verify", request.RequestedRef+"^{commit}")
+	requestedCommitRef := request.RequestedRef
+	if request.RequestedRef == profile.AllowedRef && profile.Remote != "" {
+		if !safeRemoteName.MatchString(profile.Remote) {
+			return Response{}, ErrNotConfigured
+		}
+		branch := strings.TrimPrefix(profile.AllowedRef, "refs/heads/")
+		if branch == profile.AllowedRef || branch == "" {
+			return Response{}, ErrNotConfigured
+		}
+		trackingRef := "refs/remotes/" + profile.Remote + "/" + branch
+		refspec := "+" + profile.AllowedRef + ":" + trackingRef
+		if _, err := g.run(ctx, profile.CheckoutPath, "fetch", "--no-tags", "--no-write-fetch-head", profile.Remote, refspec); err != nil {
+			return Response{}, fmt.Errorf("refresh configured repository ref: %w", err)
+		}
+		requestedCommitRef = trackingRef
+	}
+	resolved, err := g.run(ctx, profile.CheckoutPath, "rev-parse", "--verify", requestedCommitRef+"^{commit}")
 	if err != nil {
 		return Response{}, fmt.Errorf("%w: resolve requested commit", ErrInvalidRequest)
 	}

@@ -530,7 +530,7 @@ func (c repositoryCatalog) ResolveRepositoryProfile(_ context.Context, profileID
 		return repositorysnapshot.ConfiguredRepository{}, repositorysnapshot.ErrNotConfigured
 	}
 	return repositorysnapshot.ConfiguredRepository{
-		ProfileID: profileID, CheckoutPath: profile.ControlCheckout, AllowedRef: profile.BaseRef,
+		ProfileID: profileID, CheckoutPath: profile.ControlCheckout, Remote: profile.Remote, AllowedRef: profile.BaseRef,
 	}, nil
 }
 

@@ -219,6 +219,59 @@ func TestSnapshotIsExactDeterministicReadOnlyRedactedAndRestartSafe(t *testing.T
 	}
 }
 
+func TestConfiguredRefSnapshotRefreshesRemoteWithoutMovingControlCheckout(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	source := filepath.Join(root, "source")
+	checkout := filepath.Join(root, "control")
+	git := bridgegit.Runner{MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput}
+
+	runGit(t, git, root, "init", "--bare", remote)
+	runGit(t, git, root, "init", "-b", "main", source)
+	runGit(t, git, source, "config", "user.name", "Snapshot Test")
+	runGit(t, git, source, "config", "user.email", "snapshot@example.invalid")
+	writeFile(t, source, "go.mod", "module example.invalid/original\n\ngo 1.26\n")
+	runGit(t, git, source, "add", "go.mod")
+	runGit(t, git, source, "commit", "-m", "test: original remote tree")
+	runGit(t, git, source, "remote", "add", "origin", remote)
+	runGit(t, git, source, "push", "origin", "HEAD:refs/heads/hive/landing")
+	runGit(t, git, root, "clone", "--branch", "hive/landing", remote, checkout)
+	staleHead := runGit(t, git, checkout, "rev-parse", "HEAD")
+
+	writeFile(t, source, "go.mod", "module example.invalid/current\n\ngo 1.26\n")
+	runGit(t, git, source, "add", "go.mod")
+	runGit(t, git, source, "commit", "-m", "test: advance configured remote ref")
+	currentHead := runGit(t, git, source, "rev-parse", "HEAD")
+	runGit(t, git, source, "push", "origin", "HEAD:refs/heads/hive/landing")
+
+	data, err := sqlite.OpenV2(ctx, filepath.Join(root, "agentbridge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer data.Close()
+	service := newService(t, data, fixedCatalog{profile: repositorysnapshot.ConfiguredRepository{
+		ProfileID: "fixture", CheckoutPath: checkout, Remote: "origin", AllowedRef: "refs/heads/hive/landing",
+	}}, git, time.Now().UTC(), func() string { return "remote-refresh-snapshot" })
+
+	response, err := service.Snapshot(ctx, repositorysnapshot.Request{
+		RepositoryProfileID: "fixture", RequestedRef: "refs/heads/hive/landing", ScopedRoot: ".",
+		AnalyzerVersion: "fixture-analyzer-v1", IdempotencyKey: "remote-refresh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ExactCommitSHA != currentHead {
+		t.Fatalf("snapshot commit = %s, want current remote %s", response.ExactCommitSHA, currentHead)
+	}
+	if head := runGit(t, git, checkout, "rev-parse", "HEAD"); head != staleHead {
+		t.Fatalf("control checkout moved from %s to %s", staleHead, head)
+	}
+	if status := runGit(t, git, checkout, "status", "--porcelain=v1"); status != "" {
+		t.Fatalf("control checkout became dirty: %q", status)
+	}
+}
+
 func TestSnapshotRejectsTraversalAbsoluteNonNormalizedAndDisallowedRefs(t *testing.T) {
 	data, err := sqlite.OpenV2(context.Background(), filepath.Join(t.TempDir(), "agentbridge.db"))
 	if err != nil {

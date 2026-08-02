@@ -44,19 +44,22 @@ func TestLocalCreateStartObserveApproveVerifyCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	expectedBaseSHA := "0123456789abcdef0123456789abcdef01234567"
 	task, err := service.CreateTask(ctx, localcontrol.CreateTaskRequest{
 		ProjectID: project.Project.ID, BoardID: board.Board.ID, RepositoryID: repository.Repository.ID,
-		Provider: workmodel.CodexSubscription, Title: "Ship local control", Prompt: "run the local slice", IdempotencyKey: "task-key",
+		Provider: workmodel.CodexSubscription, ExpectedBaseSHA: expectedBaseSHA,
+		Title: "Ship local control", Prompt: "run the local slice", IdempotencyKey: "task-key",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Task.Revision != 1 || task.Task.State != workmodel.Queued || task.Task.ExecutionID == "" || task.Task.SessionID == "" {
+	if task.Task.Revision != 1 || task.Task.State != workmodel.Queued || task.Task.ExecutionID == "" || task.Task.SessionID == "" || task.Task.BaseSHA != expectedBaseSHA {
 		t.Fatalf("created task = %#v", task.Task)
 	}
 	duplicateTask, err := service.CreateTask(ctx, localcontrol.CreateTaskRequest{
 		ProjectID: project.Project.ID, BoardID: board.Board.ID, RepositoryID: repository.Repository.ID,
-		Provider: workmodel.CodexSubscription, Title: "Ship local control", Prompt: "run the local slice", IdempotencyKey: "task-key",
+		Provider: workmodel.CodexSubscription, ExpectedBaseSHA: expectedBaseSHA,
+		Title: "Ship local control", Prompt: "run the local slice", IdempotencyKey: "task-key",
 	})
 	if err != nil || duplicateTask.Task.ID != task.Task.ID || duplicateTask.Task.ExecutionID != task.Task.ExecutionID || duplicateTask.Task.SessionID != task.Task.SessionID {
 		t.Fatalf("idempotent task creation = %#v err=%v, want the original canonical lineage", duplicateTask, err)
@@ -109,7 +112,7 @@ func TestLocalCreateStartObserveApproveVerifyCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(observed.Events) < 3 || observed.NextCursor == 0 {
+	if len(observed.Events) < 3 || observed.NextCursor == 0 || observed.Task.BaseSHA != expectedBaseSHA {
 		t.Fatalf("observed = %#v", observed)
 	}
 	observedAgain, err := service.Observe(ctx, localcontrol.ObserveRequest{TaskID: task.Task.ID, AfterCursor: observed.Events[0].Cursor, Limit: 20})

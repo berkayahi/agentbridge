@@ -60,6 +60,50 @@ func TestWorkspaceSupportsConfiguredFeatureBranch(t *testing.T) {
 	}
 }
 
+func TestWorkspacePrepareAtCreatesMissingRefFromExpectedCommitNotControlHEAD(t *testing.T) {
+	fixture := newGitFixture(t, "staging")
+	expected := strings.TrimSpace(gitOutput(t, fixture.control, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(fixture.control, "later.txt"), []byte("later\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, fixture.control, "add", "later.txt")
+	runGit(t, fixture.control, "commit", "-m", "later local commit")
+	controlHead := strings.TrimSpace(gitOutput(t, fixture.control, "rev-parse", "HEAD"))
+	if controlHead == expected {
+		t.Fatal("fixture did not move control HEAD")
+	}
+
+	manager := WorkspaceManager{Git: Runner{}, Port: &savedWorkspace{}}
+	profile := RepositoryProfile{ControlCheckout: fixture.control, Remote: "origin", BaseRef: "refs/heads/delivery", WorktreeRoot: filepath.Join(fixture.root, "worktrees")}
+	workspace, err := manager.PrepareAt(context.Background(), profile, "exact-task", expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace.BaseSHA != expected {
+		t.Fatalf("workspace base = %s, want %s", workspace.BaseSHA, expected)
+	}
+	remoteFields := strings.Fields(gitOutput(t, fixture.control, "ls-remote", "--heads", "origin", profile.BaseRef))
+	if len(remoteFields) == 0 || remoteFields[0] != expected {
+		t.Fatalf("delivery ref = %v, want %s", remoteFields, expected)
+	}
+	if got := strings.TrimSpace(gitOutput(t, fixture.control, "rev-parse", "HEAD")); got != controlHead {
+		t.Fatalf("control HEAD changed: %s -> %s", controlHead, got)
+	}
+}
+
+func TestWorkspacePrepareAtRejectsConfiguredRefDriftBeforeCreatingWorktree(t *testing.T) {
+	fixture := newGitFixture(t, "staging")
+	manager := WorkspaceManager{Git: Runner{}, Port: &savedWorkspace{}}
+	profile := RepositoryProfile{ControlCheckout: fixture.control, Remote: "origin", BaseRef: "refs/heads/staging", WorktreeRoot: filepath.Join(fixture.root, "worktrees")}
+	_, err := manager.PrepareAt(context.Background(), profile, "drifted-task", strings.Repeat("0", 40))
+	if !errors.Is(err, ErrBaseMismatch) {
+		t.Fatalf("error = %v, want ErrBaseMismatch", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(profile.WorktreeRoot, "drifted-task")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("worktree should not exist after a base mismatch: %v", statErr)
+	}
+}
+
 func TestWorkspaceRejectsUnsafeInputsDirtyCheckoutAndCollisions(t *testing.T) {
 	fixture := newGitFixture(t, "staging")
 	base := RepositoryProfile{ControlCheckout: fixture.control, Remote: "origin", BaseRef: "refs/heads/staging", WorktreeRoot: filepath.Join(fixture.root, "worktrees")}
@@ -77,6 +121,9 @@ func TestWorkspaceRejectsUnsafeInputsDirtyCheckoutAndCollisions(t *testing.T) {
 	}
 	if _, err := manager.Prepare(context.Background(), base, "../escape"); !errors.Is(err, ErrInvalidTaskID) {
 		t.Fatalf("unsafe task: %v", err)
+	}
+	if _, err := manager.PrepareAt(context.Background(), base, "safe-task", "short"); !errors.Is(err, ErrInvalidBaseSHA) {
+		t.Fatalf("unsafe expected base: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(fixture.control, "dirty.txt"), []byte("dirty"), 0o600); err != nil {
 		t.Fatal(err)

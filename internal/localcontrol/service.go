@@ -17,6 +17,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/executioncontract"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repository"
 	"github.com/berkayahi/agentbridge/internal/security"
@@ -45,6 +46,7 @@ type Service struct {
 	snapshots     RepositorySnapshotAuthority
 	understanding RepositoryUnderstandingAuthority
 	advisory      AdvisorySessionAuthority
+	executions    executioncontract.Store
 	redactor      *security.Redactor
 	clock         func() time.Time
 	newID         func(string) string
@@ -175,14 +177,24 @@ func New(config Config) (*Service, error) {
 	if config.NewID == nil {
 		config.NewID = defaultID
 	}
-	return &Service{
+	service := &Service{
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
 		advisory: config.Advisory, redactor: config.Redactor,
 		clock: config.Clock, newID: config.NewID,
-	}, nil
+		executions: config.ExecutionStore,
+	}
+	if service.executions == nil {
+		service.executions, _ = config.Store.(executioncontract.Store)
+	}
+	if service.executions != nil {
+		if _, err := service.RecoverExecutions(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	return service, nil
 }
 
 // ExecuteAdvisorySession authenticates and durably replays a generic advisory
@@ -542,12 +554,14 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 		Provider         workmodel.Provider         `json:"provider"`
 		Model            string                     `json:"model"`
 		ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile"`
+		ExpectedBaseSHA  string                     `json:"expected_base_sha,omitempty"`
 		Title            string                     `json:"title"`
 		Prompt           string                     `json:"prompt"`
 	}{
 		ProjectID: request.ProjectID, BoardID: request.BoardID, RepositoryID: request.RepositoryID,
 		TargetDeviceID: targetDeviceID, Provider: request.Provider, Model: strings.TrimSpace(request.Model),
 		ExecutionProfile: normalizeExecutionProfile(request.ExecutionProfile),
+		ExpectedBaseSHA:  strings.ToLower(strings.TrimSpace(request.ExpectedBaseSHA)),
 		Title:            strings.TrimSpace(request.Title), Prompt: strings.TrimSpace(request.Prompt),
 	}
 	var cached TaskResponse
@@ -556,6 +570,9 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	}
 	if !validID(request.ProjectID) || !validID(request.BoardID) || !validID(request.RepositoryID) || !request.Provider.Valid() || payload.Prompt == "" {
 		return TaskResponse{}, ErrInvalidRequest
+	}
+	if payload.ExpectedBaseSHA != "" && !validGitObjectID(payload.ExpectedBaseSHA) {
+		return TaskResponse{}, fmt.Errorf("%w: expected_base_sha must be a full Git object ID", ErrInvalidRequest)
 	}
 	if payload.Model != "" {
 		if payload.ExecutionProfile.Model != "" && payload.ExecutionProfile.Model != payload.Model {
@@ -606,9 +623,10 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	task := workmodel.Task{
 		ID: taskID, RepoProfileID: request.RepositoryID, Title: title, Prompt: payload.Prompt,
 		State: workmodel.Queued, Provider: request.Provider, Model: payload.Model,
-		ExecutionProfile: payload.ExecutionProfile, CreatedAt: now, UpdatedAt: now,
+		ExecutionProfile: payload.ExecutionProfile, BaseSHA: payload.ExpectedBaseSHA,
+		CreatedAt: now, UpdatedAt: now,
 	}
-	initialPayload, err := json.Marshal(map[string]any{"state": "queued", "execution_profile": payload.ExecutionProfile})
+	initialPayload, err := json.Marshal(map[string]any{"state": "queued", "execution_profile": payload.ExecutionProfile, "expected_base_sha": payload.ExpectedBaseSHA})
 	if err != nil {
 		return TaskResponse{}, err
 	}
@@ -616,6 +634,7 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 	auditEvent := localEvent(s.newID("event"), "task", taskID, taskID, 1, "task_created", map[string]any{
 		"project_id": request.ProjectID, "board_id": request.BoardID,
 		"target_device_id": payload.TargetDeviceID, "execution_profile": payload.ExecutionProfile,
+		"expected_base_sha": payload.ExpectedBaseSHA,
 	}, now)
 	// RuntimeStore keeps the fixed execution/session lineage and the initial
 	// device assignment in the same transaction as this response. Building the
@@ -628,6 +647,7 @@ func (s *Service) CreateTask(ctx context.Context, request CreateTaskRequest) (Ta
 		Title: title, Prompt: payload.Prompt, Provider: request.Provider, Model: payload.Model,
 		ExecutionProfile: payload.ExecutionProfile, State: workmodel.Queued, Revision: 1,
 		ExecutionID: taskID + "-execution", SessionID: taskID + "-session", RuntimeID: string(request.Provider),
+		BaseSHA:   payload.ExpectedBaseSHA,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	response := TaskResponse{Task: view}
@@ -748,6 +768,7 @@ func (s *Service) ContinueTask(ctx context.Context, request ContinueTaskRequest)
 		Title: title, Prompt: payload.Prompt, Provider: parent.Provider, Model: parent.Model,
 		ExecutionProfile: parent.ExecutionProfile, State: workmodel.Paused, Revision: 1,
 		ExecutionID: taskID + "-execution", SessionID: parent.SessionID, RuntimeID: parent.RuntimeID,
+		BaseSHA:   parent.CommitSHA,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	response := TaskResponse{Task: view}
@@ -2050,7 +2071,7 @@ func (s *Service) taskView(ctx context.Context, id string) (TaskView, error) {
 	if err != nil {
 		return TaskView{}, err
 	}
-	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, Model: task.Model, ExecutionProfile: task.ExecutionProfile, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, CommitSHA: task.CommitSHA, PushRef: task.PushRef, FailureReason: task.FailureReason, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
+	return TaskView{ID: task.ID, ProjectID: projectID, BoardID: boardID, RepositoryID: task.RepoProfileID, RepositoryRemote: repository.Remote, TargetDeviceID: assignment.DeviceID, TargetEpoch: assignment.AssignmentEpoch, Title: task.Title, Prompt: task.Prompt, Provider: task.Provider, Model: task.Model, ExecutionProfile: task.ExecutionProfile, State: task.State, Revision: task.Revision, ExecutionID: info.ExecutionID, SessionID: info.SessionID, RuntimeID: info.RuntimeID, BaseSHA: task.BaseSHA, CommitSHA: task.CommitSHA, PushRef: task.PushRef, FailureReason: task.FailureReason, CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt}, nil
 }
 
 func (s *Service) ensureTaskTarget(ctx context.Context, view TaskView) error {

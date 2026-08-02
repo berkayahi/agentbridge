@@ -1379,11 +1379,15 @@ func (w *workspaceAdapter) RecoverUnrecorded(ctx context.Context, profileID, tas
 }
 
 func (w *workspaceAdapter) Prepare(ctx context.Context, profileID, taskID string) (bridgeapp.Workspace, error) {
+	return w.PrepareAt(ctx, profileID, taskID, "")
+}
+
+func (w *workspaceAdapter) PrepareAt(ctx context.Context, profileID, taskID, expectedBaseSHA string) (bridgeapp.Workspace, error) {
 	profile, ok := w.profiles[profileID]
 	if !ok {
 		return bridgeapp.Workspace{}, bridgegit.ErrInvalidProfile
 	}
-	value, err := w.manager.Prepare(ctx, profile, taskID)
+	value, err := w.manager.PrepareAt(ctx, profile, taskID, expectedBaseSHA)
 	return bridgeapp.Workspace{BaseSHA: value.BaseSHA, Path: value.Path}, err
 }
 func (w *workspaceAdapter) Inspect(ctx context.Context, value workmodel.Task) (bridgeapp.WorkspaceInspection, error) {

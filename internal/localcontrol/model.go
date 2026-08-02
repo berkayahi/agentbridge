@@ -284,6 +284,7 @@ type TaskView struct {
 	ExecutionID      string                     `json:"execution_id,omitempty"`
 	SessionID        string                     `json:"session_id,omitempty"`
 	RuntimeID        string                     `json:"runtime_id,omitempty"`
+	BaseSHA          string                     `json:"base_sha,omitempty"`
 	CommitSHA        string                     `json:"commit_sha,omitempty"`
 	PushRef          string                     `json:"push_ref,omitempty"`
 	FailureReason    string                     `json:"failure_reason,omitempty"`
@@ -361,6 +362,7 @@ type CreateTaskRequest struct {
 	Provider         workmodel.Provider         `json:"provider"`
 	Model            string                     `json:"model,omitempty"`
 	ExecutionProfile workmodel.ExecutionProfile `json:"execution_profile,omitempty"`
+	ExpectedBaseSHA  string                     `json:"expected_base_sha,omitempty"`
 	Title            string                     `json:"title"`
 	Prompt           string                     `json:"prompt"`
 	IdempotencyKey   string                     `json:"idempotency_key"`

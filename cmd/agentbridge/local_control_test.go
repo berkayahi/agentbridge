@@ -155,11 +155,63 @@ func TestProviderCatalogUsesLivePerModelCapabilities(t *testing.T) {
 
 type executionCatalogProvider struct {
 	provider.Provider
-	catalog provider.ExecutionCatalog
+	catalog       provider.ExecutionCatalog
+	authenticated *bool
+	authErr       error
 }
 
 func (p executionCatalogProvider) ExecutionCatalog(context.Context) (provider.ExecutionCatalog, error) {
 	return p.catalog, nil
+}
+
+func (p executionCatalogProvider) AuthStatus(context.Context) (provider.AuthStatus, error) {
+	if p.authErr != nil {
+		return provider.AuthStatus{}, p.authErr
+	}
+	authenticated := true
+	if p.authenticated != nil {
+		authenticated = *p.authenticated
+	}
+	return provider.AuthStatus{Authenticated: authenticated}, nil
+}
+
+func TestProviderCatalogFailsClosedWhenAuthenticationCannotBeConfirmed(t *testing.T) {
+	live := executionCatalogProvider{authErr: errors.New("auth probe unavailable")}
+	catalog := providerCatalog{
+		providers: map[string]config.ProviderConfig{
+			"codex": {Executable: os.Args[0], Model: "gpt-5.6-terra", Models: []string{"gpt-5.6-terra"}},
+		},
+		live: map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: live},
+	}
+	profiles, err := catalog.ProviderProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Available {
+		t.Fatalf("provider with unknown authentication = %#v", profiles)
+	}
+}
+
+func TestProviderCatalogDoesNotAdvertiseUnauthenticatedRuntimeAsAvailable(t *testing.T) {
+	authenticated := false
+	live := executionCatalogProvider{authenticated: &authenticated}
+	runtimes, err := bridgeRuntime.NewRegistry(&approvalCaptureRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := providerCatalog{
+		providers: map[string]config.ProviderConfig{
+			"codex": {Executable: os.Args[0], Model: "gpt-5.6-terra", Models: []string{"gpt-5.6-terra"}},
+		},
+		live: map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: live}, runtimes: runtimes,
+	}
+	profiles, err := catalog.ProviderProfiles(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(profiles) != 1 || profiles[0].Available {
+		t.Fatalf("unauthenticated provider = %#v", profiles)
+	}
 }
 
 type approvalCaptureRuntime struct {

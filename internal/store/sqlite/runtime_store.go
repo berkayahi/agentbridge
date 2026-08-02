@@ -72,8 +72,8 @@ func (s *RuntimeStore) CreateTask(ctx context.Context, value workmodel.Task, ini
 		return fmt.Errorf("bind v2 task repository: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, execution_profile, active_execution_id, controller_owner, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, value.Model, profile, executionID, workmodel.TaskControllerStandalone, timestamp(now), timestamp(now)); err != nil {
+		INSERT INTO local_tasks (id, repo_profile_id, title, prompt, state, provider, model, execution_profile, active_execution_id, controller_owner, base_sha, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, value.ID, value.RepoProfileID, value.Title, value.Prompt, value.State, value.Provider, value.Model, profile, executionID, workmodel.TaskControllerStandalone, value.BaseSHA, timestamp(now), timestamp(now)); err != nil {
 		return runtimeConflict("insert v2 local task", err)
 	}
 	if _, err := tx.ExecContext(ctx, `

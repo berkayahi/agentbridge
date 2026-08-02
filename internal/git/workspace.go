@@ -13,11 +13,14 @@ import (
 var (
 	ErrInvalidProfile = errors.New("git workspace: invalid repository profile")
 	ErrInvalidTaskID  = errors.New("git workspace: invalid task ID")
+	ErrInvalidBaseSHA = errors.New("git workspace: invalid expected base SHA")
+	ErrBaseMismatch   = errors.New("git workspace: configured base ref does not match expected SHA")
 	ErrDirtyCheckout  = errors.New("git workspace: control checkout is dirty")
 	ErrPathCollision  = errors.New("git workspace: path collision")
 )
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var fullObjectID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 
 type RepositoryProfile struct{ ControlCheckout, Remote, BaseRef, WorktreeRoot string }
 
@@ -38,17 +41,46 @@ func (p RepositoryProfile) Validate() error {
 // It publishes only the checkout's committed HEAD, so local uncommitted files
 // are never staged or committed as part of workspace preparation.
 func EnsureRemoteBaseRef(ctx context.Context, runner Runner, checkout, remote, baseRef string) error {
+	return EnsureRemoteBaseRefAt(ctx, runner, checkout, remote, baseRef, "")
+}
+
+// EnsureRemoteBaseRefAt validates or creates the configured delivery ref at an
+// exact commit. An expected SHA is a caller-owned baseline fence: an existing
+// ref may not drift through it, and a missing ref is created from that commit
+// rather than from the control checkout's potentially stale HEAD.
+func EnsureRemoteBaseRefAt(ctx context.Context, runner Runner, checkout, remote, baseRef, expectedBaseSHA string) error {
 	if !filepath.IsAbs(checkout) || !safeName.MatchString(remote) || !validHeadRef(baseRef) {
 		return ErrInvalidProfile
+	}
+	expectedBaseSHA = strings.ToLower(strings.TrimSpace(expectedBaseSHA))
+	if expectedBaseSHA != "" && !fullObjectID.MatchString(expectedBaseSHA) {
+		return ErrInvalidBaseSHA
 	}
 	result, err := runner.Run(ctx, checkout, "ls-remote", "--heads", remote, baseRef)
 	if err != nil {
 		return fmt.Errorf("inspect configured base ref: %w", err)
 	}
-	if strings.TrimSpace(result.Stdout) != "" {
+	fields := strings.Fields(result.Stdout)
+	if len(fields) > 0 {
+		remoteSHA := strings.ToLower(fields[0])
+		if expectedBaseSHA != "" && remoteSHA != expectedBaseSHA {
+			return fmt.Errorf("%w: ref %s is %s, expected %s", ErrBaseMismatch, baseRef, remoteSHA, expectedBaseSHA)
+		}
 		return nil
 	}
-	if _, err := runner.Run(ctx, checkout, "push", remote, "HEAD:"+baseRef); err != nil {
+	source := "HEAD"
+	if expectedBaseSHA != "" {
+		source = expectedBaseSHA
+		if _, err := runner.Run(ctx, checkout, "rev-parse", "--verify", expectedBaseSHA+"^{commit}"); err != nil {
+			if _, fetchErr := runner.Run(ctx, checkout, "fetch", "--no-tags", remote, expectedBaseSHA); fetchErr != nil {
+				return fmt.Errorf("fetch expected base %s: %w", expectedBaseSHA, fetchErr)
+			}
+			if _, resolveErr := runner.Run(ctx, checkout, "rev-parse", "--verify", expectedBaseSHA+"^{commit}"); resolveErr != nil {
+				return fmt.Errorf("resolve expected base %s: %w", expectedBaseSHA, resolveErr)
+			}
+		}
+	}
+	if _, err := runner.Run(ctx, checkout, "push", remote, source+":"+baseRef); err != nil {
 		return fmt.Errorf("prepare configured base ref: %w", err)
 	}
 	return nil
@@ -64,11 +96,22 @@ type WorkspaceManager struct {
 }
 
 func (m WorkspaceManager) Prepare(ctx context.Context, profile RepositoryProfile, taskID string) (Workspace, error) {
+	return m.PrepareAt(ctx, profile, taskID, "")
+}
+
+// PrepareAt creates a detached worktree only when the configured base ref
+// resolves to expectedBaseSHA. Passing an empty SHA retains the generic
+// profile-driven behavior used by existing AgentBridge clients.
+func (m WorkspaceManager) PrepareAt(ctx context.Context, profile RepositoryProfile, taskID, expectedBaseSHA string) (Workspace, error) {
 	if err := profile.Validate(); err != nil {
 		return Workspace{}, err
 	}
 	if !safeName.MatchString(taskID) {
 		return Workspace{}, ErrInvalidTaskID
+	}
+	expectedBaseSHA = strings.ToLower(strings.TrimSpace(expectedBaseSHA))
+	if expectedBaseSHA != "" && !fullObjectID.MatchString(expectedBaseSHA) {
+		return Workspace{}, ErrInvalidBaseSHA
 	}
 	if m.Port == nil {
 		return Workspace{}, fmt.Errorf("%w: persistence port is required", ErrInvalidProfile)
@@ -89,7 +132,7 @@ func (m WorkspaceManager) Prepare(ctx context.Context, profile RepositoryProfile
 	branch := strings.TrimPrefix(profile.BaseRef, "refs/heads/")
 	tracking := "refs/remotes/" + profile.Remote + "/" + branch
 	refspec := "+" + profile.BaseRef + ":" + tracking
-	if err := EnsureRemoteBaseRef(ctx, m.Git, profile.ControlCheckout, profile.Remote, profile.BaseRef); err != nil {
+	if err := EnsureRemoteBaseRefAt(ctx, m.Git, profile.ControlCheckout, profile.Remote, profile.BaseRef, expectedBaseSHA); err != nil {
 		return Workspace{}, err
 	}
 	if _, err := m.Git.Run(ctx, profile.ControlCheckout, "fetch", "--no-tags", profile.Remote, refspec); err != nil {
@@ -100,6 +143,9 @@ func (m WorkspaceManager) Prepare(ctx context.Context, profile RepositoryProfile
 		return Workspace{}, fmt.Errorf("resolve configured base ref: %w", err)
 	}
 	sha := strings.TrimSpace(resolved.Stdout)
+	if expectedBaseSHA != "" && strings.ToLower(sha) != expectedBaseSHA {
+		return Workspace{}, fmt.Errorf("%w: fetched ref %s is %s, expected %s", ErrBaseMismatch, profile.BaseRef, sha, expectedBaseSHA)
+	}
 	if err := os.MkdirAll(profile.WorktreeRoot, 0o700); err != nil {
 		return Workspace{}, fmt.Errorf("create worktree root: %w", err)
 	}

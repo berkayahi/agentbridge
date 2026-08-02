@@ -294,7 +294,7 @@ func (e *localRuntimeExecutor) Start(ctx context.Context, view localcontrol.Task
 			return err
 		}
 	}
-	workspace, err := e.workspace.Prepare(ctx, target.profileID, view.ID)
+	workspace, err := e.workspace.PrepareAt(ctx, target.profileID, view.ID, task.BaseSHA)
 	if err != nil {
 		return err
 	}
@@ -555,10 +555,16 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 		analysisFixture := value.AnalysisFixture.Implementation == "in_process_deterministic_v1"
 		info, err := os.Stat(value.Executable)
 		available := err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+		native := c.live[workmodel.Provider(id)]
+		if available && native != nil {
+			if status, authErr := native.AuthStatus(ctx); authErr != nil || !status.Authenticated {
+				available = false
+			}
+		}
 		capability := advisory.IneligibleCapability(id, "analysis_unavailable", "provider does not expose an attested read-only advisory execution boundary")
 		if analysisFixture {
 			capability = advisory.ReadOnlyCapability(id)
-		} else if native := c.live[workmodel.Provider(id)]; native != nil {
+		} else if native != nil {
 			if safe, ok := native.(provider.SafeAnalysisProvider); ok && safe.AnalysisIsolationAttestation().Valid() {
 				capability = advisory.ReadOnlyCapability(id)
 			} else {
@@ -576,27 +582,28 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 			if runtimeErr != nil {
 				return nil, fmt.Errorf("load %s runtime capabilities: %w", id, runtimeErr)
 			}
-			capabilities, capabilityErr := adapter.Capabilities(ctx)
-			if capabilityErr != nil {
-				return nil, fmt.Errorf("load %s approval modes: %w", id, capabilityErr)
-			}
-			for _, mode := range capabilities.NativeApprovalModes {
-				detail := localcontrol.ProviderApprovalMode{ID: string(mode)}
-				switch mode {
-				case bridgeRuntime.ApprovalAskEveryTime:
-					detail.DisplayName = "Ask me"
-					detail.Description = "Pause when the provider needs authority beyond the current sandbox."
-				case bridgeRuntime.ApprovalAutoWithinPolicy:
-					detail.DisplayName = "Auto-review"
-					detail.Description = "Let the provider review routine requests inside the current sandbox policy."
-				case bridgeRuntime.ApprovalProviderDefault:
-					detail.DisplayName = "Provider default"
-					detail.Description = "Use the provider account's own approval configuration."
+			if available {
+				capabilities, capabilityErr := adapter.Capabilities(ctx)
+				if capabilityErr != nil {
+					return nil, fmt.Errorf("load %s approval modes: %w", id, capabilityErr)
 				}
-				profile.ApprovalModes = append(profile.ApprovalModes, detail)
+				for _, mode := range capabilities.NativeApprovalModes {
+					detail := localcontrol.ProviderApprovalMode{ID: string(mode)}
+					switch mode {
+					case bridgeRuntime.ApprovalAskEveryTime:
+						detail.DisplayName = "Ask me"
+						detail.Description = "Pause when the provider needs authority beyond the current sandbox."
+					case bridgeRuntime.ApprovalAutoWithinPolicy:
+						detail.DisplayName = "Auto-review"
+						detail.Description = "Let the provider review routine requests inside the current sandbox policy."
+					case bridgeRuntime.ApprovalProviderDefault:
+						detail.DisplayName = "Provider default"
+						detail.Description = "Use the provider account's own approval configuration."
+					}
+					profile.ApprovalModes = append(profile.ApprovalModes, detail)
+				}
 			}
 		}
-		native := c.live[workmodel.Provider(id)]
 		cataloger, ok := native.(provider.ExecutionCatalogProvider)
 		if available && ok {
 			catalog, catalogErr := cataloger.ExecutionCatalog(ctx)

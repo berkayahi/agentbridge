@@ -34,6 +34,7 @@ type Service struct {
 	clock     func() time.Time
 	newID     func(string) string
 	redactor  *security.Redactor
+	safety    *SafetyPipeline
 }
 
 func New(config Config) (*Service, error) {
@@ -62,7 +63,7 @@ func New(config Config) (*Service, error) {
 	}
 	return &Service{
 		catalog: config.Catalog, providers: providers, clock: config.Clock, newID: config.NewID,
-		redactor: redactor,
+		redactor: redactor, safety: NewSafetyPipeline(redactor, SafetyConfig{MaxInputBytes: MaxContextTotalBytes}),
 	}, nil
 }
 
@@ -70,29 +71,27 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if s == nil || s.catalog == nil {
 		return SessionResponse{}, ErrNotConfigured
 	}
-	if err := ValidateSessionRequestWithRedactor(request, s.redactor); err != nil {
-		return SessionResponse{}, err
-	}
-	contextBundle, err := redactContext(s.redactor, request.Context)
+	prepared, err := prepareSessionRequest(request, s.safety)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	prompt := s.redactor.RedactString(request.Prompt)
-	schema := append([]byte(nil), request.OutputSchema...)
+	contextBundle := prepared.Context
+	prompt := prepared.Prompt
+	schema := append([]byte(nil), prepared.OutputSchema...)
 	policy := effectivePolicy()
 	schemaDigest := digestBytes(schema)
-	policyDigest := digestPolicy(policy, request.WebResearch)
+	policyDigest := digestPolicy(policy, prepared.WebResearch)
 
 	profiles, err := s.catalog.ProviderProfiles(ctx)
 	if err != nil {
 		return SessionResponse{}, err
 	}
-	profile, provider, err := s.selectProvider(profiles, request.ProviderID, request.ModelID, request.WebResearch.Enabled)
+	profile, provider, err := s.selectProvider(profiles, prepared.ProviderID, prepared.ModelID, prepared.WebResearch.Enabled)
 	if err != nil {
 		return SessionResponse{}, err
 	}
 	capability := provider.Capability()
-	if err := validateCapability(capability, request.WebResearch.Enabled); err != nil {
+	if err := validateCapability(capability, prepared.WebResearch.Enabled); err != nil {
 		return SessionResponse{}, err
 	}
 	modelID := strings.TrimSpace(request.ModelID)
@@ -112,10 +111,13 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 		ProviderID: profile.ID, ModelID: modelID, Prompt: prompt, Context: contextBundle,
 		OutputSchema: schema, SchemaDigest: schemaDigest, SchemaVersion: request.SchemaVersion,
 		Policy: policy, PolicyDigest: policyDigest,
-		WebResearch: request.WebResearch,
+		WebResearch: prepared.WebResearch,
 	}
 	result, err := provider.Execute(ctx, executionRequest)
 	if err != nil {
+		return SessionResponse{}, safeProviderExecutionError(s.safety, err)
+	}
+	if err := inspectProviderDiagnostics(s.safety, result.Stdout, result.Stderr); err != nil {
 		return SessionResponse{}, err
 	}
 	if result.ProviderID != "" && result.ProviderID != profile.ID {
@@ -127,7 +129,7 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 	if len(result.Output) == 0 || len(result.Output) > MaxOutputBytes {
 		return SessionResponse{}, ErrProviderOutputBounds
 	}
-	output, err := sanitizeStructuredOutput(s.redactor, result.Output)
+	output, err := sanitizeStructuredOutput(s.safety, result.Output)
 	if err != nil {
 		return SessionResponse{}, err
 	}
@@ -151,7 +153,7 @@ func (s *Service) ExecuteAdvisorySession(ctx context.Context, request SessionReq
 		StartedAt: started, CompletedAt: completed, Status: "completed",
 	}
 	response := SessionResponse{ContractVersion: ContractVersion, Output: append(json.RawMessage(nil), output...), Receipt: receipt}
-	if err := validateSessionResponse(request, response, s.redactor); err != nil {
+	if err := validateSessionResponse(prepared, response, s.safety); err != nil {
 		return SessionResponse{}, err
 	}
 	return response, nil
@@ -161,11 +163,11 @@ func (s *Service) selectProvider(profiles []ProviderProfile, requested, model st
 	requested = strings.TrimSpace(requested)
 	model = strings.TrimSpace(model)
 	for _, profile := range profiles {
-		if !profile.Available || !capabilityEligible(profile.Capability, webResearch) || (requested != "" && profile.ID != requested) || (model != "" && !profileSupportsModel(profile, model)) {
+		if !profile.Available || profile.Capabilities.ProviderID != profile.ID || !capabilityEligible(profile.Capabilities, webResearch) || (requested != "" && profile.ID != requested) || (model != "" && !profileSupportsModel(profile, model)) {
 			continue
 		}
 		provider, ok := s.providers[profile.ID]
-		if !ok || provider == nil || (provider.Capability().ID != "" && provider.Capability().ID != profile.ID) || !capabilityEligible(provider.Capability(), webResearch) {
+		if !ok || provider == nil || provider.Capability().ProviderID != profile.ID || !sameCapability(profile.Capabilities, provider.Capability()) || !capabilityEligible(provider.Capability(), webResearch) {
 			continue
 		}
 		return profile, provider, nil
@@ -197,10 +199,7 @@ func profileSupportsModel(profile ProviderProfile, model string) bool {
 }
 
 func capabilityEligible(capability ProviderCapability, webResearch bool) bool {
-	return !webResearch && capability.AdvisorySessions && capability.ReadOnly && capability.StructuredOutput &&
-		!capability.RepositoryWrites && !capability.BranchMutation && !capability.WorktreeMutation &&
-		!capability.GitIntegration && !capability.SecretValueAccess && !capability.DecisionMutation &&
-		!capability.HumanApproval
+	return capability.AdvisoryEligible(webResearch)
 }
 
 // CapabilityEligible reports whether a provider can be used by an advisory
@@ -217,6 +216,12 @@ func validateCapability(capability ProviderCapability, webResearch bool) error {
 	return nil
 }
 
+func sameCapability(left, right ProviderCapability) bool {
+	leftBytes, leftErr := json.Marshal(left)
+	rightBytes, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftBytes, rightBytes)
+}
+
 // ValidateSessionRequest checks the complete request boundary without
 // redacting or invoking a provider. Local-control uses this same preflight so
 // an invalid request cannot be replayed, persisted, or handed to an authority
@@ -230,14 +235,12 @@ func ValidateSessionRequest(request SessionRequest) error {
 // redactor is an in-memory dependency; its configured values never cross this
 // function's boundary.
 func ValidateSessionRequestWithRedactor(request SessionRequest, redactor *security.Redactor) error {
-	return validateSessionRequest(request, redactor)
+	return validateSessionRequest(request, NewSafetyPipeline(redactor, SafetyConfig{MaxInputBytes: MaxContextTotalBytes}))
 }
 
-func validateSessionRequest(request SessionRequest, redactor *security.Redactor) error {
-	if err := validateRequest(request); err != nil {
-		return err
-	}
-	return validateSchema(request.OutputSchema, redactor)
+func validateSessionRequest(request SessionRequest, safety *SafetyPipeline) error {
+	_, err := prepareSessionRequest(request, safety)
+	return err
 }
 
 func validateRequest(request SessionRequest) error {
@@ -257,128 +260,65 @@ func validateRequest(request SessionRequest) error {
 		return ErrInvalidRequest
 	}
 	total := 0
-	for index, item := range request.Context.Items {
+	for _, item := range request.Context.Items {
 		if strings.TrimSpace(item.Key) == "" || len(item.Key) > MaxContextKeyBytes || len(item.Value) > MaxContextValueBytes || !utf8.ValidString(item.Key) || !utf8.ValidString(item.Value) {
 			return ErrInvalidRequest
-		}
-		if sensitiveKey(item.Key) {
-			return fmt.Errorf("context key %q: %w", item.Key, ErrPolicyViolation)
 		}
 		total += len(item.Key) + len(item.Value)
 		if total > MaxContextTotalBytes {
 			return ErrInvalidRequest
 		}
-		if err := validateContextValue(item.Value, fmt.Sprintf("$.context.items[%d].value", index)); err != nil {
-			return err
-		}
 	}
 	return nil
 }
 
-func validateContextValue(value, path string) error {
-	decoded, err := decodeJSON([]byte(value))
-	if err != nil {
-		if errors.Is(err, errDuplicateJSONKey) {
-			return fmt.Errorf("%w: context contains duplicate JSON keys", ErrInvalidRequest)
+func prepareSessionRequest(request SessionRequest, safety *SafetyPipeline) (SessionRequest, error) {
+	if err := validateRequest(request); err != nil {
+		return SessionRequest{}, err
+	}
+	if safety == nil {
+		safety = NewSafetyPipeline(nil, SafetyConfig{MaxInputBytes: MaxContextTotalBytes})
+	}
+	for _, value := range []string{request.ProviderID, request.ModelID, request.SchemaVersion, request.IdempotencyKey} {
+		if value == "" {
+			continue
 		}
-		return nil
+		if _, err := safety.SanitizeText(value, 0); err != nil {
+			return SessionRequest{}, mapSafetyInputError(err)
+		}
 	}
-	switch decoded.(type) {
-	case map[string]any, []any:
-		// Structured context is still allowed when it is generic and safe, but
-		// sensitive nested fields are rejected rather than redacted and sent on.
-		return rejectSecretKeys(decoded, path)
-	default:
-		return nil
+	if err := validateSchema(request.OutputSchema, safety); err != nil {
+		return SessionRequest{}, err
 	}
-}
-
-func redactContext(redactor *security.Redactor, bundle ContextBundle) (ContextBundle, error) {
-	if redactor == nil {
-		redactor = newAdvisoryRedactor()
+	prompt, err := safety.SanitizeText(request.Prompt, 0)
+	if err != nil {
+		return SessionRequest{}, mapSafetyInputError(err)
 	}
-	items := make([]ContextItem, len(bundle.Items))
-	for index, item := range bundle.Items {
-		value, err := redactContextValue(redactor, item.Value, fmt.Sprintf("$.context.items[%d].value", index))
+	items := make([]ContextItem, len(request.Context.Items))
+	total := 0
+	for index, item := range request.Context.Items {
+		if safetyKey(item.Key) {
+			return SessionRequest{}, ErrPolicyViolation
+		}
+		if _, err := safety.SanitizeText(item.Key, 0); err != nil {
+			return SessionRequest{}, mapSafetyInputError(err)
+		}
+		value, err := safety.SanitizeText(item.Value, 0)
 		if err != nil {
-			return ContextBundle{}, err
+			return SessionRequest{}, mapSafetyInputError(err)
+		}
+		if len(value) > MaxContextValueBytes {
+			return SessionRequest{}, ErrInvalidRequest
+		}
+		total += len(item.Key) + len(value)
+		if total > MaxContextTotalBytes {
+			return SessionRequest{}, ErrInvalidRequest
 		}
 		items[index] = ContextItem{Key: item.Key, Value: value}
 	}
-	return ContextBundle{Items: items}, nil
-}
-
-func redactContextValue(redactor *security.Redactor, raw, path string) (string, error) {
-	decoded, err := decodeJSON([]byte(raw))
-	if err != nil {
-		if errors.Is(err, errDuplicateJSONKey) {
-			return "", fmt.Errorf("%w: context contains duplicate JSON keys", ErrInvalidRequest)
-		}
-		return redactContextScalar(redactor, raw, path)
-	}
-	changed, err := redactJSONValue(redactor, &decoded, path)
-	if err != nil {
-		return "", err
-	}
-	if !changed {
-		return raw, nil
-	}
-	encoded, err := json.Marshal(decoded)
-	if err != nil {
-		return "", fmt.Errorf("%w: encode redacted context", ErrPolicyViolation)
-	}
-	return string(encoded), nil
-}
-
-func redactJSONValue(redactor *security.Redactor, value *any, path string) (bool, error) {
-	switch current := (*value).(type) {
-	case map[string]any:
-		changed := false
-		for name, child := range current {
-			if sensitiveKey(name) {
-				return false, fmt.Errorf("%w: JSON %s contains secret-shaped key %q", ErrPolicyViolation, path, name)
-			}
-			childChanged, err := redactJSONValue(redactor, &child, path+"."+name)
-			if err != nil {
-				return false, err
-			}
-			if childChanged {
-				current[name] = child
-				changed = true
-			}
-		}
-		return changed, nil
-	case []any:
-		changed := false
-		for index := range current {
-			childChanged, err := redactJSONValue(redactor, &current[index], fmt.Sprintf("%s[%d]", path, index))
-			if err != nil {
-				return false, err
-			}
-			changed = changed || childChanged
-		}
-		return changed, nil
-	case string:
-		redacted, err := redactContextScalar(redactor, current, path)
-		if err != nil {
-			return false, err
-		}
-		if redacted == current {
-			return false, nil
-		}
-		*value = redacted
-		return true, nil
-	default:
-		return false, nil
-	}
-}
-
-func redactContextScalar(redactor *security.Redactor, value, path string) (string, error) {
-	redacted := redactor.RedactString(value)
-	if secretLikeText(value, redactor) && !strings.Contains(redacted, "[REDACTED:") {
-		return "", fmt.Errorf("%w: JSON %s contains unredactable secret-like text", ErrPolicyViolation, path)
-	}
-	return redacted, nil
+	request.Prompt = prompt
+	request.Context = ContextBundle{Items: items}
+	return request, nil
 }
 
 // SanitizeSessionResponse applies the advisory output boundary before a
@@ -386,7 +326,8 @@ func redactContextScalar(redactor *security.Redactor, value, path string) (strin
 // independent of a request schema so local-control replay cannot return a
 // secret-shaped field even when an authority implementation is misconfigured.
 func SanitizeSessionResponse(response SessionResponse) (SessionResponse, error) {
-	output, err := sanitizeStructuredOutput(nil, response.Output)
+	safety := NewSafetyPipeline(newAdvisoryRedactor(), SafetyConfig{MaxInputBytes: MaxOutputBytes})
+	output, err := sanitizeStructuredOutput(safety, response.Output)
 	if err != nil {
 		return SessionResponse{}, err
 	}
@@ -405,15 +346,17 @@ func ValidateSessionResponse(request SessionRequest, response SessionResponse) e
 // produced the provider-bound prompt and context. Secret material is used only
 // to derive safe digests and is never returned or persisted.
 func ValidateSessionResponseWithRedactor(request SessionRequest, response SessionResponse, redactor *security.Redactor) error {
-	return validateSessionResponse(request, response, redactor)
+	return validateSessionResponse(request, response, NewSafetyPipeline(redactor, SafetyConfig{MaxInputBytes: MaxContextTotalBytes}))
 }
 
-func validateSessionResponse(request SessionRequest, response SessionResponse, redactor *security.Redactor) error {
-	if err := validateSessionRequest(request, redactor); err != nil {
+func validateSessionResponse(request SessionRequest, response SessionResponse, safety *SafetyPipeline) error {
+	prepared, err := prepareSessionRequest(request, safety)
+	if err != nil {
 		return err
 	}
-	if redactor == nil {
-		redactor = newAdvisoryRedactor()
+	request = prepared
+	if safety == nil {
+		safety = NewSafetyPipeline(newAdvisoryRedactor(), SafetyConfig{MaxInputBytes: MaxContextTotalBytes})
 	}
 	receipt := response.Receipt
 	if response.ContractVersion != ContractVersion || receipt.ContractVersion != ContractVersion {
@@ -445,14 +388,23 @@ func validateSessionResponse(request SessionRequest, response SessionResponse, r
 	if receipt.StartedAt.IsZero() || receipt.CompletedAt.IsZero() || receipt.CompletedAt.Before(receipt.StartedAt) {
 		return fmt.Errorf("%w: receipt timestamps are invalid", ErrReceiptIntegrity)
 	}
-
-	contextBundle, err := redactContext(redactor, request.Context)
+	receiptJSON, err := json.Marshal(receipt)
+	if err != nil {
+		return fmt.Errorf("%w: receipt cannot be encoded", ErrReceiptIntegrity)
+	}
+	if err := safety.InspectJSON(receiptJSON); err != nil {
+		return fmt.Errorf("%w: receipt safety validation failed", ErrReceiptIntegrity)
+	}
+	safeOutput, err := sanitizeStructuredOutput(safety, response.Output)
 	if err != nil {
 		return err
 	}
+	if !bytes.Equal(safeOutput, response.Output) {
+		return fmt.Errorf("%w: output is not sanitized", ErrReceiptIntegrity)
+	}
 	checks := map[string]string{
-		"context digest": digestJSON(contextBundle),
-		"prompt digest":  digestString(redactor.RedactString(request.Prompt)),
+		"context digest": digestJSON(request.Context),
+		"prompt digest":  digestString(request.Prompt),
 		"schema digest":  digestBytes(request.OutputSchema),
 		"policy digest":  digestPolicy(effectivePolicy(), request.WebResearch),
 		"output digest":  digestBytes(response.Output),
@@ -467,14 +419,6 @@ func validateSessionResponse(request SessionRequest, response SessionResponse, r
 			return fmt.Errorf("%w: %s mismatch", ErrReceiptIntegrity, name)
 		}
 	}
-
-	safeOutput, err := sanitizeStructuredOutput(redactor, response.Output)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(safeOutput, response.Output) {
-		return fmt.Errorf("%w: output is not sanitized", ErrReceiptIntegrity)
-	}
 	value, err := decodeJSON(response.Output)
 	if err != nil {
 		return fmt.Errorf("%w: output is malformed", ErrReceiptIntegrity)
@@ -485,64 +429,75 @@ func validateSessionResponse(request SessionRequest, response SessionResponse, r
 	return nil
 }
 
-func sanitizeStructuredOutput(redactor *security.Redactor, raw []byte) ([]byte, error) {
+func sanitizeStructuredOutput(safety *SafetyPipeline, raw []byte) ([]byte, error) {
 	if len(raw) == 0 || len(raw) > MaxOutputBytes {
 		return nil, ErrProviderOutputBounds
 	}
-	value, err := decodeJSON(raw)
+	if safety == nil {
+		safety = NewSafetyPipeline(newAdvisoryRedactor(), SafetyConfig{MaxInputBytes: MaxOutputBytes})
+	}
+	output, err := safety.SanitizeJSON(raw)
 	if err != nil {
-		return nil, fmt.Errorf("%w: malformed JSON", ErrStructuredOutput)
-	}
-	if redactor == nil {
-		redactor = newAdvisoryRedactor()
-	}
-	changed, err := redactJSONValue(redactor, &value, "$")
-	if err != nil {
-		return nil, err
-	}
-	output := raw
-	if changed {
-		output, err = json.Marshal(value)
-		if err != nil {
-			return nil, fmt.Errorf("%w: encode redacted JSON", ErrStructuredOutput)
+		switch {
+		case errors.Is(err, ErrUnsafeContent):
+			return nil, ErrPolicyViolation
+		case errors.Is(err, ErrSafetyBounds):
+			return nil, ErrProviderOutputBounds
+		case errors.Is(err, ErrMalformedPayload):
+			return nil, fmt.Errorf("%w: malformed JSON", ErrStructuredOutput)
+		default:
+			return nil, fmt.Errorf("%w: output safety validation failed", ErrStructuredOutput)
 		}
 	}
 	if len(output) == 0 || len(output) > MaxOutputBytes {
 		return nil, ErrProviderOutputBounds
 	}
-	redactedValue, err := decodeJSON(output)
-	if err != nil {
-		return nil, fmt.Errorf("%w: malformed redacted JSON", ErrStructuredOutput)
-	}
-	if err := rejectSecretKeys(redactedValue, "$"); err != nil {
-		return nil, err
-	}
 	return append([]byte(nil), output...), nil
+}
+
+func mapSafetyInputError(err error) error {
+	switch {
+	case errors.Is(err, ErrUnsafeContent):
+		return ErrPolicyViolation
+	case errors.Is(err, ErrMalformedPayload), errors.Is(err, ErrSafetyBounds):
+		return ErrInvalidRequest
+	default:
+		return err
+	}
+}
+
+func inspectProviderDiagnostics(safety *SafetyPipeline, stdout, stderr []byte) error {
+	for _, diagnostic := range [][]byte{stdout, stderr} {
+		if len(diagnostic) == 0 {
+			continue
+		}
+		if len(diagnostic) > MaxOutputBytes {
+			return ErrProviderOutputBounds
+		}
+		if _, err := safety.SanitizeText(string(diagnostic), 0); err != nil {
+			return ErrPolicyViolation
+		}
+	}
+	return nil
+}
+
+func safeProviderExecutionError(safety *SafetyPipeline, err error) error {
+	if err == nil {
+		return nil
+	}
+	for _, known := range []error{ErrInvalidRequest, ErrPolicyViolation, ErrStructuredOutput, ErrProviderIdentity, ErrProviderOutputBounds, ErrReceiptIntegrity, ErrProviderExecution} {
+		if errors.Is(err, known) {
+			return known
+		}
+	}
+	if safety != nil {
+		_, _ = safety.SanitizeText(err.Error(), 0)
+	}
+	return ErrProviderExecution
 }
 
 func newAdvisoryRedactor() *security.Redactor {
 	return security.NewRedactor(security.Config{MaxFieldRunes: MaxContextValueBytes, MaxPayloadRunes: MaxOutputBytes})
-}
-
-func sensitiveKey(key string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(key))
-	for _, word := range strings.FieldsFunc(normalized, func(r rune) bool {
-		return r == '_' || r == '-' || r == ' ' || r == '.'
-	}) {
-		if word == "secret" || word == "password" || word == "token" || word == "credential" || word == "private" || word == "authorization" || word == "cookie" || word == "apikey" || word == "key" {
-			return true
-		}
-	}
-	compact := strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return -1
-	}, normalized)
-	return strings.Contains(compact, "secret") || strings.Contains(compact, "password") ||
-		strings.Contains(compact, "token") || strings.Contains(compact, "credential") ||
-		strings.Contains(compact, "authorization") || strings.Contains(compact, "cookie") ||
-		strings.Contains(compact, "apikey") || compact == "privatekey"
 }
 
 func validateWebResearch(policy WebResearchPolicy) error {
@@ -583,8 +538,6 @@ func validID(value string) bool {
 	}
 	return true
 }
-
-var errDuplicateJSONKey = errors.New("advisory: duplicate JSON object key")
 
 func decodeJSON(data []byte) (any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))

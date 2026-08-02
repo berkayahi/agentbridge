@@ -32,7 +32,7 @@ func TestNativeProviderReceivesStrictSchemaAndPreservesReadOnlyBoundary(t *testi
 	wrapped := advisory.NativeProvider{Provider: native, ProviderID: "provider-a", ModelID: "model-a"}
 	service, err := advisory.New(advisory.Config{
 		Catalog: testCatalog{profiles: []advisory.ProviderProfile{
-			{ID: "provider-a", ModelID: "model-a", Available: true, Capability: wrapped.Capability()},
+			{ID: "provider-a", ModelID: "model-a", Available: true, Capabilities: wrapped.Capability()},
 		}},
 		Providers: map[string]advisory.Provider{"provider-a": wrapped},
 	})

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/localcontrol"
 	"github.com/berkayahi/agentbridge/internal/store/sqlite"
 )
@@ -43,8 +44,8 @@ func newProviderService(t *testing.T, catalog localcontrol.ProviderCatalog) *loc
 // configured default model, instead of hardcoding a provider list.
 func TestListProvidersReportsConfiguredRuntimes(t *testing.T) {
 	service := newProviderService(t, fakeProviderCatalog{providers: []localcontrol.ProviderInfo{
-		{ID: "claude", DefaultModel: "opus", Available: true},
-		{ID: "codex", DefaultModel: "gpt-5.6-terra", Available: false},
+		{ID: "claude", DefaultModel: "opus", Available: true, Capabilities: advisory.ReadOnlyCapability("claude")},
+		{ID: "codex", DefaultModel: "gpt-5.6-terra", Available: false, Capabilities: advisory.IneligibleCapability("codex", "runtime_unavailable", "runtime is unavailable")},
 	}})
 	response, err := service.ListProviders(context.Background())
 	if err != nil {
@@ -60,6 +61,9 @@ func TestListProvidersReportsConfiguredRuntimes(t *testing.T) {
 	// keeper needs to know why a runtime cannot be chosen.
 	if response.Providers[1].Available {
 		t.Fatalf("second provider = %#v, want Available false", response.Providers[1])
+	}
+	if response.ContractVersion != advisory.CapabilityContractVersion || !response.Providers[0].Capabilities.Valid() || !response.Providers[1].Capabilities.Valid() {
+		t.Fatalf("provider capability contract = %#v", response)
 	}
 }
 

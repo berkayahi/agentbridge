@@ -5,15 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"strings"
-
-	"github.com/berkayahi/agentbridge/internal/security"
 )
 
 // The boundary intentionally supports a small, strict JSON Schema subset. A
 // schema that asks for an unsupported validation feature is rejected rather
 // than silently validated less strictly than its caller expects.
-func validateSchema(data []byte, redactor *security.Redactor) error {
+func validateSchema(data []byte, safety *SafetyPipeline) error {
+	if safety == nil {
+		safety = NewSafetyPipeline(newAdvisoryRedactor(), SafetyConfig{MaxInputBytes: MaxSchemaBytes})
+	}
+	if err := safety.InspectJSON(data); err != nil {
+		switch {
+		case errors.Is(err, ErrUnsafeContent):
+			return ErrPolicyViolation
+		case errors.Is(err, ErrSafetyBounds), errors.Is(err, ErrMalformedPayload):
+			return fmt.Errorf("%w: malformed or bounded schema", ErrInvalidRequest)
+		default:
+			return fmt.Errorf("%w: malformed schema", ErrInvalidRequest)
+		}
+	}
 	schema, err := decodeJSON(data)
 	if err != nil {
 		if errors.Is(err, errDuplicateJSONKey) {
@@ -24,13 +34,6 @@ func validateSchema(data []byte, redactor *security.Redactor) error {
 	object, ok := schema.(map[string]any)
 	if !ok {
 		return fmt.Errorf("%w: schema must be an object", ErrInvalidRequest)
-	}
-	// JSON Schema carries caller-controlled JSON in more places than the
-	// structural property tree. Scan the decoded document before any provider
-	// can receive it so descriptions, enum/const values, and nested objects or
-	// arrays cannot hide sensitive keys or text at an arbitrary depth.
-	if err := rejectSecretValues(object, "$", redactor); err != nil {
-		return err
 	}
 	if err := validateSchemaDefinition(object, "$", 0); err != nil {
 		if errors.Is(err, ErrPolicyViolation) {
@@ -85,7 +88,7 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 			if !ok || name == "" {
 				return fmt.Errorf("schema %s contains an invalid required property", path)
 			}
-			if sensitiveKey(name) {
+			if safetyKey(name) {
 				return fmt.Errorf("%w: schema %s contains secret-shaped property %q", ErrPolicyViolation, path, name)
 			}
 			if _, exists := seen[name]; exists {
@@ -100,7 +103,7 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 			return fmt.Errorf("schema %s properties must be an object", path)
 		}
 		for name, child := range properties {
-			if sensitiveKey(name) {
+			if safetyKey(name) {
 				return fmt.Errorf("%w: schema %s contains secret-shaped property %q", ErrPolicyViolation, path, name)
 			}
 			childSchema, ok := child.(map[string]any)
@@ -142,77 +145,6 @@ func validateSchemaDefinition(schema map[string]any, path string, depth int) err
 		}
 	}
 	return nil
-}
-
-func rejectSecretKeys(value any, path string) error {
-	return inspectJSON(value, path, nil, false)
-}
-
-func rejectSecretValues(value any, path string, redactor *security.Redactor) error {
-	return inspectJSON(value, path, redactor, true)
-}
-
-func inspectJSON(value any, path string, redactor *security.Redactor, rejectValues bool) error {
-	switch value := value.(type) {
-	case map[string]any:
-		for name, child := range value {
-			if sensitiveKey(name) {
-				return fmt.Errorf("%w: JSON %s contains secret-shaped key %q", ErrPolicyViolation, path, name)
-			}
-			if err := inspectJSON(child, path+"."+name, redactor, rejectValues); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for index, child := range value {
-			if err := inspectJSON(child, fmt.Sprintf("%s[%d]", path, index), redactor, rejectValues); err != nil {
-				return err
-			}
-		}
-	case string:
-		if rejectValues && secretLikeText(value, redactor) {
-			return fmt.Errorf("%w: JSON %s contains secret-like text", ErrPolicyViolation, path)
-		}
-	}
-	return nil
-}
-
-func secretLikeText(value string, redactor *security.Redactor) bool {
-	if redactor == nil {
-		redactor = newAdvisoryRedactor()
-	}
-	redacted := redactor.RedactString(value)
-	if redacted != value && strings.Contains(redacted, "[REDACTED:") {
-		return true
-	}
-	if secretLikeCredentialShape(value) {
-		return true
-	}
-	compact := strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' {
-			return r
-		}
-		return -1
-	}, strings.ToLower(value))
-	for _, marker := range []string{
-		"secret", "password", "credential", "authorization", "cookie",
-		"privatekey", "apikey", "accesskey", "bearer", "token",
-	} {
-		if strings.Contains(compact, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func secretLikeCredentialShape(value string) bool {
-	lower := strings.ToLower(value)
-	for _, prefix := range []string{"sk-", "rk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "oauth-", "akia", "AIza"} {
-		if index := strings.Index(lower, strings.ToLower(prefix)); index >= 0 && len(value)-index >= len(prefix)+8 {
-			return true
-		}
-	}
-	return strings.Contains(lower, "-----begin ") && strings.Contains(lower, "private key-----")
 }
 
 func validSchemaType(value any) bool {

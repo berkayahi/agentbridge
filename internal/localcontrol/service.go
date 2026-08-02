@@ -406,7 +406,12 @@ func (s *Service) ListProviders(ctx context.Context) (ProvidersResponse, error) 
 	if providers == nil {
 		providers = []ProviderInfo{}
 	}
-	return ProvidersResponse{Providers: providers}, nil
+	for _, provider := range providers {
+		if provider.Capabilities.ProviderID != provider.ID || !provider.Capabilities.Valid() {
+			return ProvidersResponse{}, ErrUnsupportedCapabilityContract
+		}
+	}
+	return ProvidersResponse{ContractVersion: advisory.CapabilityContractVersion, Providers: providers}, nil
 }
 
 func (s *Service) resolveRepositoryProfile(ctx context.Context, remote string) (RepositoryProfile, error) {

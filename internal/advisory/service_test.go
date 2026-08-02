@@ -25,6 +25,7 @@ func (c testCatalog) ProviderProfiles(context.Context) ([]advisory.ProviderProfi
 type testProvider struct {
 	capability advisory.ProviderCapability
 	result     advisory.ExecutionResult
+	err        error
 	request    advisory.ExecutionRequest
 	calls      int
 }
@@ -34,12 +35,12 @@ func (p *testProvider) Capability() advisory.ProviderCapability { return p.capab
 func (p *testProvider) Execute(_ context.Context, request advisory.ExecutionRequest) (advisory.ExecutionResult, error) {
 	p.calls++
 	p.request = request
-	return p.result, nil
+	return p.result, p.err
 }
 
 func newTestProvider(output string) *testProvider {
 	return &testProvider{
-		capability: advisory.ProviderCapability{ID: "provider-a", AdvisorySessions: true, ReadOnly: true, StructuredOutput: true},
+		capability: advisory.ReadOnlyCapability("provider-a"),
 		result:     advisory.ExecutionResult{ProviderID: "provider-a", ModelID: "model-a", Output: []byte(output)},
 	}
 }
@@ -52,7 +53,7 @@ func newServiceWithRedactor(t *testing.T, provider *testProvider, redactor *secu
 	t.Helper()
 	service, err := advisory.New(advisory.Config{
 		Catalog: testCatalog{profiles: []advisory.ProviderProfile{{
-			ID: "provider-a", ModelID: "model-a", Available: true, Capability: provider.Capability(),
+			ID: "provider-a", ModelID: "model-a", Available: true, Capabilities: provider.Capability(),
 		}}},
 		Providers: map[string]advisory.Provider{"provider-a": provider},
 		Clock:     func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
@@ -82,7 +83,7 @@ func TestExecuteAdvisorySessionEnforcesReadOnlyPolicyAndReceiptProvenance(t *tes
 	}
 	if provider.calls != 1 || provider.request.Policy.ReadOnly != true || provider.request.Policy.RepositoryWrites || provider.request.Policy.BranchMutation ||
 		provider.request.Policy.WorktreeMutation || provider.request.Policy.GitIntegration || provider.request.Policy.SecretValueAccess ||
-		provider.request.Policy.DecisionMutation || provider.request.Policy.HumanApproval || provider.request.Policy.WebResearchAllowed {
+		provider.request.Policy.ExternalStateMutation || provider.request.Policy.HumanApproval || provider.request.Policy.WebResearchAllowed {
 		t.Fatalf("provider request policy = %#v", provider.request.Policy)
 	}
 	if response.Receipt.ProviderID != "provider-a" || response.Receipt.ModelID != "model-a" || response.Receipt.SchemaVersion != "schema-1" ||
@@ -130,7 +131,7 @@ func TestExecuteAdvisorySessionRejectsSecretNamedContextAndIneligibleProvider(t 
 	if _, err := service.ExecuteAdvisorySession(context.Background(), request); !errors.Is(err, advisory.ErrPolicyViolation) {
 		t.Fatalf("secret context err = %v", err)
 	}
-	provider.capability.RepositoryWrites = true
+	provider.capability.EffectivePolicy.RepositoryWrite = true
 	if _, err := service.ExecuteAdvisorySession(context.Background(), testRequest()); !errors.Is(err, advisory.ErrNotConfigured) {
 		t.Fatalf("ineligible provider err = %v", err)
 	}
@@ -300,7 +301,7 @@ func TestExecuteAdvisorySessionUsesConfiguredRedactorForSchemaValues(t *testing.
 
 func TestExecuteAdvisorySessionFailsClosedWithoutWebAdapter(t *testing.T) {
 	provider := newTestProvider(`{"answer":"researched"}`)
-	provider.capability.WebResearch = true
+	provider.capability.WebResearch = advisory.WebResearchCapability{Available: true, Enforced: true, MaxSources: 4, MaxBytes: 1024}
 	service := newService(t, provider)
 	request := testRequest()
 	request.WebResearch = advisory.WebResearchPolicy{Enabled: true, MaxSources: 2, MaxBytes: 1024}

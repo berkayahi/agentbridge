@@ -73,7 +73,7 @@ func TestComposeProvidersFixtureServesProviderCatalogWithoutTaskRuntime(t *testi
 	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Providers) != 1 || result.Providers[0].ID != "codex" || result.Providers[0].Available {
+	if result.ContractVersion != advisory.CapabilityContractVersion || len(result.Providers) != 1 || result.Providers[0].ID != "codex" || result.Providers[0].Available || !result.Providers[0].Capabilities.Valid() || !result.Providers[0].Capabilities.AdvisoryEligible(false) || result.Providers[0].Capabilities.AdvisoryEligible(true) {
 		t.Fatalf("fixture provider catalog = %#v", result.Providers)
 	}
 	session, err := service.ExecuteAdvisorySession(context.Background(), advisory.SessionRequest{

@@ -25,18 +25,19 @@ import (
 const APIVersion = 2
 
 var (
-	ErrInvalidRequest               = errors.New("localcontrol: invalid request")
-	ErrUnknownProvider              = errors.New("localcontrol: unknown provider")
-	ErrStaleRevision                = errors.New("localcontrol: stale revision")
-	ErrIdempotencyConflict          = errors.New("localcontrol: idempotency key conflict")
-	ErrNotConfigured                = errors.New("localcontrol: operation is not configured")
-	ErrTaskOwnedByAnotherController = errors.New("localcontrol: task is owned by another controller")
-	ErrApprovalNotPending           = errors.New("localcontrol: approval is not pending")
-	ErrVerificationRequired         = errors.New("localcontrol: verification is required")
-	ErrCommitRequired               = errors.New("localcontrol: commit is required")
-	ErrRepositoryNotConfigured      = errors.New("localcontrol: repository remote is not configured")
-	ErrRepositoryAmbiguous          = errors.New("localcontrol: repository remote maps to multiple configured profiles")
-	ErrDeliveryNotEnabled           = errors.New("localcontrol: repository delivery is not enabled")
+	ErrInvalidRequest                = errors.New("localcontrol: invalid request")
+	ErrUnknownProvider               = errors.New("localcontrol: unknown provider")
+	ErrStaleRevision                 = errors.New("localcontrol: stale revision")
+	ErrIdempotencyConflict           = errors.New("localcontrol: idempotency key conflict")
+	ErrNotConfigured                 = errors.New("localcontrol: operation is not configured")
+	ErrUnsupportedCapabilityContract = errors.New("localcontrol: unsupported provider capability contract")
+	ErrTaskOwnedByAnotherController  = errors.New("localcontrol: task is owned by another controller")
+	ErrApprovalNotPending            = errors.New("localcontrol: approval is not pending")
+	ErrVerificationRequired          = errors.New("localcontrol: verification is required")
+	ErrCommitRequired                = errors.New("localcontrol: commit is required")
+	ErrRepositoryNotConfigured       = errors.New("localcontrol: repository remote is not configured")
+	ErrRepositoryAmbiguous           = errors.New("localcontrol: repository remote maps to multiple configured profiles")
+	ErrDeliveryNotEnabled            = errors.New("localcontrol: repository delivery is not enabled")
 )
 
 // RepositoryProfile is a configured, executable repository binding. The
@@ -99,11 +100,12 @@ type ProviderInfo struct {
 	DefaultApprovalMode string `json:"default_approval_mode,omitempty"`
 	// Models is retained as the selectable-value-only compatibility view.
 	// ModelAliases identifies values whose provider resolves them dynamically.
-	Models        []string               `json:"models,omitempty"`
-	ModelAliases  []string               `json:"model_aliases,omitempty"`
-	ModelProfiles []ProviderModel        `json:"model_profiles,omitempty"`
-	ApprovalModes []ProviderApprovalMode `json:"approval_modes,omitempty"`
-	Available     bool                   `json:"available"`
+	Models        []string                    `json:"models,omitempty"`
+	ModelAliases  []string                    `json:"model_aliases,omitempty"`
+	ModelProfiles []ProviderModel             `json:"model_profiles,omitempty"`
+	ApprovalModes []ProviderApprovalMode      `json:"approval_modes,omitempty"`
+	Available     bool                        `json:"available"`
+	Capabilities  advisory.ProviderCapability `json:"capabilities"`
 }
 
 type ProviderModel struct {
@@ -476,7 +478,8 @@ type RepositoriesResponse struct {
 	Repositories []RepositoryProfile `json:"repositories"`
 }
 type ProvidersResponse struct {
-	Providers []ProviderInfo `json:"providers"`
+	ContractVersion string         `json:"contract_version"`
+	Providers       []ProviderInfo `json:"providers"`
 }
 type ProjectsResponse struct {
 	Projects []Project `json:"projects"`

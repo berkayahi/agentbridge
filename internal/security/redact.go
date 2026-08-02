@@ -64,6 +64,39 @@ func (r *Redactor) RedactString(value string) string {
 	return truncateRunes(r.redact(value), r.maxPayloadRunes)
 }
 
+// RedactComplete applies credential redaction without applying a display or
+// storage bound. Safety-sensitive callers must inspect the complete bounded
+// payload before truncating it; RedactString is intentionally not suitable for
+// that ordering guarantee.
+func (r *Redactor) RedactComplete(value string) string {
+	return r.redact(value)
+}
+
+// RedactKnown applies only the high-confidence credential rules and configured
+// literal values. It deliberately does not treat every KEY=value line as a
+// secret: ordinary structured data may contain benign assignments. The return
+// value is safe to publish; the configured literal values never leave this
+// method except as a replacement marker.
+func (r *Redactor) RedactKnown(value string) string {
+	value = privateKeyPattern.ReplaceAllString(value, "[REDACTED:private-key]")
+	value = authorizationPattern.ReplaceAllString(value, "${1}[REDACTED:authorization]")
+	value = setCookiePattern.ReplaceAllString(value, "${1}[REDACTED:set-cookie]")
+	value = cookiePattern.ReplaceAllString(value, "${1}[REDACTED:cookie]")
+	value = telegramTokenPattern.ReplaceAllString(value, "[REDACTED:telegram-token]")
+	value = githubClassicPattern.ReplaceAllString(value, "[REDACTED:github-token]")
+	value = githubFinePattern.ReplaceAllString(value, "[REDACTED:github-token]")
+	for _, secret := range r.secrets {
+		value = strings.ReplaceAll(value, secret, "[REDACTED:configured]")
+	}
+	return value
+}
+
+// ContainsKnown reports whether a high-confidence credential or configured
+// literal was present without returning the value that matched.
+func (r *Redactor) ContainsKnown(value string) bool {
+	return r.RedactKnown(value) != value
+}
+
 // RedactBytes redacts JSON-like payloads without mutating input. Valid JSON is
 // kept valid whenever the configured total bound can contain a JSON marker.
 func (r *Redactor) RedactBytes(payload []byte) []byte {

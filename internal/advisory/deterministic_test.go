@@ -13,7 +13,7 @@ func TestDeterministicProviderBuildsSchemaCompatibleJSON(t *testing.T) {
 	provider := advisory.DeterministicProvider{ProviderID: "fixture", ModelID: "deterministic-v1"}
 	service, err := advisory.New(advisory.Config{
 		Catalog: testCatalog{profiles: []advisory.ProviderProfile{
-			{ID: "fixture", ModelID: "deterministic-v1", Available: true, Capability: provider.Capability()},
+			{ID: "fixture", ModelID: "deterministic-v1", Available: true, Capabilities: provider.Capability()},
 		}},
 		Providers: map[string]advisory.Provider{"fixture": provider},
 	})
@@ -47,7 +47,7 @@ func TestDeterministicProviderRejectsProseFixtureOutput(t *testing.T) {
 	}
 	service, err := advisory.New(advisory.Config{
 		Catalog: testCatalog{profiles: []advisory.ProviderProfile{
-			{ID: "fixture", ModelID: "deterministic-v1", Available: true, Capability: provider.Capability()},
+			{ID: "fixture", ModelID: "deterministic-v1", Available: true, Capabilities: provider.Capability()},
 		}},
 		Providers: map[string]advisory.Provider{"fixture": provider},
 	})

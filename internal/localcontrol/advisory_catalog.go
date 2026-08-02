@@ -44,8 +44,8 @@ func (c ConfiguredAdvisoryCatalog) ProviderProfiles(ctx context.Context) ([]advi
 		profiles = append(profiles, advisory.ProviderProfile{
 			ID: value.ID, ModelID: modelID, ModelIDs: modelIDs,
 			ModelAliases: append([]string(nil), value.ModelAliases...),
-			Available:    advisory.CapabilityEligible(capability, false) && (value.Available || capability.AdvisorySessions),
-			Capability:   capability,
+			Available:    advisory.CapabilityEligible(capability, false) && (value.Available || capability.AdvisoryExecution),
+			Capabilities: capability,
 		})
 	}
 	return profiles, nil

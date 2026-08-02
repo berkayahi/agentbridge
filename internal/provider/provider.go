@@ -216,6 +216,11 @@ type AnalysisResult struct {
 	ProviderID workmodel.Provider
 	Model      string
 	Output     []byte
+	// Diagnostics are side-channel bytes from the provider adapter. Advisory
+	// callers inspect them through their own safety pipeline and never persist
+	// or return them as part of a session response.
+	Stdout []byte
+	Stderr []byte
 }
 
 // AnalysisIsolationAttestation is a host-issued capability boundary. Merely

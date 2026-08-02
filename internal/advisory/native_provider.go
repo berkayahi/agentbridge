@@ -23,12 +23,9 @@ type NativeProvider struct {
 
 func (p NativeProvider) Capability() ProviderCapability {
 	if p.Provider == nil || !p.Provider.AnalysisIsolationAttestation().Valid() {
-		return ProviderCapability{ID: p.ProviderID}
+		return IneligibleCapability(p.ProviderID, "isolation_unattested", "provider lacks the required read-only isolation attestation")
 	}
-	return ProviderCapability{
-		ID: p.ProviderID, AdvisorySessions: true,
-		ReadOnly: true, StructuredOutput: true,
-	}
+	return ReadOnlyCapability(p.ProviderID)
 }
 
 func (p NativeProvider) ConfiguredModel() string { return p.ModelID }
@@ -40,7 +37,8 @@ func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (
 	if request.Policy != effectivePolicy() || request.WebResearch.Enabled {
 		return ExecutionResult{}, ErrPolicyViolation
 	}
-	if err := validateSchema(request.OutputSchema, nil); err != nil {
+	safety := NewSafetyPipeline(nil, SafetyConfig{MaxInputBytes: MaxContextTotalBytes})
+	if err := validateSchema(request.OutputSchema, safety); err != nil {
 		return ExecutionResult{}, err
 	}
 	workspace, err := os.MkdirTemp("", "agentbridge-advisory-")
@@ -85,9 +83,9 @@ func (p NativeProvider) Execute(ctx context.Context, request ExecutionRequest) (
 	if modelID == "" {
 		modelID = p.ModelID
 	}
-	output, err := sanitizeStructuredOutput(nil, result.Output)
+	output, err := sanitizeStructuredOutput(safety, result.Output)
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	return ExecutionResult{ProviderID: providerID, ModelID: modelID, Output: output}, nil
+	return ExecutionResult{ProviderID: providerID, ModelID: modelID, Output: output, Stdout: append([]byte(nil), result.Stdout...), Stderr: append([]byte(nil), result.Stderr...)}, nil
 }

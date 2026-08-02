@@ -19,10 +19,7 @@ type DeterministicProvider struct {
 }
 
 func (p DeterministicProvider) Capability() ProviderCapability {
-	return ProviderCapability{
-		ID: p.ProviderID, AdvisorySessions: true, ReadOnly: true, StructuredOutput: true,
-		WebResearch: false,
-	}
+	return ReadOnlyCapability(p.ProviderID)
 }
 
 func (p DeterministicProvider) ConfiguredModel() string { return p.ModelID }
@@ -34,7 +31,8 @@ func (p DeterministicProvider) Execute(ctx context.Context, request ExecutionReq
 	if request.Policy != effectivePolicy() || request.WebResearch.Enabled {
 		return ExecutionResult{}, ErrPolicyViolation
 	}
-	if err := validateSchema(request.OutputSchema, nil); err != nil {
+	safety := NewSafetyPipeline(nil, SafetyConfig{MaxInputBytes: MaxContextTotalBytes})
+	if err := validateSchema(request.OutputSchema, safety); err != nil {
 		return ExecutionResult{}, err
 	}
 	output := append([]byte(nil), p.Output...)
@@ -48,12 +46,14 @@ func (p DeterministicProvider) Execute(ctx context.Context, request ExecutionReq
 			return ExecutionResult{}, fmt.Errorf("marshal deterministic output: %w", err)
 		}
 	}
-	value, err := decodeJSON(output)
-	if err != nil {
+	if _, err := safety.RejectJSON(output); err != nil {
+		if errors.Is(err, ErrUnsafeContent) {
+			return ExecutionResult{}, ErrPolicyViolation
+		}
+		if errors.Is(err, ErrSafetyBounds) {
+			return ExecutionResult{}, ErrProviderOutputBounds
+		}
 		return ExecutionResult{}, ErrStructuredOutput
-	}
-	if err := rejectSecretKeys(value, "$"); err != nil {
-		return ExecutionResult{}, err
 	}
 	return ExecutionResult{ProviderID: p.ProviderID, ModelID: p.ModelID, Output: output}, nil
 }

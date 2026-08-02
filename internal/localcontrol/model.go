@@ -11,6 +11,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/executioncontract"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/runtime"
@@ -642,6 +643,10 @@ type RepositoryIntegrator interface {
 	Integrate(context.Context, IntegrateRepositoryRequest) (IntegrationReceipt, error)
 }
 
+// ExecutionStore is the product-neutral persistence port for isolated
+// execution requests, structured results, and resource leases.
+type ExecutionStore = executioncontract.Store
+
 // DeviceRuntime is the typed execution boundary for a paired device. A
 // remote implementation may use the device protocol or another authenticated
 // transport, but it receives TaskView and receipts rather than paths or raw
@@ -675,6 +680,7 @@ type Config struct {
 	Verifier            Verifier
 	Committer           Committer
 	Integrator          RepositoryIntegrator
+	ExecutionStore      executioncontract.Store
 	RemoteDevices       map[string]DeviceRuntime
 	RemoteDeviceFactory RemoteDeviceFactory
 	Clock               func() time.Time

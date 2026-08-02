@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
+	"github.com/berkayahi/agentbridge/internal/executioncontract"
 	"github.com/berkayahi/agentbridge/internal/repositorysnapshot"
 	"github.com/berkayahi/agentbridge/internal/store"
 	"github.com/berkayahi/agentbridge/internal/workmodel"
@@ -62,6 +63,14 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
 	mux.HandleFunc("POST /v1/repository-understanding", a.createRepositoryUnderstanding)
 	mux.HandleFunc("POST /v1/advisory-sessions", a.createAdvisorySession)
+	mux.HandleFunc("POST /v1/executions", a.createExecution)
+	mux.HandleFunc("POST /v1/executions/recover", a.recoverExecutions)
+	mux.HandleFunc("GET /v1/executions/{id}", a.getExecution)
+	mux.HandleFunc("POST /v1/executions/{id}/result", a.saveExecutionResult)
+	mux.HandleFunc("POST /v1/resource-leases/acquire", a.acquireResourceLease)
+	mux.HandleFunc("GET /v1/resource-leases/expired", a.expiredResourceLeases)
+	mux.HandleFunc("POST /v1/resource-leases/{id}/heartbeat", a.heartbeatResourceLease)
+	mux.HandleFunc("POST /v1/resource-leases/{id}/release", a.releaseResourceLease)
 	mux.HandleFunc("POST /v1/repositories", a.registerRepository)
 	mux.HandleFunc("POST /v1/repositories/configure", a.configureRepository)
 	mux.HandleFunc("POST /v1/repositories/{id}/integrate", a.integrateRepository)
@@ -532,6 +541,18 @@ func writeResult(w http.ResponseWriter, successStatus int, value any, err error)
 func writeServiceError(w http.ResponseWriter, err error) {
 	status, code := http.StatusInternalServerError, "request_failed"
 	switch {
+	case errors.Is(err, executioncontract.ErrInvalidRequest), errors.Is(err, executioncontract.ErrInvalidResult), errors.Is(err, executioncontract.ErrInvalidLease):
+		status, code = http.StatusBadRequest, "invalid_execution_request"
+	case errors.Is(err, executioncontract.ErrLeaseHeld):
+		status, code = http.StatusConflict, "resource_lease_held"
+	case errors.Is(err, executioncontract.ErrIdempotencyConflict):
+		status, code = http.StatusConflict, "idempotency_conflict"
+	case errors.Is(err, executioncontract.ErrInvalidState):
+		status, code = http.StatusConflict, "invalid_execution_state"
+	case errors.Is(err, executioncontract.ErrNotFound):
+		status, code = http.StatusNotFound, "not_found"
+	case errors.Is(err, executioncontract.ErrConflict):
+		status, code = http.StatusConflict, "conflict"
 	case errors.Is(err, advisory.ErrInvalidRequest):
 		status, code = http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, advisory.ErrPolicyViolation):

@@ -17,6 +17,7 @@ import (
 
 	"github.com/berkayahi/agentbridge/internal/advisory"
 	"github.com/berkayahi/agentbridge/internal/deviceidentity"
+	"github.com/berkayahi/agentbridge/internal/executioncontract"
 	"github.com/berkayahi/agentbridge/internal/kernel"
 	"github.com/berkayahi/agentbridge/internal/repository"
 	"github.com/berkayahi/agentbridge/internal/security"
@@ -45,6 +46,7 @@ type Service struct {
 	snapshots     RepositorySnapshotAuthority
 	understanding RepositoryUnderstandingAuthority
 	advisory      AdvisorySessionAuthority
+	executions    executioncontract.Store
 	redactor      *security.Redactor
 	clock         func() time.Time
 	newID         func(string) string
@@ -175,14 +177,24 @@ func New(config Config) (*Service, error) {
 	if config.NewID == nil {
 		config.NewID = defaultID
 	}
-	return &Service{
+	service := &Service{
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
 		integrator: config.Integrator, snapshots: config.RepositorySnapshots, understanding: config.RepositoryUnderstanding,
 		advisory: config.Advisory, redactor: config.Redactor,
 		clock: config.Clock, newID: config.NewID,
-	}, nil
+		executions: config.ExecutionStore,
+	}
+	if service.executions == nil {
+		service.executions, _ = config.Store.(executioncontract.Store)
+	}
+	if service.executions != nil {
+		if _, err := service.RecoverExecutions(context.Background()); err != nil {
+			return nil, err
+		}
+	}
+	return service, nil
 }
 
 // ExecuteAdvisorySession authenticates and durably replays a generic advisory

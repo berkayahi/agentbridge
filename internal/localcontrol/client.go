@@ -142,6 +142,12 @@ func (c *Client) CreateRepositorySnapshot(ctx context.Context, request Repositor
 	return response, err
 }
 
+func (c *Client) ReadRepositoryKnowledge(ctx context.Context, request RepositoryKnowledgeRequest) (RepositoryKnowledgeResponse, error) {
+	var response RepositoryKnowledgeResponse
+	err := c.do(ctx, http.MethodPost, "/v1/repository-knowledge", request, &response)
+	return response, err
+}
+
 func (c *Client) UnderstandRepository(ctx context.Context, request RepositoryUnderstandingRequest) (RepositoryUnderstandingResponse, error) {
 	var response RepositoryUnderstandingResponse
 	err := c.do(ctx, http.MethodPost, "/v1/repository-understanding", request, &response)

@@ -18,3 +18,11 @@ func (s *Service) CreateRepositorySnapshot(ctx context.Context, request Reposito
 }
 
 var _ RepositorySnapshotAuthority = (*repositorysnapshot.Service)(nil)
+var _ RepositoryKnowledgeAuthority = (*repositorysnapshot.Service)(nil)
+
+func (s *Service) ReadRepositoryKnowledge(ctx context.Context, request RepositoryKnowledgeRequest) (RepositoryKnowledgeResponse, error) {
+	if s == nil || s.knowledge == nil {
+		return RepositoryKnowledgeResponse{}, ErrNotConfigured
+	}
+	return s.knowledge.ReadKnowledge(ctx, request)
+}

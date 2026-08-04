@@ -31,6 +31,7 @@ type Config struct {
 	Store     Store
 	Catalog   Catalog
 	Inspector Inspector
+	Knowledge KnowledgeReader
 	Clock     func() time.Time
 	NewID     func() string
 }
@@ -40,6 +41,7 @@ type Service struct {
 	store     Store
 	catalog   Catalog
 	inspector Inspector
+	knowledge KnowledgeReader
 	clock     func() time.Time
 	newID     func() string
 }
@@ -55,9 +57,30 @@ func New(config Config) (*Service, error) {
 		config.NewID = newOperationID
 	}
 	return &Service{
-		store: config.Store, catalog: config.Catalog, inspector: config.Inspector,
+		store: config.Store, catalog: config.Catalog, inspector: config.Inspector, knowledge: config.Knowledge,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
+}
+
+// ReadKnowledge returns the typed Kovan knowledge notes committed at one exact
+// Git identity. Repository lookup remains private to AgentBridge and the
+// caller cannot widen the fixed .kovan/knowledge subtree.
+func (s *Service) ReadKnowledge(ctx context.Context, request KnowledgeRequest) (KnowledgePacket, error) {
+	if s == nil || s.catalog == nil || s.knowledge == nil {
+		return KnowledgePacket{}, ErrNotConfigured
+	}
+	normalized, err := normalizeKnowledgeRequest(request)
+	if err != nil {
+		return KnowledgePacket{}, err
+	}
+	profile, err := s.catalog.ResolveRepositoryProfile(ctx, normalized.RepositoryProfileID)
+	if err != nil {
+		return KnowledgePacket{}, err
+	}
+	if profile.ProfileID != normalized.RepositoryProfileID || !filepath.IsAbs(profile.CheckoutPath) {
+		return KnowledgePacket{}, ErrNotConfigured
+	}
+	return s.knowledge.ReadKnowledge(ctx, profile, normalized)
 }
 
 func (s *Service) Snapshot(ctx context.Context, request Request) (Response, error) {

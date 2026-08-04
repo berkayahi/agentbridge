@@ -518,7 +518,7 @@ func buildDaemon(ctx context.Context, cfg config.Config, paths runtimePaths, cre
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
+		RepositorySnapshots: repositorySnapshots, RepositoryKnowledge: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -782,7 +782,7 @@ func buildDesktopDaemon(ctx context.Context, cfg config.Config, paths runtimePat
 	localService, err := localcontrol.New(localcontrol.Config{
 		Store: data, Identity: controllerIdentity, Runtimes: runtimes, Controller: bridgeController, Executor: localExecutor,
 		Repositories: repositoryCatalog{workspace: workspace}, Providers: providerCatalog{providers: cfg.Providers, live: providers, runtimes: runtimes},
-		RepositorySnapshots: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
+		RepositorySnapshots: repositorySnapshots, RepositoryKnowledge: repositorySnapshots, RepositoryUnderstanding: repositoryUnderstanding, Advisory: advisoryAuthority, Redactor: redactor,
 		Verifier: localVerifier{operations: localOperations}, Committer: localCommitter{operations: localOperations},
 		Integrator:          localRepositoryIntegrator{operations: localOperations},
 		RemoteDeviceFactory: newLocalRemoteDeviceFactory(data, controllerIdentity),
@@ -1255,6 +1255,12 @@ func composeRepositorySnapshots(data *sqlite.RuntimeStore, workspace *workspaceA
 	return repositorysnapshot.New(repositorysnapshot.Config{
 		Store: data, Catalog: catalog,
 		Inspector: repositorysnapshot.GitInspector{Git: bridgegit.Runner{
+			MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput,
+			Redactor: security.NewRedactor(security.Config{
+				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,
+			}),
+		}},
+		Knowledge: repositorysnapshot.GitKnowledgeReader{Git: bridgegit.Runner{
 			MaxOutputBytes: repositorysnapshot.MaxGitCommandOutput,
 			Redactor: security.NewRedactor(security.Config{
 				MaxFieldRunes: repositorysnapshot.MaxGitCommandOutput, MaxPayloadRunes: repositorysnapshot.MaxGitCommandOutput,

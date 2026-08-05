@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -112,6 +113,10 @@ func TestLocalRuntimeExecutorMapsLocalAuthorityToProviderIdentity(t *testing.T) 
 }
 
 func TestProviderCatalogUsesLivePerModelCapabilities(t *testing.T) {
+	runtimes, err := bridgeRuntime.NewRegistry(&catalogRuntime{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	live := executionCatalogProvider{catalog: provider.ExecutionCatalog{
 		DefaultModel: "gpt-5.6-sol",
 		Models: []provider.Model{
@@ -134,7 +139,8 @@ func TestProviderCatalogUsesLivePerModelCapabilities(t *testing.T) {
 		providers: map[string]config.ProviderConfig{
 			"codex": {Executable: os.Args[0], Model: "gpt-5.6-sol", Models: []string{"stale-model"}},
 		},
-		live: map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: live},
+		live:     map[workmodel.Provider]provider.Provider{workmodel.CodexSubscription: live},
+		runtimes: runtimes,
 	}
 	profiles, err := catalog.ProviderProfiles(context.Background())
 	if err != nil {
@@ -151,6 +157,24 @@ func TestProviderCatalogUsesLivePerModelCapabilities(t *testing.T) {
 			t.Fatalf("Luna advertised Ultra: %#v", profiles[0].ModelProfiles[1])
 		}
 	}
+	gotModes := make([]string, 0, len(profiles[0].ApprovalModes))
+	for _, mode := range profiles[0].ApprovalModes {
+		gotModes = append(gotModes, mode.ID)
+	}
+	wantModes := []string{"auto_within_policy", "ask_every_time", "provider_default"}
+	if !slices.Equal(gotModes, wantModes) {
+		t.Fatalf("Codex approval modes = %v, want %v", gotModes, wantModes)
+	}
+}
+
+type catalogRuntime struct{ approvalCaptureRuntime }
+
+func (*catalogRuntime) Capabilities(context.Context) (bridgeRuntime.Capabilities, error) {
+	return bridgeRuntime.Capabilities{NativeApprovalModes: []bridgeRuntime.ApprovalMode{
+		bridgeRuntime.ApprovalAutoWithinPolicy,
+		bridgeRuntime.ApprovalAskEveryTime,
+		bridgeRuntime.ApprovalProviderDefault,
+	}}, nil
 }
 
 type executionCatalogProvider struct {

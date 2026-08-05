@@ -621,13 +621,13 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 					detail := localcontrol.ProviderApprovalMode{ID: string(mode)}
 					switch mode {
 					case bridgeRuntime.ApprovalAskEveryTime:
-						detail.DisplayName = "Ask me"
+						detail.DisplayName = "Ask for approval"
 						detail.Description = "Pause when the provider needs authority beyond the current sandbox."
 					case bridgeRuntime.ApprovalAutoWithinPolicy:
-						detail.DisplayName = "Auto-review"
+						detail.DisplayName = "Approve for me"
 						detail.Description = "Let the provider review routine requests inside the current sandbox policy."
 					case bridgeRuntime.ApprovalProviderDefault:
-						detail.DisplayName = "Provider default"
+						detail.DisplayName = "Use provider settings"
 						detail.Description = "Use the provider account's own approval configuration."
 					}
 					profile.ApprovalModes = append(profile.ApprovalModes, detail)
@@ -643,12 +643,21 @@ func (c providerCatalog) ProviderProfiles(ctx context.Context) ([]localcontrol.P
 			profile.Models = profile.Models[:0]
 			profile.ModelAliases = append([]string(nil), catalog.ModelAliases...)
 			profile.ModelProfiles = make([]localcontrol.ProviderModel, 0, len(catalog.Models))
-			profile.DefaultApprovalMode = catalog.DefaultApprovalMode
-			profile.ApprovalModes = make([]localcontrol.ProviderApprovalMode, 0, len(catalog.ApprovalModes))
-			for _, mode := range catalog.ApprovalModes {
-				profile.ApprovalModes = append(profile.ApprovalModes, localcontrol.ProviderApprovalMode{
-					ID: mode.ID, Description: mode.Description,
-				})
+			if catalog.DefaultApprovalMode != "" {
+				profile.DefaultApprovalMode = catalog.DefaultApprovalMode
+			}
+			// Some provider protocols report model and reasoning metadata but do
+			// not repeat the runtime's approval capabilities in that catalog.
+			// Preserve the independently attested runtime modes in that case.
+			// A non-empty provider catalog remains authoritative for runtimes such
+			// as Claude whose approval support varies by model.
+			if len(catalog.ApprovalModes) > 0 {
+				profile.ApprovalModes = make([]localcontrol.ProviderApprovalMode, 0, len(catalog.ApprovalModes))
+				for _, mode := range catalog.ApprovalModes {
+					profile.ApprovalModes = append(profile.ApprovalModes, localcontrol.ProviderApprovalMode{
+						ID: mode.ID, Description: mode.Description,
+					})
+				}
 			}
 			configuredDefaultAvailable := false
 			for _, model := range catalog.Models {

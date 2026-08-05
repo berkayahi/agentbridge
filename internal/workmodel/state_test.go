@@ -9,7 +9,7 @@ func TestTransition(t *testing.T) {
 		{Running, AwaitingApproval}, {Running, AwaitingAuth}, {Running, Verifying}, {Running, Completed}, {Running, Failed}, {Running, Canceled}, {Running, Paused},
 		{AwaitingApproval, Running}, {AwaitingApproval, Failed}, {AwaitingApproval, Canceled}, {AwaitingApproval, Paused},
 		{AwaitingAuth, Running}, {AwaitingAuth, Paused}, {AwaitingAuth, Canceled},
-		{Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled}, {Verifying, Paused},
+		{Verifying, Queued}, {Verifying, Committing}, {Verifying, Failed}, {Verifying, Canceled}, {Verifying, Paused},
 		{Committing, Pushing}, {Committing, Failed}, {Committing, Paused},
 		{Pushing, Completed}, {Pushing, Failed}, {Pushing, Paused},
 		{Completed, Running},

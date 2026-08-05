@@ -140,6 +140,18 @@ func TestLocalCreateStartObserveApproveVerifyCommit(t *testing.T) {
 	if err != nil || !verified.Receipt.Passed || verified.Task.State != workmodel.Verifying {
 		t.Fatalf("verified = %#v err=%v", verified, err)
 	}
+	const refinement = "Keep the same session open and tighten the task inspector."
+	resumed, err := service.Resume(ctx, localcontrol.ResumeRequest{
+		TaskID: task.Task.ID, Revision: verified.Task.Revision,
+		Input: refinement, IdempotencyKey: "resume-before-landing-key",
+	})
+	if err != nil || resumed.Task.State != workmodel.Running || len(executor.resumed) != 1 || len(executor.resumeInputs) != 1 || executor.resumeInputs[0] != refinement {
+		t.Fatalf("resumed verified turn = %#v err=%v executor=%#v", resumed, err, executor)
+	}
+	verified, err = service.Verify(ctx, localcontrol.VerifyRequest{TaskID: task.Task.ID, Revision: resumed.Task.Revision, IdempotencyKey: "verify-refinement-key"})
+	if err != nil || !verified.Receipt.Passed || verified.Task.State != workmodel.Verifying {
+		t.Fatalf("verified refinement = %#v err=%v", verified, err)
+	}
 	committed, err := service.Commit(ctx, localcontrol.CommitRequest{TaskID: task.Task.ID, Revision: verified.Task.Revision, IdempotencyKey: "commit-key"})
 	if err != nil {
 		t.Fatal(err)
@@ -324,6 +336,7 @@ func (fakeCatalog) Get(string) (runtime.Adapter, error) { return nil, nil }
 type fakeExecutor struct {
 	started      []string
 	resumed      []string
+	resumeInputs []string
 	approved     bool
 	approvedUser string
 }
@@ -332,8 +345,9 @@ func (f *fakeExecutor) Start(_ context.Context, task localcontrol.TaskView, _ lo
 	f.started = append(f.started, task.ID)
 	return nil
 }
-func (f *fakeExecutor) Resume(_ context.Context, task localcontrol.TaskView, _ localcontrol.ResumeRequest) error {
+func (f *fakeExecutor) Resume(_ context.Context, task localcontrol.TaskView, request localcontrol.ResumeRequest) error {
 	f.resumed = append(f.resumed, task.ID)
+	f.resumeInputs = append(f.resumeInputs, request.Input)
 	return nil
 }
 func (f *fakeExecutor) Approve(_ context.Context, _ localcontrol.TaskView, _ string, userID string, _ bool) error {

@@ -1304,11 +1304,12 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ActionResp
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
 
+	request.Input = strings.TrimSpace(request.Input)
 	payload := struct {
 		TaskID   string `json:"task_id"`
 		Revision int64  `json:"revision"`
 		Input    string `json:"input"`
-	}{request.TaskID, request.Revision, strings.TrimSpace(request.Input)}
+	}{request.TaskID, request.Revision, request.Input}
 	var cached ActionResponse
 	if done, err := s.replayAction(ctx, request.IdempotencyKey, "resume", payload, &cached); done || err != nil {
 		return cached, err
@@ -1328,7 +1329,11 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ActionResp
 	}
 	preparedReplay := isDeviceReplay(ctx) && view.TargetDeviceID != LocalDeviceID && view.State == workmodel.Preparing
 	runningReplay := isDeviceReplay(ctx) && view.TargetDeviceID != LocalDeviceID && view.State == workmodel.Running
-	if view.State != workmodel.Paused && view.State != workmodel.Failed && !preparedReplay && !runningReplay {
+	// A verified turn is deliberately resumable until the keeper crosses the
+	// Git delivery boundary. This makes "agent finished" a conversational pause:
+	// one more message resumes the same provider session in the same worktree,
+	// without requiring a commit first.
+	if view.State != workmodel.Paused && view.State != workmodel.Failed && view.State != workmodel.Verifying && !preparedReplay && !runningReplay {
 		return ActionResponse{}, fmt.Errorf("resume task in %s: %w", view.State, store.ErrConflict)
 	}
 	available, err := s.targetAvailability(ctx, view)
@@ -1402,7 +1407,11 @@ func (s *Service) Resume(ctx context.Context, request ResumeRequest) (ActionResp
 			return ActionResponse{}, err
 		}
 	} else {
-		running, event, err = s.transition(ctx, current, workmodel.Running, "resumed", nil)
+		var eventPayload map[string]any
+		if request.Input != "" {
+			eventPayload = map[string]any{"input": request.Input}
+		}
+		running, event, err = s.transition(ctx, current, workmodel.Running, "resumed", eventPayload)
 		if err != nil {
 			return ActionResponse{}, err
 		}

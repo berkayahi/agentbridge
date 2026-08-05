@@ -24,13 +24,16 @@ var transitions = map[State]map[State]struct{}{
 	Running:          stateSet(AwaitingApproval, AwaitingAuth, Verifying, Completed, Failed, Canceled, Paused),
 	AwaitingApproval: stateSet(Running, Failed, Canceled, Paused),
 	AwaitingAuth:     stateSet(Running, Paused, Canceled),
-	Verifying:        stateSet(Committing, Failed, Canceled, Paused),
-	Committing:       stateSet(Pushing, Failed, Paused),
-	Pushing:          stateSet(Completed, Failed, Paused),
-	Completed:        stateSet(Running),
-	Failed:           stateSet(Queued, Verifying),
-	Canceled:         stateSet(),
-	Paused:           stateSet(Queued),
+	// Verification is the end of one provider turn, not the end of the
+	// conversation. The keeper may ask for another refinement before choosing
+	// to land, which resumes the same task and isolated worktree.
+	Verifying:  stateSet(Queued, Committing, Failed, Canceled, Paused),
+	Committing: stateSet(Pushing, Failed, Paused),
+	Pushing:    stateSet(Completed, Failed, Paused),
+	Completed:  stateSet(Running),
+	Failed:     stateSet(Queued, Verifying),
+	Canceled:   stateSet(),
+	Paused:     stateSet(Queued),
 }
 
 func stateSet(states ...State) map[State]struct{} {

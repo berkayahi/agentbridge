@@ -121,9 +121,9 @@ func TestPrepareRuntimePathsCreatesOnlyOwnerAccessibleDirectories(t *testing.T) 
 			t.Fatalf("mode %s = %s, want owner-only directory", path, info.Mode())
 		}
 	}
-	marker, err := os.Stat(filepath.Join(paths.worktrees, ".metadata_never_index"))
+	marker, err := os.Stat(filepath.Join(paths.data, ".metadata_never_index"))
 	if err != nil {
-		t.Fatalf("stat worktree search exclusion: %v", err)
+		t.Fatalf("stat hive search exclusion: %v", err)
 	}
 	if !marker.Mode().IsRegular() || marker.Mode().Perm() != 0o600 {
 		t.Fatalf("worktree search exclusion mode = %s, want owner-only regular file", marker.Mode())

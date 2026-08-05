@@ -75,6 +75,9 @@ func (p runtimePaths) prepare() error {
 			return err
 		}
 	}
+	if err := os.WriteFile(filepath.Join(p.worktrees, ".metadata_never_index"), nil, 0o600); err != nil {
+		return fmt.Errorf("exclude worktree build artifacts from desktop search: %w", err)
+	}
 	return nil
 }
 

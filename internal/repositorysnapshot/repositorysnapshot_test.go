@@ -466,6 +466,15 @@ func (g *recordingGit) RunWithEnvironment(ctx context.Context, dir string, envir
 	return g.runner.RunWithEnvironment(ctx, dir, environment, args...)
 }
 
+func (g *recordingGit) RunWithEnvironmentUnredacted(ctx context.Context, dir string, environment []string, args ...string) (bridgegit.RunResult, error) {
+	g.mu.Lock()
+	if len(args) > 0 {
+		g.commands = append(g.commands, args[0])
+	}
+	g.mu.Unlock()
+	return g.runner.RunWithEnvironmentUnredacted(ctx, dir, environment, args...)
+}
+
 func (g *recordingGit) reset() {
 	g.mu.Lock()
 	g.commands = nil

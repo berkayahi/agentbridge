@@ -45,6 +45,7 @@ type Service struct {
 	integrator    RepositoryIntegrator
 	snapshots     RepositorySnapshotAuthority
 	knowledge     RepositoryKnowledgeAuthority
+	skills        RepositorySkillsAuthority
 	understanding RepositoryUnderstandingAuthority
 	advisory      AdvisorySessionAuthority
 	executions    executioncontract.Store
@@ -182,7 +183,7 @@ func New(config Config) (*Service, error) {
 		store: config.Store, identity: config.Identity, runtimes: config.Runtimes, catalog: config.Repositories,
 		providers: config.Providers, controller: config.Controller,
 		executor: config.Executor, verifier: config.Verifier, committer: config.Committer,
-		integrator: config.Integrator, snapshots: config.RepositorySnapshots, knowledge: config.RepositoryKnowledge, understanding: config.RepositoryUnderstanding,
+		integrator: config.Integrator, snapshots: config.RepositorySnapshots, knowledge: config.RepositoryKnowledge, skills: config.RepositorySkills, understanding: config.RepositoryUnderstanding,
 		advisory: config.Advisory, redactor: config.Redactor,
 		clock: config.Clock, newID: config.NewID,
 		executions: config.ExecutionStore,

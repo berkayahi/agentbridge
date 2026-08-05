@@ -62,6 +62,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/repositories", a.listRepositories)
 	mux.HandleFunc("POST /v1/repository-snapshots", a.createRepositorySnapshot)
 	mux.HandleFunc("POST /v1/repository-knowledge", a.readRepositoryKnowledge)
+	mux.HandleFunc("POST /v1/repository-skills", a.readRepositorySkills)
 	mux.HandleFunc("POST /v1/repository-understanding", a.createRepositoryUnderstanding)
 	mux.HandleFunc("POST /v1/advisory-sessions", a.createAdvisorySession)
 	mux.HandleFunc("POST /v1/executions", a.createExecution)
@@ -115,6 +116,15 @@ func (a *API) readRepositoryKnowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response, err := a.service.ReadRepositoryKnowledge(r.Context(), request)
+	writeResult(w, http.StatusOK, response, err)
+}
+
+func (a *API) readRepositorySkills(w http.ResponseWriter, r *http.Request) {
+	var request RepositorySkillsRequest
+	if !decodeJSON(w, r, &request) {
+		return
+	}
+	response, err := a.service.ReadRepositorySkills(r.Context(), request)
 	writeResult(w, http.StatusOK, response, err)
 }
 

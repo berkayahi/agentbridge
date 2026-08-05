@@ -68,6 +68,8 @@ type RepositorySnapshotRequest = repositorysnapshot.Request
 type RepositorySnapshotResponse = repositorysnapshot.Response
 type RepositoryKnowledgeRequest = repositorysnapshot.KnowledgeRequest
 type RepositoryKnowledgeResponse = repositorysnapshot.KnowledgePacket
+type RepositorySkillsRequest = repositorysnapshot.SkillRequest
+type RepositorySkillsResponse = repositorysnapshot.SkillPacket
 
 type RepositorySnapshotAuthority interface {
 	Snapshot(context.Context, repositorysnapshot.Request) (repositorysnapshot.Response, error)
@@ -75,6 +77,10 @@ type RepositorySnapshotAuthority interface {
 
 type RepositoryKnowledgeAuthority interface {
 	ReadKnowledge(context.Context, repositorysnapshot.KnowledgeRequest) (repositorysnapshot.KnowledgePacket, error)
+}
+
+type RepositorySkillsAuthority interface {
+	ReadSkills(context.Context, repositorysnapshot.SkillRequest) (repositorysnapshot.SkillPacket, error)
 }
 
 // RepositorySnapshotOperationReader is deliberately narrower than the
@@ -678,6 +684,7 @@ type Config struct {
 	Repositories            RepositoryCatalog
 	RepositorySnapshots     RepositorySnapshotAuthority
 	RepositoryKnowledge     RepositoryKnowledgeAuthority
+	RepositorySkills        RepositorySkillsAuthority
 	RepositoryUnderstanding RepositoryUnderstandingAuthority
 	Advisory                AdvisorySessionAuthority
 	// Redactor is an in-memory safe-output dependency. It is never serialized

@@ -148,6 +148,12 @@ func (c *Client) ReadRepositoryKnowledge(ctx context.Context, request Repository
 	return response, err
 }
 
+func (c *Client) ReadRepositorySkills(ctx context.Context, request RepositorySkillsRequest) (RepositorySkillsResponse, error) {
+	var response RepositorySkillsResponse
+	err := c.do(ctx, http.MethodPost, "/v1/repository-skills", request, &response)
+	return response, err
+}
+
 func (c *Client) UnderstandRepository(ctx context.Context, request RepositoryUnderstandingRequest) (RepositoryUnderstandingResponse, error) {
 	var response RepositoryUnderstandingResponse
 	err := c.do(ctx, http.MethodPost, "/v1/repository-understanding", request, &response)

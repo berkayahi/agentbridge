@@ -32,6 +32,7 @@ type Config struct {
 	Catalog   Catalog
 	Inspector Inspector
 	Knowledge KnowledgeReader
+	Skills    SkillReader
 	Clock     func() time.Time
 	NewID     func() string
 }
@@ -42,6 +43,7 @@ type Service struct {
 	catalog   Catalog
 	inspector Inspector
 	knowledge KnowledgeReader
+	skills    SkillReader
 	clock     func() time.Time
 	newID     func() string
 }
@@ -57,9 +59,30 @@ func New(config Config) (*Service, error) {
 		config.NewID = newOperationID
 	}
 	return &Service{
-		store: config.Store, catalog: config.Catalog, inspector: config.Inspector, knowledge: config.Knowledge,
+		store: config.Store, catalog: config.Catalog, inspector: config.Inspector, knowledge: config.Knowledge, skills: config.Skills,
 		clock: config.Clock, newID: config.NewID,
 	}, nil
+}
+
+// ReadSkills returns only committed SKILL.md packages at one exact Git
+// identity. The fixed filename contract prevents this from becoming an
+// arbitrary repository file reader.
+func (s *Service) ReadSkills(ctx context.Context, request SkillRequest) (SkillPacket, error) {
+	if s == nil || s.catalog == nil || s.skills == nil {
+		return SkillPacket{}, ErrNotConfigured
+	}
+	normalized, err := normalizeSkillRequest(request)
+	if err != nil {
+		return SkillPacket{}, err
+	}
+	profile, err := s.catalog.ResolveRepositoryProfile(ctx, normalized.RepositoryProfileID)
+	if err != nil {
+		return SkillPacket{}, err
+	}
+	if profile.ProfileID != normalized.RepositoryProfileID || !filepath.IsAbs(profile.CheckoutPath) {
+		return SkillPacket{}, ErrNotConfigured
+	}
+	return s.skills.ReadSkills(ctx, profile, normalized)
 }
 
 // ReadKnowledge returns the typed Kovan knowledge notes committed at one exact

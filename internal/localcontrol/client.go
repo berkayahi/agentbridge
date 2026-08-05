@@ -239,6 +239,12 @@ func (c *Client) Cancel(ctx context.Context, request CancelRequest) (ActionRespo
 	return response, err
 }
 
+func (c *Client) Interrupt(ctx context.Context, request InterruptRequest) (ActionResponse, error) {
+	var response ActionResponse
+	err := c.do(ctx, http.MethodPost, "/v1/tasks/"+url.PathEscape(request.TaskID)+"/interrupt", request, &response)
+	return response, err
+}
+
 func (c *Client) Verify(ctx context.Context, request VerifyRequest) (VerifyResponse, error) {
 	var response VerifyResponse
 	err := c.do(ctx, http.MethodPost, "/v1/tasks/"+url.PathEscape(request.TaskID)+"/verify", request, &response)

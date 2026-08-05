@@ -464,6 +464,36 @@ func (e *localRuntimeExecutor) Steer(ctx context.Context, view localcontrol.Task
 	return adapter.Steer(e.runtimeContext(), session, kernel.Input{Text: request.Input})
 }
 
+// Interrupt stops the live turn but deliberately keeps the durable provider
+// identity. The task moves to paused at the authority boundary and can resume
+// the same thread later; cancellation is the separate destructive operation.
+func (e *localRuntimeExecutor) Interrupt(ctx context.Context, view localcontrol.TaskView) error {
+	if e == nil || e.runtimes == nil {
+		return localcontrol.ErrNotConfigured
+	}
+	if view.TargetDeviceID != localcontrol.LocalDeviceID {
+		return fmt.Errorf("target device %q requires a paired execution link: %w", view.TargetDeviceID, localcontrol.ErrNotConfigured)
+	}
+	e.mu.Lock()
+	session, ok := e.sessions[view.ID]
+	e.mu.Unlock()
+	if !ok {
+		// Recovery may already have torn down the native turn. There is no
+		// process left to orphan, so the authority may still record the pause.
+		return nil
+	}
+	adapter, err := e.runtimes.Get(view.RuntimeID)
+	if err != nil {
+		return err
+	}
+	err = adapter.Interrupt(ctx, session)
+	if err != nil && !errors.Is(err, bridgeRuntime.ErrInvalidSession) {
+		return err
+	}
+	e.releaseSession(view.ID)
+	return nil
+}
+
 func (e *localRuntimeExecutor) Cancel(ctx context.Context, view localcontrol.TaskView) error {
 	if e == nil || e.runtimes == nil {
 		return nil

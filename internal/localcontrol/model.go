@@ -440,6 +440,14 @@ type CancelRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+// InterruptRequest stops only the provider's active turn. Unlike cancellation,
+// it leaves the task and durable session resumable.
+type InterruptRequest struct {
+	TaskID         string `json:"task_id"`
+	Revision       int64  `json:"revision"`
+	IdempotencyKey string `json:"idempotency_key"`
+}
+
 type VerifyRequest struct {
 	TaskID         string `json:"task_id"`
 	Revision       int64  `json:"revision"`

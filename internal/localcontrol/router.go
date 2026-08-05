@@ -74,6 +74,27 @@ func (r localRuntime) Steer(ctx context.Context, view TaskView, request SteerReq
 	return steerer.Steer(ctx, view, request)
 }
 
+// Interrupt stops the current provider turn without canceling the durable task.
+func (r *deviceRouter) Interrupt(ctx context.Context, view TaskView) error {
+	target, err := r.target(ctx, view)
+	if err != nil {
+		return err
+	}
+	interrupter, ok := target.(Interrupter)
+	if !ok {
+		return ErrNotConfigured
+	}
+	return interrupter.Interrupt(ctx, view)
+}
+
+func (r localRuntime) Interrupt(ctx context.Context, view TaskView) error {
+	interrupter, ok := r.Executor.(Interrupter)
+	if !ok {
+		return ErrNotConfigured
+	}
+	return interrupter.Interrupt(ctx, view)
+}
+
 // Diff forwards to whichever runtime holds the worktree.
 func (r *deviceRouter) Diff(ctx context.Context, view TaskView) (TaskDiff, error) {
 	target, err := r.target(ctx, view)
@@ -148,6 +169,7 @@ func (r *deviceRouter) Observe(ctx context.Context, view TaskView, after uint64)
 }
 
 var _ Executor = (*deviceRouter)(nil)
+var _ Interrupter = (*deviceRouter)(nil)
 var _ Verifier = (*deviceRouter)(nil)
 var _ Committer = (*deviceRouter)(nil)
 var _ DeviceObserver = (*deviceRouter)(nil)

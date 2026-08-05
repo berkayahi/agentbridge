@@ -18,6 +18,16 @@ type steeringExecutor struct {
 	err     error
 }
 
+type interruptingExecutor struct {
+	fakeExecutor
+	interruptions int
+}
+
+func (e *interruptingExecutor) Interrupt(context.Context, localcontrol.TaskView) error {
+	e.interruptions++
+	return nil
+}
+
 func (e *steeringExecutor) Steer(_ context.Context, view localcontrol.TaskView, request localcontrol.SteerRequest) error {
 	if e.err != nil {
 		return e.err
@@ -142,5 +152,34 @@ func TestSteerRequiresASteerableRuntime(t *testing.T) {
 		TaskID: view.ID, Revision: view.Revision, Input: "keep it smaller", IdempotencyKey: "steer-unsupported",
 	}); !errors.Is(err, localcontrol.ErrNotConfigured) {
 		t.Fatalf("err = %v, want ErrNotConfigured", err)
+	}
+}
+
+// Interrupting a turn is deliberately not cancellation: the task pauses, the
+// durable session remains addressable, and resume continues that same task.
+func TestInterruptPausesAndRemainsResumable(t *testing.T) {
+	executor := &interruptingExecutor{}
+	service, view := flyingTask(t, executor)
+	ctx := context.Background()
+	request := localcontrol.InterruptRequest{
+		TaskID: view.ID, Revision: view.Revision, IdempotencyKey: "interrupt-1",
+	}
+
+	interrupted, err := service.Interrupt(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executor.interruptions != 1 || interrupted.Task.State != workmodel.Paused || interrupted.Event.Type != "interrupted" {
+		t.Fatalf("interrupted = %#v executor=%#v", interrupted, executor)
+	}
+	replayed, err := service.Interrupt(ctx, request)
+	if err != nil || replayed.Event.ID != interrupted.Event.ID || executor.interruptions != 1 {
+		t.Fatalf("replayed interrupt = %#v err=%v calls=%d", replayed, err, executor.interruptions)
+	}
+	resumed, err := service.Resume(ctx, localcontrol.ResumeRequest{
+		TaskID: interrupted.Task.ID, Revision: interrupted.Task.Revision, IdempotencyKey: "resume-after-interrupt",
+	})
+	if err != nil || resumed.Task.State != workmodel.Running || len(executor.resumed) != 1 {
+		t.Fatalf("resumed = %#v err=%v executor=%#v", resumed, err, executor)
 	}
 }
